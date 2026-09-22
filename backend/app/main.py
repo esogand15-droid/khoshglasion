@@ -112,7 +112,12 @@ async def telegram_webhook(request: Request):
         try:
             result = await process_channel_post(db, chat_id, message_id, text, caption, has_media, media_type)
             await db.commit()
-            logger.info(f"Processed chat={chat_id} msg={message_id} result={result.get('status')}")
+            status = result.get("status")
+            reason = result.get("reason", "")
+            if status == "skipped":
+                logger.info(f"Skipped chat={chat_id} msg={message_id} reason={reason} category={result.get('category')}")
+            else:
+                logger.info(f"Processed chat={chat_id} msg={message_id} result={status}")
             return {"ok": True, "result": result}
         except Exception as e:
             await db.rollback()
@@ -164,26 +169,61 @@ async def on_startup():
                 db.add(admin)
                 await db.commit()
                 logger.info("Seeded admin user: admin")
-            # Seed default emoji mappings if empty
+            # Seed default emoji mappings if empty — rich premium pack
             from backend.app.models.emoji import EmojiMapping
+            import json as _json
+            from pathlib import Path as _Path
             er = await db.execute(select(EmojiMapping))
             if not er.scalars().first():
-                defaults = [
-                    ("📢","5368324170671202286", "announcement"),
-                    ("📚","5368324170671202287", "resource"),
-                    ("🎯","5368324170671202288", "planning"),
-                    ("📌","5368324170671202289", "consulting"),
-                    ("🔥","5368324170671202290", "announcement"),
-                    ("⭐","5368324170671202291", "motivational"),
-                    ("⚡","5368324170671202292", "important"),
-                    ("🎓","5368324170671202293", "education"),
-                    ("📝","5368324170671202294", "exam"),
-                    ("💡","5368324170671202295", "consulting"),
-                ]
-                for uni, cid, cat in defaults:
-                    db.add(EmojiMapping(unicode_emoji=uni, custom_emoji_id=cid, category=cat, priority=50))
-                await db.commit()
-                logger.info("Seeded default emojis")
+                # Try loading from JSON file, fallback to inline
+                seed_path = _Path(__file__).parent / "data" / "premium_emoji_seed.json"
+                if seed_path.exists():
+                    try:
+                        raw = _json.loads(seed_path.read_text(encoding="utf-8"))
+                        count = 0
+                        for item in raw:
+                            db.add(EmojiMapping(
+                                unicode_emoji=item["unicode_emoji"],
+                                custom_emoji_id=str(item["custom_emoji_id"]),
+                                category=item.get("category"),
+                                priority=item.get("priority", 50),
+                            ))
+                            count += 1
+                        await db.commit()
+                        logger.info(f"Seeded {count} premium emojis from JSON")
+                    except Exception as e:
+                        logger.warning(f"Seed JSON failed {e}, using inline fallback")
+                        raise
+                else:
+                    defaults = [
+                        ("📢","5310129635848103696", "announcement"),
+                        ("📚","5456140674028019486", "resource"),
+                        ("🎯","5451732530048800190", "planning"),
+                        ("📌","5413336461646094579", "consulting"),
+                        ("🔥","5449629821362409862", "announcement"),
+                        ("⭐","5431578537190158965", "motivational"),
+                        ("⚡","5406936294728482210", "important"),
+                        ("🎓","5454101630987654321", "education"),
+                        ("📝","5454182070156793209", "exam"),
+                        ("💡","5445284980978621388", "consulting"),
+                        ("✅","5310129635848103696", "general"),
+                        ("🎉","5454134413361802894", "general"),
+                        ("🚀","5454321011540384215", "motivational"),
+                        ("💪","5454124503608197814", "motivational"),
+                        ("🏆","5454316894426412050", "rank"),
+                        ("📅","5454193892721233456", "schedule"),
+                        ("⏰","5445261246604338265", "schedule"),
+                        ("❤️","5449554904909562107", "motivational"),
+                        ("🔔","5445284980978621399", "announcement"),
+                        ("🌟","5431578537190158977", "general"),
+                        ("💎","5454154641799943274", "discount"),
+                        ("🎁","5454154641799943275", "discount"),
+                        ("✨","5431578537190158988", "general"),
+                    ]
+                    for uni, cid, cat in defaults:
+                        db.add(EmojiMapping(unicode_emoji=uni, custom_emoji_id=cid, category=cat, priority=50))
+                    await db.commit()
+                    logger.info("Seeded default emojis (inline)")
     except Exception as e:
         logger.warning(f"Startup DB init failed: {e}")
 

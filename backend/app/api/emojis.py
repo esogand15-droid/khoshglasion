@@ -29,6 +29,43 @@ async def import_emojis(payload: list[dict], db: AsyncSession = Depends(get_db),
         db.add(rec)
     await db.flush()
     return {"imported": len(payload)}
+@router.post("/validate")
+async def validate_emojis(payload: dict, db: AsyncSession = Depends(get_db), admin=Depends(get_current_admin)):
+    """Validate custom_emoji_ids via Telegram Bot API getCustomEmojiStickers. Returns which are real."""
+    ids: list[str] = payload.get("custom_emoji_ids", []) or payload.get("ids", [])
+    if not ids:
+        return {"found": [], "valid": [], "invalid": []}
+    # limit
+    ids = [str(x).strip() for x in ids[:20] if str(x).strip().isdigit()]
+    if not ids:
+        return {"found": [], "valid": [], "invalid": ids}
+    try:
+        from backend.app.telegram.bot import get_bot
+        bot = get_bot()
+        if not bot:
+            return {"found": [], "valid": [], "invalid": ids, "note": "bot not configured"}
+        stickers = await bot.get_custom_emoji_stickers(custom_emoji_ids=ids)
+        found_ids = {str(s.custom_emoji_id) for s in stickers} if stickers else set()
+        # Some versions return .custom_emoji_id as int
+        found_ids = {str(x) for x in found_ids}
+        invalid = [x for x in ids if x not in found_ids]
+        return {"found": list(found_ids), "valid": list(found_ids), "invalid": invalid}
+    except Exception as e:
+        return {"found": [], "valid": [], "invalid": ids, "error": str(e)}
+
+@router.post("/cleanup-fake")
+async def cleanup_fake(db: AsyncSession = Depends(get_db), admin=Depends(get_current_admin)):
+    """Remove sequential fake IDs (53683241...) that never work."""
+    from sqlalchemy import delete as sa_delete
+    res = await db.execute(select(EmojiMapping).where(EmojiMapping.custom_emoji_id.like("53683241%")))
+    fakes = res.scalars().all()
+    count = len(fakes)
+    for f in fakes:
+        await db.delete(f)
+    await db.flush()
+    return {"removed": count, "message": f"{count} fake mappings removed"}
+
+
 
 @router.get("")
 async def list_emojis(db: AsyncSession = Depends(get_db), admin=Depends(get_current_admin)):

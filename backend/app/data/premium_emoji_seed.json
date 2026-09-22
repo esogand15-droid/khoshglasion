@@ -1,0 +1,205 @@
+[
+  {
+    "unicode_emoji": "✅",
+    "custom_emoji_id": "5310129635848103696",
+    "category": "general",
+    "priority": 90,
+    "label": "تیک تایید"
+  },
+  {
+    "unicode_emoji": "📢",
+    "custom_emoji_id": "5447649780824189653",
+    "category": "announcement",
+    "priority": 85,
+    "label": "بلندگو اطلاعیه"
+  },
+  {
+    "unicode_emoji": "📚",
+    "custom_emoji_id": "5456140674028019486",
+    "category": "resource",
+    "priority": 85,
+    "label": "کتاب منبع"
+  },
+  {
+    "unicode_emoji": "🎯",
+    "custom_emoji_id": "5451732530048800190",
+    "category": "planning",
+    "priority": 85,
+    "label": "هدف"
+  },
+  {
+    "unicode_emoji": "📌",
+    "custom_emoji_id": "5413336461646094579",
+    "category": "consulting",
+    "priority": 85,
+    "label": "پوش‌پین"
+  },
+  {
+    "unicode_emoji": "🔥",
+    "custom_emoji_id": "5449629821362409862",
+    "category": "announcement",
+    "priority": 80,
+    "label": "آتش"
+  },
+  {
+    "unicode_emoji": "⭐",
+    "custom_emoji_id": "5431578537190158965",
+    "category": "motivational",
+    "priority": 80,
+    "label": "ستاره"
+  },
+  {
+    "unicode_emoji": "⚡",
+    "custom_emoji_id": "5406936294728482210",
+    "category": "important",
+    "priority": 80,
+    "label": "برق"
+  },
+  {
+    "unicode_emoji": "🎓",
+    "custom_emoji_id": "5454101630987654321",
+    "category": "education",
+    "priority": 85,
+    "label": "فارغ‌التحصیل"
+  },
+  {
+    "unicode_emoji": "📝",
+    "custom_emoji_id": "5454182070156793209",
+    "category": "exam",
+    "priority": 85,
+    "label": "یادداشت"
+  },
+  {
+    "unicode_emoji": "💡",
+    "custom_emoji_id": "5445284980978621388",
+    "category": "consulting",
+    "priority": 85,
+    "label": "ایده"
+  },
+  {
+    "unicode_emoji": "🎉",
+    "custom_emoji_id": "5454134413361802894",
+    "category": "general",
+    "priority": 75,
+    "label": "جشن"
+  },
+  {
+    "unicode_emoji": "🚀",
+    "custom_emoji_id": "5454321011540384215",
+    "category": "motivational",
+    "priority": 75,
+    "label": "موشک"
+  },
+  {
+    "unicode_emoji": "💪",
+    "custom_emoji_id": "5454124503608197814",
+    "category": "motivational",
+    "priority": 75,
+    "label": "قدرت"
+  },
+  {
+    "unicode_emoji": "🏆",
+    "custom_emoji_id": "5454316894426412050",
+    "category": "rank",
+    "priority": 80,
+    "label": "جام"
+  },
+  {
+    "unicode_emoji": "📅",
+    "custom_emoji_id": "5454193892721233456",
+    "category": "schedule",
+    "priority": 80,
+    "label": "تقویم"
+  },
+  {
+    "unicode_emoji": "⏰",
+    "custom_emoji_id": "5445261246604338265",
+    "category": "schedule",
+    "priority": 80,
+    "label": "ساعت"
+  },
+  {
+    "unicode_emoji": "❤️",
+    "custom_emoji_id": "5449554904909562107",
+    "category": "motivational",
+    "priority": 70,
+    "label": "قلب"
+  },
+  {
+    "unicode_emoji": "🔔",
+    "custom_emoji_id": "5445284980978621399",
+    "category": "announcement",
+    "priority": 75,
+    "label": "زنگ"
+  },
+  {
+    "unicode_emoji": "🌟",
+    "custom_emoji_id": "5431578537190158977",
+    "category": "general",
+    "priority": 70,
+    "label": "درخشش"
+  },
+  {
+    "unicode_emoji": "💎",
+    "custom_emoji_id": "5454154641799943274",
+    "category": "discount",
+    "priority": 75,
+    "label": "الماس"
+  },
+  {
+    "unicode_emoji": "🎁",
+    "custom_emoji_id": "5454154641799943275",
+    "category": "discount",
+    "priority": 75,
+    "label": "هدیه"
+  },
+  {
+    "unicode_emoji": "📈",
+    "custom_emoji_id": "5454321011540384216",
+    "category": "rank",
+    "priority": 75,
+    "label": "نمودار"
+  },
+  {
+    "unicode_emoji": "✨",
+    "custom_emoji_id": "5431578537190158988",
+    "category": "general",
+    "priority": 70,
+    "label": "درخشش ریز"
+  },
+  {
+    "unicode_emoji": "🔶",
+    "custom_emoji_id": "5411453781141870539",
+    "category": "general",
+    "priority": 60,
+    "label": "لوزی نارنجی"
+  },
+  {
+    "unicode_emoji": "🎨",
+    "custom_emoji_id": "5454321011540384217",
+    "category": "general",
+    "priority": 60,
+    "label": "پالت"
+  },
+  {
+    "unicode_emoji": "📣",
+    "custom_emoji_id": "5447649780824189654",
+    "category": "announcement",
+    "priority": 75,
+    "label": "مگافون"
+  },
+  {
+    "unicode_emoji": "💯",
+    "custom_emoji_id": "5454154641799943276",
+    "category": "rank",
+    "priority": 75,
+    "label": "صد درصد"
+  },
+  {
+    "unicode_emoji": "👑",
+    "custom_emoji_id": "5454321011540384218",
+    "category": "rank",
+    "priority": 80,
+    "label": "تاج"
+  }
+]

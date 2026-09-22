@@ -51,8 +51,31 @@ async def process_channel_post(
     res = await db.execute(select(Channel).where(Channel.chat_id==chat_id))
     channel = res.scalar_one_or_none()
     if not channel:
+        # also log for visibility in panel
+        log = MessageLog(
+            chat_id=chat_id, message_id=message_id,
+            original_text=effective, formatted_text=effective,
+            original_hash=orig_hash, formatted_hash=orig_hash,
+            category="general", status="skipped",
+            error=f"unknown_channel: chat_id {chat_id} not registered. Add it in Channels panel.",
+            applied_rules="[]",
+            has_media=has_media, message_type=media_type or "text",
+        )
+        db.add(log)
+        await db.flush()
         return {"status":"skipped","reason":"unknown_channel"}
     if not channel.enabled or not channel.auto_beautify:
+        log = MessageLog(
+            chat_id=chat_id, message_id=message_id,
+            original_text=effective, formatted_text=effective,
+            original_hash=orig_hash, formatted_hash=orig_hash,
+            category="general", status="skipped",
+            error="channel_disabled: channel is disabled or auto_beautify off",
+            applied_rules="[]",
+            has_media=has_media, message_type=media_type or "text",
+        )
+        db.add(log)
+        await db.flush()
         return {"status":"skipped","reason":"channel_disabled"}
 
     # Global kill switch / dry run from settings
@@ -65,8 +88,8 @@ async def process_channel_post(
     orig_hash = sha16(effective)
     dup = await db.execute(select(MessageLog).where(MessageLog.chat_id==chat_id, MessageLog.message_id==message_id))
     existing = dup.scalar_one_or_none()
-    if existing and existing.original_hash == orig_hash and existing.status in ("edited","dry_run","skipped"):
-        # Check if already processed with same hash — avoid re-edit loops
+    if existing and existing.original_hash == orig_hash and existing.status in ("edited","dry_run"):
+        # Already successfully processed — avoid re-edit loops
         return {"status":"skipped","reason":"idempotent_duplicate"}
 
     # Load emoji mappings
@@ -84,12 +107,13 @@ async def process_channel_post(
     elapsed = (time.perf_counter()-t0)*1000
 
     if not result.changed:
-        # log skipped
+        # log skipped with explicit reason
         log = MessageLog(
             chat_id=chat_id, message_id=message_id,
             original_text=effective, formatted_text=effective,
             original_hash=orig_hash, formatted_hash=orig_hash,
             category=result.category, status="skipped",
+            error="no_change: content already matches style (footer/dividers present or no beautification needed)",
             applied_rules=json.dumps(result.applied_rules, ensure_ascii=False),
             processing_time_ms=elapsed,
             has_media=has_media, message_type=media_type or "text",
