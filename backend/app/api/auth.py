@@ -4,7 +4,7 @@ from sqlalchemy import select
 from backend.app.db.base import get_db
 from backend.app.schemas.auth import LoginRequest, LoginResponse
 from backend.app.models.admin import Admin
-from backend.app.security.auth import verify_password, create_token
+from backend.app.security.auth import verify_password, create_token, hash_password
 from backend.app.security.deps import get_current_admin
 from datetime import datetime, timezone
 
@@ -24,3 +24,22 @@ async def login(payload: LoginRequest, db: AsyncSession = Depends(get_db)):
 @router.get("/me")
 async def me(admin: Admin = Depends(get_current_admin)):
     return {"username": admin.username, "role": admin.role, "display_name": admin.display_name}
+
+
+@router.post("/reset-admin")
+async def reset_admin(db: AsyncSession = Depends(get_db)):
+    """One-time endpoint to reset admin password to 'admin'. 
+    Remove this endpoint after use in production."""
+    from backend.app.models.admin import Admin
+    from sqlalchemy import select
+    res = await db.execute(select(Admin).where(Admin.username=="admin"))
+    admin = res.scalar_one_or_none()
+    if not admin:
+        admin = Admin(username="admin", password_hash=hash_password("admin"), role="OWNER", display_name="Owner")
+        db.add(admin)
+    else:
+        admin.password_hash = hash_password("admin")
+        admin.role = "OWNER"
+    await db.commit()
+    return {"ok": True, "message": "Admin password reset to 'admin'"}
+
