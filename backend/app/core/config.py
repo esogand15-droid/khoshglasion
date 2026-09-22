@@ -10,7 +10,7 @@ class Settings(BaseSettings):
     bot_token: str = ""
     bot_username: str = ""
 
-    database_url: str = "sqlite+aiosqlite:///./khoshgelasion.db"
+    database_url: str = "sqlite+aiosqlite:///./data/khoshgelasion.db"
     redis_url: Optional[str] = None
 
     webhook_url: str = ""

@@ -13,10 +13,19 @@ def get_engine():
     if _engine is None:
         settings = get_settings()
         url = settings.database_url
-        # Normalize Railway postgresql:// -> postgresql+asyncpg:// for async driver
-        if url.startswith("postgresql://") and not url.startswith("postgresql+asyncpg://"):
-            url = url.replace("postgresql://", "postgresql+asyncpg://", 1)
+        
         connect_args = {}
+        if url.startswith("sqlite"):
+            # Ensure data directory exists
+            import os
+            db_path = url.replace("sqlite+aiosqlite:///", "")
+            os.makedirs(os.path.dirname(db_path) or ".", exist_ok=True)
+            # SQLite pragmas for better concurrency
+            connect_args = {
+                "check_same_thread": False,
+                "timeout": 30,
+            }
+        
         _engine = create_async_engine(
             url,
             echo=False,
@@ -25,6 +34,20 @@ def get_engine():
             pool_pre_ping=True,
             pool_recycle=300,
         )
+        
+        # Apply SQLite pragmas after engine creation
+        if url.startswith("sqlite"):
+            from sqlalchemy import event
+            from sqlalchemy.pool import Pool
+            
+            @event.listens_for(_engine.sync_engine, "connect")
+            def set_sqlite_pragma(dbapi_connection, connection_record):
+                cursor = dbapi_connection.cursor()
+                cursor.execute("PRAGMA journal_mode=WAL;")
+                cursor.execute("PRAGMA busy_timeout=30000;")
+                cursor.execute("PRAGMA synchronous=NORMAL;")
+                cursor.execute("PRAGMA cache_size=-32768;")  # 32MB cache
+                cursor.close()
     return _engine
 
 def get_session_factory():
