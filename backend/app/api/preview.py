@@ -4,12 +4,25 @@ from sqlalchemy import select
 from backend.app.db.base import get_db
 from backend.app.schemas.preview import PreviewRequest, PreviewResponse
 from backend.app.formatting.engine import format_message
+from backend.app.services.ai import enhance_with_ai, enhance_preview
 from backend.app.formatting.emoji import EmojiMapping as EmojiMap
 from backend.app.models.emoji import EmojiMapping
 from backend.app.models.channel import Channel
 import json
 
 router = APIRouter(prefix="/api/preview", tags=["preview"])
+
+
+
+@router.post("/ai-enhance")
+async def preview_ai_enhance(
+    text: str,
+    category: str = "general",
+    admin=Depends(get_current_admin)
+):
+    """Preview AI enhancement for a given text."""
+    result = await enhance_preview(text, category)
+    return result
 
 @router.post("", response_model=PreviewResponse)
 async def preview(payload: PreviewRequest, db: AsyncSession = Depends(get_db)):

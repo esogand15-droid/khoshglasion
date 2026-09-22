@@ -5,9 +5,12 @@ export default function Preview() {
   const [text, setText] = useState("هر کتابی که معروفه لزوماً برای تو مناسب نیست!\n\nیکی از مهمترین تصمیم‌ها توی مسیر کنکور، انتخاب منبعیه که با سطح، هدف و زمان مطالعه‌ات هماهنگ باشه.\n\nچطور منبع مناسب هر درس رو انتخاب کنیم؟\nآیا واقعاً به چند منبع نیاز داریم؟\nچه زمانی منبع دوم لازمه؟\nو چرا گاهی زیاد بودن منابع، بیشتر از اینکه کمکتون کنه، باعث سردرگمی میشه؟");
   const [isCaption, setIsCaption] = useState(false);
   const [result, setResult] = useState<any>(null);
+  const [aiResult, setAiResult] = useState<any>(null);
   const [loading, setLoading] = useState(false);
+  const [aiLoading, setAiLoading] = useState(false);
   const [channels, setChannels] = useState<any[]>([]);
   const [channelId, setChannelId] = useState("");
+  const [category, setCategory] = useState("general");
 
   useEffect(() => { api.get("/api/channels").then((r) => setChannels(r.data)).catch(()=>{}); }, []);
 
@@ -19,6 +22,16 @@ export default function Preview() {
     } catch (e: any) { setResult({ error: e.response?.data?.detail || "خطا" }); }
     finally { setLoading(false); }
   }
+  
+  async function runAI() {
+    setAiLoading(true);
+    try {
+      const { data } = await api.post("/api/preview/ai-enhance", { text, category });
+      setAiResult(data);
+    } catch (e: any) { setAiResult({ error: e.response?.data?.detail || "خطا" }); }
+    finally { setAiLoading(false); }
+  }
+  
   useEffect(() => { run(); }, []);
 
   return (
@@ -40,8 +53,43 @@ export default function Preview() {
         </button>
       </div>
 
+      <div className="flex flex-wrap gap-3 items-center">
+        <select value={category} onChange={(e) => setCategory(e.target.value)} className="glass rounded-xl px-3 py-2 text-sm bg-transparent outline-none min-w-[180px]">
+          <option value="general" className="bg-[#0a0e1a]">عمومی</option>
+          <option value="announcement" className="bg-[#0a0e1a]">اطلاعیه</option>
+          <option value="exam" className="bg-[#0a0e1a]">آزمون/نمونه سوال</option>
+          <option value="resource" className="bg-[#0a0e1a]">منبع/کتاب</option>
+          <option value="motivational" className="bg-[#0a0e1a]">انگیزشی</option>
+          <option value="consulting" className="bg-[#0a0e1a]">مشاوره/برنامه‌ریزی</option>
+          <option value="news" className="bg-[#0a0e1a]">خبر/تغییرات</option>
+          <option value="planning" className="bg-[#0a0e1a]">برنامه‌ریزی مطالعه</option>
+          <option value="rank" className="bg-[#0a0e1a]">رتبه/موفقیت</option>
+          <option value="discount" className="bg-[#0a0e1a]">تخفیف/کمپین</option>
+        </select>
+        <button onClick={runAI} disabled={aiLoading} className="bg-gradient-to-r from-emerald-600 to-teal-600 rounded-xl px-5 py-2.5 text-sm font-medium text-white disabled:opacity-50">
+          {aiLoading ? "هوش مصنوعی در حال کار..." : "🤖 تست بازنویسی هوشمند"}
+        </button>
+      </div>
+
       <textarea value={text} onChange={(e) => setText(e.target.value)} rows={8} placeholder="متن کانال را اینجا وارد کن..." className="glass rounded-2xl p-4 text-sm bg-transparent outline-none placeholder:text-white/30 resize-y" />
 
+      {/* AI Enhancement Result */}
+      {aiResult && !aiResult.error && (
+        <div className="glass rounded-2xl p-0 overflow-hidden flex flex-col border border-emerald-500/30">
+          <div className="px-4 py-3 border-b border-white/5 flex items-center justify-between bg-emerald-500/5">
+            <span className="text-sm font-medium text-emerald-300">🤖 بازنویسی هوشمند AI (پیش‌نمایش)</span>
+            <span className="text-[11px] text-emerald-400">دسته: {aiResult.category}</span>
+          </div>
+          <div className="p-4 flex-1 bg-[#0e1621] m-3 rounded-xl">
+            <div className="text-xs text-[#e8a735] mb-2">رتبه لند | مشاوره و آموزش کنکور</div>
+            <div className="text-sm whitespace-pre-wrap text-white leading-relaxed">{aiResult.enhanced || "هوش مصنوعی غیرفعال یا خطا"}</div>
+            <div className="mt-3 text-[11px] text-emerald-400">{aiResult.ai_used ? "✅ AI فعال و پاسخ داد" : "⚠️ AI غیرفعال — تنظیمات را در تب AI Integration بررسی کنید"}</div>
+          </div>
+        </div>
+      )}
+      {aiResult?.error && <div className="bg-red-500/10 rounded-xl p-3 text-sm text-red-300">{aiResult.error}</div>}
+
+      {/* Formatting Result */}
       {result && !result.error && (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           {/* Original */}

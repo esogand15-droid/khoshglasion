@@ -138,16 +138,45 @@ async def process_channel_post(
 
     formatted_hash = sha16(result.text)
     
-    # AI Enhancement (optional, after formatting)
+    # AI Enhancement (intelligent rewrite) - runs on formatted text with category context
     ai_enhanced = False
     if settings.ai_enabled and result.changed:
-        ai_text = await enhance_with_ai(result.text, result.category)
+        # Get previous message context for coherence (last 1 processed message for this channel)
+        prev_context = ""
+        try:
+            from backend.app.models.message_log import MessageLog
+            from sqlalchemy import select, desc
+            prev_res = await db.execute(
+                select(MessageLog.formatted_text)
+                .where(MessageLog.chat_id == chat_id, MessageLog.status.in_(["edited", "dry_run"]))
+                .order_by(desc(MessageLog.created_at))
+                .limit(1)
+            )
+            prev = prev_res.scalar_one_or_none()
+            if prev:
+                prev_context = prev[:300]
+        except:
+            pass
+        
+        ai_text = await enhance_with_ai(result.text, result.category, prev_context)
         if ai_text:
-            result.text = ai_text
-            result.html_text = ai_text  # Will be re-processed for premium emojis? Keep as-is for now
+            # Re-run formatting on AI-enhanced text to inject premium emojis
+            from backend.app.formatting.engine import format_message
+            emoji_maps = await load_emoji_maps(db)
+            ai_result = format_message(
+                raw_text=ai_text,
+                is_caption=has_media,
+                channel_style_slug=channel.style_id,
+                footer_text=channel.footer_text,
+                emoji_mappings=emoji_maps,
+                enable_emoji=channel.emoji_replacement,
+            )
+            result.text = ai_result.text
+            result.html_text = ai_result.html_text
+            result.applied_rules.extend(ai_result.applied_rules)
+            result.applied_rules.append("ai_enhanced:intelligent_rewrite")
             formatted_hash = sha16(result.text)
             ai_enhanced = True
-            result.applied_rules.append("ai_enhanced")
     
     # Dry run check
     is_dry = settings.dry_run
