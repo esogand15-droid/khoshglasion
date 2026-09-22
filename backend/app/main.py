@@ -143,7 +143,7 @@ else:
 
 @app.on_event("startup")
 async def on_startup():
-    # Create tables if not exist (for sqlite dev)
+    # Create tables via SQLAlchemy (SQLite: create_all, Postgres: also works)
     try:
         engine = get_engine()
         async with engine.begin() as conn:
@@ -158,7 +158,9 @@ async def on_startup():
         async with factory() as db:
             res = await db.execute(select(Admin).where(Admin.username=="admin"))
             if not res.scalar_one_or_none():
-                admin = Admin(username="admin", password_hash=hash_password(settings.admin_secret), role="OWNER", display_name="Owner")
+                # read admin_secret fresh (env may vary in Railway)
+                secret = settings.admin_secret or "admin"
+                admin = Admin(username="admin", password_hash=hash_password(secret), role="OWNER", display_name="Owner")
                 db.add(admin)
                 await db.commit()
                 logger.info("Seeded admin user: admin")

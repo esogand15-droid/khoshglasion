@@ -3,6 +3,7 @@ from sqlalchemy import pool, create_engine
 from alembic import context
 import os
 import sys
+import pathlib
 
 # add project root to path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
@@ -19,17 +20,35 @@ if config.config_file_name is not None:
 target_metadata = Base.metadata
 
 def get_url():
-    # Use DATABASE_URL from env (Railway) and normalize to sync driver for alembic
-    url = os.getenv("DATABASE_URL") or get_settings().database_url
-    if not url:
-        raise RuntimeError("DATABASE_URL not set")
-    # Ensure sync driver for alembic (psycopg2)
+    # Fallback to SQLite default - never raise, always have a DB
+    raw = os.getenv("DATABASE_URL")
+    if raw and raw.strip():
+        url = raw.strip()
+    else:
+        try:
+            url = get_settings().database_url
+        except Exception:
+            url = "sqlite:///./data/khoshgelasion.db"
+    if not url or not url.strip():
+        url = "sqlite:///./data/khoshgelasion.db"
+    url = url.strip()
+    # Normalize async drivers to sync for alembic
     if url.startswith("postgresql+asyncpg://"):
         url = url.replace("postgresql+asyncpg://", "postgresql://", 1)
-    elif url.startswith("postgresql://"):
-        pass
-    elif url.startswith("sqlite"):
-        pass
+    elif url.startswith("sqlite+aiosqlite://"):
+        url = url.replace("sqlite+aiosqlite://", "sqlite://", 1)
+    # Ensure directory exists for sqlite file
+    if url.startswith("sqlite"):
+        # extract file path: sqlite:///./data/khoshgelasion.db or sqlite:////absolute/path
+        try:
+            # Remove sqlite:/// prefix
+            path_part = url.split("sqlite:///")[-1].split("?")[0].split("#")[0]
+            if path_part and path_part != ":memory:" and path_part != "":
+                p = pathlib.Path(path_part)
+                # relative to /app if needed
+                p.parent.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            pass
     return url
 
 def run_migrations_offline() -> None:

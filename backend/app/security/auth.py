@@ -2,28 +2,38 @@ from passlib.context import CryptContext
 from jose import jwt
 from datetime import datetime, timedelta, timezone
 from backend.app.core.config import get_settings
+import hashlib
 
-# Workaround: bcrypt 4.x breaks passlib - we handle via direct bcrypt or sha256 fallback
+# --- bcrypt 4.x compat: passlib expects bcrypt.__about__ ---
 try:
     import bcrypt as _bcrypt
-    _has_bcrypt = True
-    # monkey-patch for passlib compat
     if not hasattr(_bcrypt, "__about__"):
         import types
         _bcrypt.__about__ = types.SimpleNamespace(__version__=_bcrypt.__version__)
 except ImportError:
-    _has_bcrypt = False
+    pass
 
 pwd_ctx = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
+def _truncate72(p: str) -> str:
+    """Truncate to 72 bytes (bcrypt limit) safely on byte boundary."""
+    b = p.encode("utf-8")
+    if len(b) <= 72:
+        return p
+    # truncate on byte boundary then decode safely
+    return b[:72].decode("utf-8", errors="ignore")
+
 def hash_password(p: str) -> str:
-    # bcrypt max 72 bytes
-    pw = p[:72] if len(p.encode("utf-8")) > 72 else p
+    pw = _truncate72(p)
     return pwd_ctx.hash(pw)
 
 def verify_password(plain: str, hashed: str) -> bool:
-    pw = plain[:72] if len(plain.encode("utf-8")) > 72 else plain
-    return pwd_ctx.verify(pw, hashed)
+    pw = _truncate72(plain)
+    # defensive: hashed may be corrupted
+    try:
+        return pwd_ctx.verify(pw, hashed)
+    except Exception:
+        return False
 
 def create_token(data: dict, expires_minutes: int | None = None) -> str:
     s = get_settings()

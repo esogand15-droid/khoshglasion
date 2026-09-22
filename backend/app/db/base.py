@@ -1,6 +1,8 @@
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 from sqlalchemy.orm import DeclarativeBase
 from backend.app.core.config import get_settings
+import os
+import pathlib
 
 class Base(DeclarativeBase):
     pass
@@ -8,22 +10,39 @@ class Base(DeclarativeBase):
 _engine = None
 _session_factory = None
 
+def _ensure_sqlite_dir(url: str):
+    """Ensure directory for sqlite file exists."""
+    if not url.startswith("sqlite"):
+        return
+    # handle both sqlite:/// and sqlite+aiosqlite:///
+    for prefix in ("sqlite+aiosqlite:///", "sqlite:///"):
+        if prefix in url:
+            path_part = url.split(prefix)[-1].split("?")[0].split("#")[0]
+            break
+    else:
+        return
+    if not path_part or path_part == ":memory:":
+        return
+    parent = pathlib.Path(path_part).parent
+    if str(parent) and str(parent) != ".":
+        parent.mkdir(parents=True, exist_ok=True)
+
 def get_engine():
     global _engine
     if _engine is None:
         settings = get_settings()
         url = settings.database_url
+        # fallback if empty
+        if not url or not url.strip():
+            url = "sqlite+aiosqlite:///./data/khoshgelasion.db"
+        url = url.strip()
         
         connect_args = {}
         if url.startswith("sqlite"):
-            # Ensure data directory exists
-            import os
-            db_path = url.replace("sqlite+aiosqlite:///", "")
-            os.makedirs(os.path.dirname(db_path) or ".", exist_ok=True)
-            # SQLite pragmas for better concurrency
+            _ensure_sqlite_dir(url)
             connect_args = {
                 "check_same_thread": False,
-                "timeout": 30,
+                "timeout": 30.0,
             }
         
         _engine = create_async_engine(
@@ -35,10 +54,9 @@ def get_engine():
             pool_recycle=300,
         )
         
-        # Apply SQLite pragmas after engine creation
+        # Apply SQLite pragmas
         if url.startswith("sqlite"):
             from sqlalchemy import event
-            from sqlalchemy.pool import Pool
             
             @event.listens_for(_engine.sync_engine, "connect")
             def set_sqlite_pragma(dbapi_connection, connection_record):
@@ -46,7 +64,8 @@ def get_engine():
                 cursor.execute("PRAGMA journal_mode=WAL;")
                 cursor.execute("PRAGMA busy_timeout=30000;")
                 cursor.execute("PRAGMA synchronous=NORMAL;")
-                cursor.execute("PRAGMA cache_size=-32768;")  # 32MB cache
+                cursor.execute("PRAGMA cache_size=-32768;")
+                cursor.execute("PRAGMA foreign_keys=ON;")
                 cursor.close()
     return _engine
 

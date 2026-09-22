@@ -5,3 +5,7 @@ builder = "dockerfile"
 healthcheckPath = "/health"
 healthcheckTimeout = 30
 restartPolicyType = "onFailure"
+
+
+# Optional: Add a volume in Railway dashboard for persistence
+# Mount path: /app/data

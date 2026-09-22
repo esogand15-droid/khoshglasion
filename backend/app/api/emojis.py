@@ -9,6 +9,27 @@ import json
 
 router = APIRouter(prefix="/api/emojis", tags=["emojis"])
 
+@router.get("/export")
+async def export_emojis(db: AsyncSession = Depends(get_db), admin=Depends(get_current_admin)):
+    res = await db.execute(select(EmojiMapping))
+    items = res.scalars().all()
+    return [{"unicode_emoji":e.unicode_emoji,"custom_emoji_id":e.custom_emoji_id,"enabled":e.enabled,"category":e.category,"contexts":e.contexts,"priority":e.priority} for e in items]
+
+@router.post("/import")
+async def import_emojis(payload: list[dict], db: AsyncSession = Depends(get_db), admin=Depends(get_current_admin)):
+    for item in payload:
+        rec = EmojiMapping(
+            unicode_emoji=item["unicode_emoji"],
+            custom_emoji_id=item["custom_emoji_id"],
+            enabled=item.get("enabled", True),
+            category=item.get("category"),
+            contexts=json.dumps(item["contexts"], ensure_ascii=False) if isinstance(item.get("contexts"), list) else item.get("contexts"),
+            priority=item.get("priority", 50),
+        )
+        db.add(rec)
+    await db.flush()
+    return {"imported": len(payload)}
+
 @router.get("")
 async def list_emojis(db: AsyncSession = Depends(get_db), admin=Depends(get_current_admin)):
     res = await db.execute(select(EmojiMapping).order_by(EmojiMapping.priority.desc()))
@@ -55,24 +76,3 @@ async def delete_emoji(emoji_id: str, db: AsyncSession = Depends(get_db), admin=
     await db.delete(e)
     await db.flush()
     return {"ok": True}
-
-@router.get("/export")
-async def export_emojis(db: AsyncSession = Depends(get_db), admin=Depends(get_current_admin)):
-    res = await db.execute(select(EmojiMapping))
-    items = res.scalars().all()
-    return [{"unicode_emoji":e.unicode_emoji,"custom_emoji_id":e.custom_emoji_id,"enabled":e.enabled,"category":e.category,"contexts":e.contexts,"priority":e.priority} for e in items]
-
-@router.post("/import")
-async def import_emojis(payload: list[dict], db: AsyncSession = Depends(get_db), admin=Depends(get_current_admin)):
-    for item in payload:
-        rec = EmojiMapping(
-            unicode_emoji=item["unicode_emoji"],
-            custom_emoji_id=item["custom_emoji_id"],
-            enabled=item.get("enabled", True),
-            category=item.get("category"),
-            contexts=item.get("contexts"),
-            priority=item.get("priority", 50),
-        )
-        db.add(rec)
-    await db.flush()
-    return {"imported": len(payload)}
