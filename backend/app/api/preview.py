@@ -19,9 +19,17 @@ async def preview(payload: PreviewRequest, db: AsyncSession = Depends(get_db)):
     maps=[]
     for r in rows:
         try:
-            ctx=json.loads(r.contexts) if r.contexts else None
+            raw_ctx=json.loads(r.contexts) if r.contexts else None
+            if raw_ctx is None or raw_ctx == "":
+                ctx=None
+            elif isinstance(raw_ctx, str):
+                ctx=[raw_ctx]
+            elif isinstance(raw_ctx, list):
+                ctx=raw_ctx if len(raw_ctx)>0 else None
+            else:
+                ctx=None
         except:
-            ctx=None
+            ctx=[r.contexts] if r.contexts else None
         maps.append(EmojiMap(unicode_emoji=r.unicode_emoji, custom_emoji_id=r.custom_emoji_id, enabled=r.enabled, contexts=ctx, priority=r.priority))
 
     # resolve channel style

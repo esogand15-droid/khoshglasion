@@ -1,205 +1,331 @@
 [
   {
-    "unicode_emoji": "✅",
-    "custom_emoji_id": "5310129635848103696",
-    "category": "general",
-    "priority": 90,
-    "label": "تیک تایید"
-  },
-  {
     "unicode_emoji": "📢",
-    "custom_emoji_id": "5447649780824189653",
-    "category": "announcement",
-    "priority": 85,
-    "label": "بلندگو اطلاعیه"
+    "custom_emoji_id": "5424818078833715060",
+    "priority": 90,
+    "category": null,
+    "label": "📢 premium"
   },
   {
-    "unicode_emoji": "📚",
+    "unicode_emoji": "🚨",
     "custom_emoji_id": "5456140674028019486",
-    "category": "resource",
-    "priority": 85,
-    "label": "کتاب منبع"
-  },
-  {
-    "unicode_emoji": "🎯",
-    "custom_emoji_id": "5451732530048800190",
-    "category": "planning",
-    "priority": 85,
-    "label": "هدف"
-  },
-  {
-    "unicode_emoji": "📌",
-    "custom_emoji_id": "5413336461646094579",
-    "category": "consulting",
-    "priority": 85,
-    "label": "پوش‌پین"
+    "priority": 90,
+    "category": null,
+    "label": "🚨 premium"
   },
   {
     "unicode_emoji": "🔥",
-    "custom_emoji_id": "5449629821362409862",
-    "category": "announcement",
-    "priority": 80,
-    "label": "آتش"
-  },
-  {
-    "unicode_emoji": "⭐",
-    "custom_emoji_id": "5431578537190158965",
-    "category": "motivational",
-    "priority": 80,
-    "label": "ستاره"
+    "custom_emoji_id": "5424972470023104089",
+    "priority": 88,
+    "category": null,
+    "label": "🔥 premium"
   },
   {
     "unicode_emoji": "⚡",
-    "custom_emoji_id": "5406936294728482210",
-    "category": "important",
-    "priority": 80,
-    "label": "برق"
+    "custom_emoji_id": "5224607267797606837",
+    "priority": 85,
+    "category": null,
+    "label": "⚡ premium"
   },
   {
-    "unicode_emoji": "🎓",
-    "custom_emoji_id": "5454101630987654321",
-    "category": "education",
+    "unicode_emoji": "✅",
+    "custom_emoji_id": "5206607081334906820",
     "priority": 85,
-    "label": "فارغ‌التحصیل"
+    "category": null,
+    "label": "✅ premium"
   },
   {
-    "unicode_emoji": "📝",
-    "custom_emoji_id": "5454182070156793209",
-    "category": "exam",
+    "unicode_emoji": "❗",
+    "custom_emoji_id": "5274099962655816924",
     "priority": 85,
-    "label": "یادداشت"
+    "category": null,
+    "label": "❗ premium"
+  },
+  {
+    "unicode_emoji": "⭐",
+    "custom_emoji_id": "5438496463044752972",
+    "priority": 85,
+    "category": null,
+    "label": "⭐ premium"
   },
   {
     "unicode_emoji": "💡",
-    "custom_emoji_id": "5445284980978621388",
-    "category": "consulting",
+    "custom_emoji_id": "5422439311196834318",
     "priority": 85,
-    "label": "ایده"
+    "category": null,
+    "label": "💡 premium"
   },
   {
-    "unicode_emoji": "🎉",
-    "custom_emoji_id": "5454134413361802894",
-    "category": "general",
-    "priority": 75,
-    "label": "جشن"
+    "unicode_emoji": "📌",
+    "custom_emoji_id": "5397782960512444700",
+    "priority": 85,
+    "category": null,
+    "label": "📌 premium"
   },
   {
-    "unicode_emoji": "🚀",
-    "custom_emoji_id": "5454321011540384215",
-    "category": "motivational",
-    "priority": 75,
-    "label": "موشک"
-  },
-  {
-    "unicode_emoji": "💪",
-    "custom_emoji_id": "5454124503608197814",
-    "category": "motivational",
-    "priority": 75,
-    "label": "قدرت"
-  },
-  {
-    "unicode_emoji": "🏆",
-    "custom_emoji_id": "5454316894426412050",
-    "category": "rank",
-    "priority": 80,
-    "label": "جام"
-  },
-  {
-    "unicode_emoji": "📅",
-    "custom_emoji_id": "5454193892721233456",
-    "category": "schedule",
-    "priority": 80,
-    "label": "تقویم"
-  },
-  {
-    "unicode_emoji": "⏰",
-    "custom_emoji_id": "5445261246604338265",
-    "category": "schedule",
-    "priority": 80,
-    "label": "ساعت"
-  },
-  {
-    "unicode_emoji": "❤️",
-    "custom_emoji_id": "5449554904909562107",
-    "category": "motivational",
+    "unicode_emoji": "ℹ️",
+    "custom_emoji_id": "5323442290708985472",
     "priority": 70,
-    "label": "قلب"
+    "category": null,
+    "label": "ℹ️ premium"
   },
   {
-    "unicode_emoji": "🔔",
-    "custom_emoji_id": "5445284980978621399",
-    "category": "announcement",
-    "priority": 75,
-    "label": "زنگ"
-  },
-  {
-    "unicode_emoji": "🌟",
-    "custom_emoji_id": "5431578537190158977",
-    "category": "general",
+    "unicode_emoji": "⚙️",
+    "custom_emoji_id": "5341715473882955310",
     "priority": 70,
-    "label": "درخشش"
+    "category": null,
+    "label": "⚙️ premium"
   },
   {
-    "unicode_emoji": "💎",
-    "custom_emoji_id": "5454154641799943274",
-    "category": "discount",
-    "priority": 75,
-    "label": "الماس"
+    "unicode_emoji": "✉️",
+    "custom_emoji_id": "5253742260054409879",
+    "priority": 70,
+    "category": null,
+    "label": "✉️ premium"
   },
   {
-    "unicode_emoji": "🎁",
-    "custom_emoji_id": "5454154641799943275",
-    "category": "discount",
-    "priority": 75,
-    "label": "هدیه"
-  },
-  {
-    "unicode_emoji": "📈",
-    "custom_emoji_id": "5454321011540384216",
-    "category": "rank",
-    "priority": 75,
-    "label": "نمودار"
+    "unicode_emoji": "✏️",
+    "custom_emoji_id": "5395444784611480792",
+    "priority": 70,
+    "category": null,
+    "label": "✏️ premium"
   },
   {
     "unicode_emoji": "✨",
-    "custom_emoji_id": "5431578537190158988",
-    "category": "general",
+    "custom_emoji_id": "5438496463044752972",
     "priority": 70,
-    "label": "درخشش ریز"
+    "category": null,
+    "label": "✨ premium"
   },
   {
-    "unicode_emoji": "🔶",
-    "custom_emoji_id": "5411453781141870539",
-    "category": "general",
-    "priority": 60,
-    "label": "لوزی نارنجی"
+    "unicode_emoji": "❓",
+    "custom_emoji_id": "5436113877181941026",
+    "priority": 70,
+    "category": null,
+    "label": "❓ premium"
   },
   {
-    "unicode_emoji": "🎨",
-    "custom_emoji_id": "5454321011540384217",
-    "category": "general",
-    "priority": 60,
-    "label": "پالت"
+    "unicode_emoji": "❤️",
+    "custom_emoji_id": "4996980495100150380",
+    "priority": 70,
+    "category": null,
+    "label": "❤️ premium"
   },
   {
-    "unicode_emoji": "📣",
-    "custom_emoji_id": "5447649780824189654",
-    "category": "announcement",
-    "priority": 75,
-    "label": "مگافون"
+    "unicode_emoji": "⬇️",
+    "custom_emoji_id": "5386367538735104399",
+    "priority": 70,
+    "category": null,
+    "label": "⬇️ premium"
   },
   {
-    "unicode_emoji": "💯",
-    "custom_emoji_id": "5454154641799943276",
-    "category": "rank",
-    "priority": 75,
-    "label": "صد درصد"
+    "unicode_emoji": "🆕",
+    "custom_emoji_id": "5382357040008021292",
+    "priority": 70,
+    "category": null,
+    "label": "🆕 premium"
+  },
+  {
+    "unicode_emoji": "🌐",
+    "custom_emoji_id": "5447410659077661506",
+    "priority": 70,
+    "category": null,
+    "label": "🌐 premium"
+  },
+  {
+    "unicode_emoji": "🌟",
+    "custom_emoji_id": "5438496463044752972",
+    "priority": 70,
+    "category": null,
+    "label": "🌟 premium"
+  },
+  {
+    "unicode_emoji": "🎁",
+    "custom_emoji_id": "5406683434124859552",
+    "priority": 70,
+    "category": null,
+    "label": "🎁 premium"
+  },
+  {
+    "unicode_emoji": "🎉",
+    "custom_emoji_id": "5382357040008021292",
+    "priority": 70,
+    "category": null,
+    "label": "🎉 premium"
+  },
+  {
+    "unicode_emoji": "🎓",
+    "custom_emoji_id": "5438496463044752972",
+    "priority": 70,
+    "category": null,
+    "label": "🎓 premium"
+  },
+  {
+    "unicode_emoji": "🎙",
+    "custom_emoji_id": "5224736245665511429",
+    "priority": 70,
+    "category": null,
+    "label": "🎙 premium"
+  },
+  {
+    "unicode_emoji": "🎯",
+    "custom_emoji_id": "5415655814079723871",
+    "priority": 70,
+    "category": null,
+    "label": "🎯 premium"
+  },
+  {
+    "unicode_emoji": "🏆",
+    "custom_emoji_id": "5438496463044752972",
+    "priority": 70,
+    "category": null,
+    "label": "🏆 premium"
+  },
+  {
+    "unicode_emoji": "🏷",
+    "custom_emoji_id": "5406683434124859552",
+    "priority": 70,
+    "category": null,
+    "label": "🏷 premium"
+  },
+  {
+    "unicode_emoji": "👍",
+    "custom_emoji_id": "5337080053119336309",
+    "priority": 70,
+    "category": null,
+    "label": "👍 premium"
   },
   {
     "unicode_emoji": "👑",
     "custom_emoji_id": "5454321011540384218",
-    "category": "rank",
-    "priority": 80,
-    "label": "تاج"
+    "priority": 70,
+    "category": null,
+    "label": "👑 premium"
+  },
+  {
+    "unicode_emoji": "💎",
+    "custom_emoji_id": "5406683434124859552",
+    "priority": 70,
+    "category": null,
+    "label": "💎 premium"
+  },
+  {
+    "unicode_emoji": "💥",
+    "custom_emoji_id": "5276032951342088188",
+    "priority": 70,
+    "category": null,
+    "label": "💥 premium"
+  },
+  {
+    "unicode_emoji": "💪",
+    "custom_emoji_id": "5424972470023104089",
+    "priority": 70,
+    "category": null,
+    "label": "💪 premium"
+  },
+  {
+    "unicode_emoji": "💬",
+    "custom_emoji_id": "5467538555158943525",
+    "priority": 70,
+    "category": null,
+    "label": "💬 premium"
+  },
+  {
+    "unicode_emoji": "💯",
+    "custom_emoji_id": "5454154641799943276",
+    "priority": 70,
+    "category": null,
+    "label": "💯 premium"
+  },
+  {
+    "unicode_emoji": "📅",
+    "custom_emoji_id": "5413879192267805083",
+    "priority": 70,
+    "category": null,
+    "label": "📅 premium"
+  },
+  {
+    "unicode_emoji": "📈",
+    "custom_emoji_id": "5449683594425410231",
+    "priority": 70,
+    "category": null,
+    "label": "📈 premium"
+  },
+  {
+    "unicode_emoji": "📉",
+    "custom_emoji_id": "5447183459602669338",
+    "priority": 70,
+    "category": null,
+    "label": "📉 premium"
+  },
+  {
+    "unicode_emoji": "📊",
+    "custom_emoji_id": "5231200819986047254",
+    "priority": 70,
+    "category": null,
+    "label": "📊 premium"
+  },
+  {
+    "unicode_emoji": "📍",
+    "custom_emoji_id": "5391032818111363540",
+    "priority": 70,
+    "category": null,
+    "label": "📍 premium"
+  },
+  {
+    "unicode_emoji": "📚",
+    "custom_emoji_id": "5305265301917549162",
+    "priority": 70,
+    "category": null,
+    "label": "📚 premium"
+  },
+  {
+    "unicode_emoji": "📝",
+    "custom_emoji_id": "5395444784611480792",
+    "priority": 70,
+    "category": null,
+    "label": "📝 premium"
+  },
+  {
+    "unicode_emoji": "🔒",
+    "custom_emoji_id": "5296369303661067030",
+    "priority": 70,
+    "category": null,
+    "label": "🔒 premium"
+  },
+  {
+    "unicode_emoji": "🔔",
+    "custom_emoji_id": "5458603043203327669",
+    "priority": 70,
+    "category": null,
+    "label": "🔔 premium"
+  },
+  {
+    "unicode_emoji": "🔖",
+    "custom_emoji_id": "5222444124698853913",
+    "priority": 70,
+    "category": null,
+    "label": "🔖 premium"
+  },
+  {
+    "unicode_emoji": "🔗",
+    "custom_emoji_id": "5271604874419647061",
+    "priority": 70,
+    "category": null,
+    "label": "🔗 premium"
+  },
+  {
+    "unicode_emoji": "🔶",
+    "custom_emoji_id": "5397782960512444700",
+    "priority": 70,
+    "category": null,
+    "label": "🔶 premium"
+  },
+  {
+    "unicode_emoji": "🚀",
+    "custom_emoji_id": "5415655814079723871",
+    "priority": 70,
+    "category": null,
+    "label": "🚀 premium"
   }
 ]

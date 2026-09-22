@@ -22,9 +22,22 @@ async def load_emoji_maps(db: AsyncSession) -> list[EmojiMap]:
     out=[]
     for r in rows:
         try:
-            ctx = json.loads(r.contexts) if r.contexts else None
+            raw_ctx = json.loads(r.contexts) if r.contexts else None
+            # Normalize: string -> [string], list stays, otherwise None (unconditional)
+            if raw_ctx is None or raw_ctx == "":
+                ctx = None
+            elif isinstance(raw_ctx, str):
+                ctx = [raw_ctx]
+            elif isinstance(raw_ctx, list):
+                ctx = raw_ctx if len(raw_ctx) > 0 else None
+            else:
+                ctx = None
         except:
-            ctx=None
+            # If contexts is plain string like "announcement" without JSON quotes, treat as single category
+            try:
+                ctx = [r.contexts] if r.contexts else None
+            except:
+                ctx=None
         out.append(EmojiMap(
             unicode_emoji=r.unicode_emoji,
             custom_emoji_id=r.custom_emoji_id,

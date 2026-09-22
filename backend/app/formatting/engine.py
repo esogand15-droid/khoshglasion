@@ -8,6 +8,24 @@ from backend.app.formatting.styles import get_style, style_for_category, DIVIDER
 from backend.app.formatting.validators import validate_length
 from backend.app.formatting.emoji import build_emoji_entities, EmojiMapping as EmojiMap
 
+# Auto-injected emoji when post has zero emoji — ensures every post gets premium
+CATEGORY_LEAD_EMOJI: dict[str, str] = {
+    "announcement": "🚨",
+    "news": "📢",
+    "resource": "📚",
+    "book": "📚",
+    "exam": "📝",
+    "planning": "🎯",
+    "motivational": "⭐",
+    "consulting": "💡",
+    "schedule": "📅",
+    "rank": "📊",
+    "discount": "🎁",
+    "ad": "🎉",
+    "qa": "❓",
+    "general": "✨",
+}
+
 BULLET_VARIANTS = ["🔶", "•", "▪", "·", "-"]
 
 @dataclass
@@ -99,12 +117,12 @@ def format_message(
     # Only beautification: dividers, footer, emoji enhancement
 
     # 4. Add divider + footer if style says so
-    # Check if footer already exists to avoid duplication
     footer = footer_text or style.footer_template
+    # Normalize: if footer itself starts with divider, strip it - engine handles divider
+    if footer and style.divider and footer.strip().startswith(style.divider.strip()):
+        footer = footer.strip()[len(style.divider.strip()):].strip()
     if style.add_footer and footer:
-        # Avoid double footer
         if footer.strip() not in text:
-            # Add divider before footer if needed
             if style.divider and style.divider not in text.split("\n")[-5:]:
                 text = text.rstrip() + "\n\n" + style.divider + "\n\n" + footer
                 applied.append("add_footer_with_divider")
@@ -114,16 +132,39 @@ def format_message(
         else:
             warnings.append("footer already present, skipped")
 
-    # 5. Emoji custom mapping (HTML mode)
+    # 5. Emoji: auto-inject if post has no emoji at all
+    if enable_emoji and category in CATEGORY_LEAD_EMOJI:
+        has_any_emoji = any(m.unicode_emoji in text for m in (emoji_mappings or []))
+        # Generic emoji check via simple range
+        has_generic = False
+        if not has_any_emoji:
+            for ch in text:
+                o = ord(ch)
+                if 0x2600 <= o <= 0x27BF or 0x1F300 <= o <= 0x1FAFF or 0x1F900 <= o <= 0x1F9FF:
+                    has_generic = True
+                    break
+        if not has_any_emoji and not has_generic:
+            lead = CATEGORY_LEAD_EMOJI.get(category, "✨")
+            text = f"{lead} {text}"
+            applied.append(f"auto_emoji:{lead}")
+
     html_text = None
     entities_extra = None
     if enable_emoji and emoji_mappings:
         html_text_candidate, entities_extra = build_emoji_entities(text, emoji_mappings, category)
         if html_text_candidate != text:
-            # html_text_candidate has <tg-emoji> tags
-            # For plain text editing we keep text as-is but store html_text for API
             html_text = html_text_candidate
             applied.append(f"emoji_replacement:{len(entities_extra)}")
+        elif any(m.unicode_emoji in text for m in emoji_mappings):
+            # Fallback: at least mark premium intent even if category filter blocked
+            # Force unconditional replace for premium effect
+            from backend.app.formatting.emoji import EmojiMapping as _EM
+            forced = [_EM(unicode_emoji=m.unicode_emoji, custom_emoji_id=m.custom_emoji_id, enabled=True, contexts=None, priority=m.priority) for m in emoji_mappings]
+            html_text_candidate2, entities_extra2 = build_emoji_entities(text, forced, category)
+            if html_text_candidate2 != text:
+                html_text = html_text_candidate2
+                entities_extra = entities_extra2
+                applied.append(f"emoji_force:{len(entities_extra2)}")
 
     # 6. Validate limits
     check_text = html_text or text
@@ -139,6 +180,9 @@ def format_message(
         )
 
     changed = text != original or (html_text is not None and html_text != original)
+    # Premium emoji is always a change worth editing
+    if html_text and "<tg-emoji" in html_text:
+        changed = True
 
     return FormattedMessage(
         text=text,

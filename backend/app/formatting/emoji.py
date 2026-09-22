@@ -31,9 +31,10 @@ EMOJI_CONTEXTS = {
 def should_replace(emoji: str, category: str, mapping: EmojiMapping) -> bool:
     if not mapping.enabled:
         return False
+    # Premium: always replace regardless of category (user wants every post premium)
+    # Only restrict if contexts explicitly set to non-empty list
     if not mapping.contexts:
         return True
-    # if contexts defined, only replace when category matches
     return category in mapping.contexts
 
 def build_emoji_entities(text: str, mappings: list[EmojiMapping], category: str) -> tuple[str, list[dict]]:
