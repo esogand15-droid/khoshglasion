@@ -122,7 +122,24 @@ async def telegram_webhook(request: Request):
 # Serve frontend static if exists
 FRONTEND_DIST = Path(__file__).parent.parent.parent / "frontend" / "dist"
 if FRONTEND_DIST.exists():
-    app.mount("/", StaticFiles(directory=str(FRONTEND_DIST), html=True), name="frontend")
+    app.mount("/assets", StaticFiles(directory=str(FRONTEND_DIST / "assets")), name="assets")
+    # SPA fallback: serve index.html for any non-API non-telegram route
+    from fastapi.responses import FileResponse as _FileResponse
+    @app.get("/{full_path:path}")
+    async def serve_spa(full_path: str):
+        # Don't intercept API / health / telegram routes
+        if full_path.startswith(("api/", "telegram/", "health", "ready", "docs", "openapi.json", "redoc")):
+            from fastapi import HTTPException as _HTTPException
+            raise _HTTPException(status_code=404, detail="Not Found")
+        index = FRONTEND_DIST / "index.html"
+        if index.exists():
+            return _FileResponse(index)
+        from fastapi import HTTPException as _HTTPException2
+        raise _HTTPException2(status_code=404, detail="Not Found")
+else:
+    @app.get("/")
+    async def root_hint():
+        return {"service": "khoshgelasion", "status": "ok", "hint": "Frontend not built. See /health and /docs", "docs": "/docs", "health": "/health"}
 
 @app.on_event("startup")
 async def on_startup():
