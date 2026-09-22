@@ -17,7 +17,7 @@ class Settings(BaseSettings):
     webhook_secret: str = ""
     webhook_path: str = "/telegram/webhook"
 
-    admin_secret: str = "change-me"
+    admin_secret: str = "admin"
     session_secret: str = "change-me-32-chars-minimum-secret"
     jwt_secret: str = "change-me-jwt-secret"
     jwt_expire_minutes: int = 60 * 24
