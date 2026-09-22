@@ -29,6 +29,13 @@ class Settings(BaseSettings):
     max_concurrent_processing: int = 5
 
     cors_origins: str = "*"
+    # AI Integration
+    ai_base_url: str = ""
+    ai_model: str = ""
+    ai_api_key: str = ""
+    ai_enabled: bool = False
+    ai_prompt_template: str = "شما دستیار ویرایش محتوای کانال تلگرام هستید. متن زیر را برای پست کانال مشاوره کنکور بازنویسی کنید: حفظ معنا، لحن صمیمی و حرفه‌ای، اضافه کردن ایموجی‌های مناسب، ساختاریافته با تیتر و فوتر. فقط متن نهایی را برگردانید.\n\nمتن اصلی:\n{text}"
+
 
     class Config:
         env_file = ".env"

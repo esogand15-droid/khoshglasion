@@ -6,6 +6,7 @@ from backend.app.models.admin import Admin
 from backend.app.security.deps import get_current_admin
 from backend.app.core.config import get_settings
 from backend.app.db.base import get_engine
+from backend.app.services.ai import test_ai_connection, enhance_with_ai
 from sqlalchemy import text
 
 router = APIRouter(prefix="/api/system", tags=["system"])
@@ -52,6 +53,66 @@ async def get_logs(limit: int = 100, admin=Depends(get_current_admin)):
     from backend.app.db.base import get_db
     # need db
     return {"note": "use /api/messages for processing logs"}
+
+
+
+@router.get("/ai/config")
+async def get_ai_config(admin=Depends(get_current_admin)):
+    s = get_settings()
+    return {
+        "enabled": s.ai_enabled,
+        "base_url": s.ai_base_url,
+        "model": s.ai_model,
+        "api_key_set": bool(s.ai_api_key),
+        "prompt_template": s.ai_prompt_template,
+    }
+
+@router.post("/ai/config")
+async def update_ai_config(
+    enabled: bool = False,
+    base_url: str = "",
+    model: str = "",
+    api_key: str = "",
+    prompt_template: str = "",
+    admin=Depends(get_current_admin)
+):
+    from backend.app.db.base import get_async_session
+    from backend.app.models.system import SystemSetting
+    from sqlalchemy import select
+    from backend.app.core.config import get_settings
+    
+    s = get_settings()
+    settings_map = {
+        "ai_enabled": str(enabled).lower(),
+        "ai_base_url": base_url,
+        "ai_model": model,
+        "ai_api_key": api_key,
+        "ai_prompt_template": prompt_template or s.ai_prompt_template,
+    }
+    
+    async for session in get_async_session():
+        for k, v in settings_map.items():
+            res = await session.execute(select(SystemSetting).where(SystemSetting.key == k))
+            row = res.scalar_one_or_none()
+            if row:
+                row.value = v
+            else:
+                session.add(SystemSetting(key=k, value=v, description=f"AI setting: {k}"))
+        await session.commit()
+    
+    return {"ok": True, "message": "AI config updated. Restart may be required for some settings."}
+
+@router.post("/ai/test")
+async def test_ai(admin=Depends(get_current_admin)):
+    result = await test_ai_connection()
+    return result
+
+@router.post("/ai/enhance")
+async def enhance_text(text: str, category: str = "general", admin=Depends(get_current_admin)):
+    """Test AI enhancement on a sample text."""
+    result = await enhance_with_ai(text, category)
+    return {"enhanced": result, "original": text}
+
 
 @router.get("/admins")
 async def list_admins(db: AsyncSession = Depends(get_db), admin=Depends(get_current_admin)):

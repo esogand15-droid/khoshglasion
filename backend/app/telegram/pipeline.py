@@ -7,6 +7,7 @@ from sqlalchemy import select
 
 from backend.app.formatting.engine import format_message
 from backend.app.formatting.emoji import EmojiMapping as EmojiMap
+from backend.app.services.ai import enhance_with_ai
 from backend.app.models.message_log import MessageLog
 from backend.app.models.channel import Channel
 from backend.app.models.emoji import EmojiMapping
@@ -136,6 +137,18 @@ async def process_channel_post(
         return {"status":"skipped","reason":"no_change","category":result.category}
 
     formatted_hash = sha16(result.text)
+    
+    # AI Enhancement (optional, after formatting)
+    ai_enhanced = False
+    if settings.ai_enabled and result.changed:
+        ai_text = await enhance_with_ai(result.text, result.category)
+        if ai_text:
+            result.text = ai_text
+            result.html_text = ai_text  # Will be re-processed for premium emojis? Keep as-is for now
+            formatted_hash = sha16(result.text)
+            ai_enhanced = True
+            result.applied_rules.append("ai_enhanced")
+    
     # Dry run check
     is_dry = settings.dry_run
     status = "dry_run" if is_dry else "pending_edit"
