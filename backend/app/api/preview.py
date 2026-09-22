@@ -8,6 +8,7 @@ from backend.app.services.ai import enhance_with_ai, enhance_preview
 from backend.app.formatting.emoji import EmojiMapping as EmojiMap
 from backend.app.models.emoji import EmojiMapping
 from backend.app.models.channel import Channel
+from backend.app.security.deps import get_current_admin
 import json
 
 router = APIRouter(prefix="/api/preview", tags=["preview"])
