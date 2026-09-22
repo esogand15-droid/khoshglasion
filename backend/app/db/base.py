@@ -13,6 +13,9 @@ def get_engine():
     if _engine is None:
         settings = get_settings()
         url = settings.database_url
+        # Normalize Railway postgresql:// -> postgresql+asyncpg:// for async driver
+        if url.startswith("postgresql://") and not url.startswith("postgresql+asyncpg://"):
+            url = url.replace("postgresql://", "postgresql+asyncpg://", 1)
         connect_args = {}
         _engine = create_async_engine(url, echo=False, future=True, connect_args=connect_args)
     return _engine
