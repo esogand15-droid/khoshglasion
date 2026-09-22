@@ -17,7 +17,14 @@ def get_engine():
         if url.startswith("postgresql://") and not url.startswith("postgresql+asyncpg://"):
             url = url.replace("postgresql://", "postgresql+asyncpg://", 1)
         connect_args = {}
-        _engine = create_async_engine(url, echo=False, future=True, connect_args=connect_args)
+        _engine = create_async_engine(
+            url,
+            echo=False,
+            future=True,
+            connect_args=connect_args,
+            pool_pre_ping=True,
+            pool_recycle=300,
+        )
     return _engine
 
 def get_session_factory():
