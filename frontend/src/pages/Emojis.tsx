@@ -47,7 +47,7 @@ export default function Emojis() {
               <tr key={item.id}>
                 <td style={{ fontSize: 22 }}>{item.unicode_emoji}</td>
                 <td className="tiny">{item.custom_emoji_id}{item.custom_emoji_id?.startsWith("53683241") && <Badge tone="warn">فیک</Badge>}</td>
-                <td>{item.source || item.category || "—"}</td>
+                <td>{item.category || "—"}<div className="tiny">{item.source || ""}</div></td>
                 <td>{item.usage_count || 0}</td>
                 <td><Badge tone={item.enabled ? "ok" : "info"}>{item.enabled ? "فعال" : "خاموش"}</Badge></td>
                 <td className="row">

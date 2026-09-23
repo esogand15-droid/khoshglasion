@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import api from "../services/api";
-import { Page } from "../components";
+import { Page, TelegramPreview } from "../components";
 
 const SAMPLE = "هر کتابی که معروفه لزوماً برای تو مناسب نیست.\nیکی از مهم‌ترین تصمیم‌ها توی مسیر کنکور، انتخاب منبعیه که با سطح، هدف و زمان مطالعه‌ات هماهنگ باشه.";
 
@@ -37,7 +37,7 @@ export default function Preview() {
       {result && !result.error && (
         <div className="split">
           <div className="card"><h3>اصل</h3><div className="preview-paper">{result.original}</div></div>
-          <div className="card"><h3>خروجی · {result.category}</h3><div className="preview-paper">{result.formatted}</div><div className="tiny">{result.applied_rules?.join(" · ")}</div>{result.warnings?.length > 0 && <div className="tiny">{result.warnings.join(" · ")}</div>}</div>
+          <div className="card"><h3>خروجی · {result.category}</h3><TelegramPreview html={result.html_formatted} plain={result.formatted} /><div className="tiny">تصمیم: {result.strategy || "—"}{result.ai_used ? " · بازنویسی شد" : " · بدون بازنویسی"}</div><div className="tiny">{result.applied_rules?.join(" · ")}</div>{result.warnings?.length > 0 && <div className="alert warn">{result.warnings.join(" · ")}</div>}<div className="tiny">نقل‌قول، لینک عضویت و ایموجی پرمیوم در همین حباب دیده می‌شوند. انیمیشن ایموجی فقط داخل تلگرام پخش می‌شود.</div>{!!result.diff?.length && <div className="tiny">{result.diff.slice(0, 8).map((row: any, index: number) => <div key={index}>{row.kind === "add" ? "+ " : "− "}{row.text}</div>)}</div>}</div>
         </div>
       )}
     </Page>

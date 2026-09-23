@@ -59,6 +59,42 @@ export function Modal({ title, onClose, children }: { title: string; onClose: ()
   );
 }
 
+const ALLOWED_TAGS = new Set(["b", "strong", "i", "em", "u", "s", "code", "pre", "blockquote", "a", "tg-emoji", "tg-spoiler", "br"]);
+
+export function sanitizeTelegramHtml(input: string): string {
+  if (typeof DOMParser === "undefined") {
+    return (input || "").replace(/[&<>]/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[ch] || ch));
+  }
+  const doc = new DOMParser().parseFromString(`<div>${input || ""}</div>`, "text/html");
+  const root = doc.body.firstElementChild;
+  if (!root) return "";
+  const walk = (node: Element) => {
+    [...node.children].forEach((child) => {
+      const tag = child.tagName.toLowerCase();
+      if (!ALLOWED_TAGS.has(tag)) {
+        child.replaceWith(doc.createTextNode(child.textContent || ""));
+        return;
+      }
+      [...child.attributes].forEach((attr) => {
+        const name = attr.name.toLowerCase();
+        const value = attr.value || "";
+        const keepLink = tag === "a" && name === "href" && /^(https?:|tg:)/i.test(value);
+        const keepEmoji = tag === "tg-emoji" && name === "emoji-id" && /^\d+$/.test(value);
+        const keepQuote = tag === "blockquote" && name === "expandable";
+        if (!keepLink && !keepEmoji && !keepQuote) child.removeAttribute(attr.name);
+      });
+      walk(child);
+    });
+  };
+  walk(root);
+  return root.innerHTML;
+}
+
+export function TelegramPreview({ html, plain }: { html?: string | null; plain?: string }) {
+  const source = html || (plain || "").replace(/[&<>]/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[ch] || ch));
+  return <div className="tg-bubble" dangerouslySetInnerHTML={{ __html: sanitizeTelegramHtml(source) }} />;
+}
+
 export function Alerts({ items }: { items?: { level: string; text: string }[] }) {
   if (!items?.length) return null;
   return <div className="grid">{items.map((item) => <div key={item.text} className={`alert ${item.level}`}>{item.text}</div>)}</div>;

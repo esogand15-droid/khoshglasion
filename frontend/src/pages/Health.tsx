@@ -32,6 +32,9 @@ export default function Health() {
         </div>
         {msg && <div className="tiny">{msg}</div>}
       </Card>
+      {!data.user_session_configured && data.premium_mode !== "off" && (
+        <div className="alert warn">نشست پرمیوم وصل نیست. نقل‌قول و لینک عضویت اعمال می‌شوند، ولی ایموجی متحرک داخل کانال تا وقتی TG_SESSION_STRING تنظیم نشود به شکل ساده می‌ماند. Bot API این را برای کانال تضمین نمی‌کند.</div>
+      )}
       <Card title="چک‌لیست راه‌اندازی">
         <ol className="tiny">
           <li>در Railway یک Postgres بساز و DATABASE_URL را به سرویس ربات وصل کن.</li>

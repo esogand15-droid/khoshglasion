@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import api from "../services/api";
-import { Badge, Modal, Page, STATUS, statusTone } from "../components";
+import { Badge, Modal, Page, STATUS, statusTone, TelegramPreview } from "../components";
 
 export default function Messages() {
   const [items, setItems] = useState<any[]>([]);
@@ -54,9 +54,11 @@ export default function Messages() {
           {selected.error && <div className="alert warn">{selected.error}</div>}
           <div className="split" style={{ marginTop: 12 }}>
             <div><div className="tiny">متن اصلی</div><div className="preview-paper">{selected.original_text}</div></div>
-            <div><div className="tiny">متن خوشگل</div><div className="preview-paper">{selected.formatted_text}</div></div>
+            <div><div className="tiny">متن خوشگل</div><TelegramPreview html={selected.html_text} plain={selected.formatted_text} /></div>
           </div>
-          <div className="tiny">روش: {selected.edit_method || "—"} · تلاش: {selected.attempt_count || 0} · {selected.applied_rules}</div>
+          <div className="tiny">روش: {selected.edit_method || "—"} · تلاش: {selected.attempt_count || 0} · تصمیم: {selected.decision?.strategy || "—"} · قالب: {selected.selection?.template_id || "—"}</div>
+          <div className="tiny">{selected.applied_rules}</div>
+          {!!selected.diff?.length && <div className="tiny">{selected.diff.slice(0, 8).map((row: any, index: number) => <div key={index}>{row.kind === "add" ? "+ " : "− "}{row.text}</div>)}</div>}
           <button className="btn-gold" style={{ marginTop: 12 }} onClick={async () => {
             const { data } = await api.post(`/api/messages/${selected.id}/retry`);
             setSelected(data.message);

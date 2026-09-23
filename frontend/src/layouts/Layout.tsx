@@ -51,6 +51,11 @@ export default function Layout() {
         </div>
       </aside>
       <main className="main">
+        <nav className="mobile-nav">
+          {NAV.map(([to, label]) => (
+            <NavLink key={to} to={to} end={to === "/"} className={({ isActive }) => isActive ? "active" : ""}>{label}</NavLink>
+          ))}
+        </nav>
         <div className="pills" style={{ marginBottom: 18 }}>
           <span className={`pill ${health?.external_database ? "ok" : "bad"}`}>{health?.external_database ? "Postgres پایدار" : "SQLite موقت"}</span>
           <span className={`pill ${health?.bot === "connected" ? "ok" : "bad"}`}>{health?.bot === "connected" ? "بات آنلاین" : "بات قطع"}</span>

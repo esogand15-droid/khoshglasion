@@ -32,7 +32,7 @@ export default function Styles() {
           let footer = style.config;
           try { footer = JSON.parse(style.config).footer || style.config; } catch { /* keep raw */ }
           return (
-            <Card key={style.id} title={style.name} extra={style.is_builtin ? <Badge>داخلی</Badge> : <button className="btn-danger" onClick={async () => { await api.delete(`/api/styles/${style.id}`); load(); }}>حذف</button>}>
+            <Card key={style.id} title={style.name} extra={<span className="row">{style.is_builtin ? <Badge>داخلی</Badge> : <button className="btn-danger" onClick={async () => { await api.delete(`/api/styles/${style.id}`); load(); }}>حذف</button>}<button className="btn" onClick={async () => { await api.post(`/api/styles/${style.id}/duplicate`); setMsg("کپی ساخته شد"); load(); }}>کپی</button></span>}>
               <div className="tiny">{style.slug}</div>
               <div className="preview-paper" style={{ marginTop: 10 }}>{footer || "بدون فوتر"}</div>
             </Card>

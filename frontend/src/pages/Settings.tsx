@@ -79,6 +79,8 @@ export default function Settings() {
           <Field label="آیدی ادمین‌های تلگرام"><input value={data.admin_telegram_ids || ""} onChange={(e) => setData({ ...data, admin_telegram_ids: e.target.value })} onBlur={() => save({ admin_telegram_ids: data.admin_telegram_ids })} placeholder="123,456" /></Field>
           <Field label="چت اعلان خطا"><input value={data.notify_chat_id || ""} onChange={(e) => setData({ ...data, notify_chat_id: e.target.value })} onBlur={() => save({ notify_chat_id: data.notify_chat_id })} /></Field>
           <Field label="فوتر پیش‌فرض سراسری"><textarea value={data.default_footer || ""} onChange={(e) => setData({ ...data, default_footer: e.target.value })} onBlur={() => save({ default_footer: data.default_footer })} /></Field>
+          <Field label="لینک عضویت"><input value={data.footer_url || ""} onChange={(e) => setData({ ...data, footer_url: e.target.value })} onBlur={() => save({ footer_url: data.footer_url })} placeholder="https://t.me/Rotbeland1" /></Field>
+          <Field label="یوزرنیم پشتیبانی"><input value={data.support_username || ""} onChange={(e) => setData({ ...data, support_username: e.target.value })} onBlur={() => save({ support_username: data.support_username })} placeholder="Rotbeland_support" /></Field>
         </div>
         <p className="tiny">نشست کاربر از محیط TG_SESSION_STRING خوانده می‌شود و در پنل ذخیره نمی‌شود. وضعیت: {data.user_session_configured ? "تنظیم شده" : "تنظیم نشده"}.</p>
       </Card>
