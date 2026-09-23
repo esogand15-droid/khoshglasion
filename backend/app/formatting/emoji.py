@@ -1,6 +1,10 @@
-import json
-import re
+from __future__ import annotations
+
 from dataclasses import dataclass
+import html
+import re
+
+from backend.app.formatting.textutil import URL_RE
 
 @dataclass
 class EmojiMapping:
@@ -10,76 +14,99 @@ class EmojiMapping:
     contexts: list | None = None
     priority: int = 50
 
-# Default contexts mapping
-EMOJI_CONTEXTS = {
-    "📢": ["announcement","news"],
-    "📚": ["resource","book","education"],
-    "🎯": ["planning","goal","consulting"],
-    "⏰": ["schedule","deadline","exam"],
-    "🔥": ["important","announcement"],
-    "💡": ["tip","consulting"],
-    "❤️": ["motivational","general"],
-    "🎓": ["education","konkur","school"],
-    "📝": ["exam","planning"],
-    "📌": ["important","consulting"],
-    "🔶": ["general"],
-    "⭐": ["motivational","rank"],
-    "⚡": ["important"],
-    "❗": ["announcement"],
-}
 
-def should_replace(emoji: str, category: str, mapping: EmojiMapping) -> bool:
-    if not mapping.enabled:
+def should_replace(category: str, mapping: EmojiMapping) -> bool:
+    if not mapping.enabled or not mapping.custom_emoji_id or not mapping.unicode_emoji:
         return False
-    # Premium: always replace regardless of category (user wants every post premium)
-    # Only restrict if contexts explicitly set to non-empty list
+    if not str(mapping.custom_emoji_id).isdigit():
+        return False
     if not mapping.contexts:
         return True
     return category in mapping.contexts
 
-def build_emoji_entities(text: str, mappings: list[EmojiMapping], category: str) -> tuple[str, list[dict]]:
-    """Replace unicode emojis with <tg-emoji> tags and return (html_text, entities).
-    For Bot API HTML mode we use <tg-emoji emoji-id="ID">emoji</tg-emoji>.
-    Also collect custom_emoji entities for non-HTML path.
-    """
-    entities = []
-    # sort by priority desc, length desc
-    sorted_maps = sorted(mappings, key=lambda m: (-m.priority, -len(m.unicode_emoji)))
-    result = text
-    offset_shift = 0
-    for m in sorted_maps:
-        if not should_replace(m.unicode_emoji, category, m):
-            continue
-        # find all occurrences
-        # need to handle offset correctly
-        idx = 0
-        new_result_parts = []
-        last = 0
-        found = False
-        while True:
-            pos = result.find(m.unicode_emoji, idx)
-            if pos == -1:
-                break
-            found = True
-            new_result_parts.append(result[last:pos])
-            tag = f'<tg-emoji emoji-id="{m.custom_emoji_id}">{m.unicode_emoji}</tg-emoji>'
-            new_result_parts.append(tag)
-            # entity for offset tracking (Telegram counts UTF-16 code units)
-            # For HTML we don't need manual entities, but keep for logging
-            entities.append({"type":"custom_emoji","offset": pos, "length": len(m.unicode_emoji), "custom_emoji_id": m.custom_emoji_id})
-            idx = pos + len(m.unicode_emoji)
-            last = idx
-        if found:
-            new_result_parts.append(result[last:])
-            result = "".join(new_result_parts)
-    return result, entities
 
-def simple_replace(text: str, mappings: list[EmojiMapping], category: str) -> tuple[str, int]:
-    """Fallback plain replacement counter without HTML."""
-    count = 0
-    for m in sorted(mappings, key=lambda x: -x.priority):
-        if not should_replace(m.unicode_emoji, category, m):
-            continue
-        if m.unicode_emoji in text:
-            count += text.count(m.unicode_emoji)
-    return text, count
+def _overlaps(start: int, end: int, occupied: list[tuple[int, int]]) -> bool:
+    return any(not (end <= a or start >= b) for a, b in occupied)
+
+
+def _inside_url(text: str, pos: int) -> bool:
+    for match in URL_RE.finditer(text):
+        if match.start() <= pos < match.end():
+            return True
+    return False
+
+
+def find_emoji_spans(
+    text: str,
+    mappings: list[EmojiMapping],
+    category: str,
+    max_emoji: int = 12,
+    force: bool = False,
+) -> list[tuple[int, int, str, str]]:
+    """Return non-overlapping (start, end, emoji, custom_id) spans."""
+    if not text or not mappings or max_emoji <= 0:
+        return []
+    occupied: list[tuple[int, int]] = []
+    spans: list[tuple[int, int, str, str]] = []
+    ordered = sorted(mappings, key=lambda m: (-m.priority, -len(m.unicode_emoji or "")))
+    for mapping in ordered:
+        if not should_replace(category, mapping):
+            if not force:
+                continue
+            if not mapping.enabled or not str(mapping.custom_emoji_id).isdigit():
+                continue
+        emoji = mapping.unicode_emoji
+        cursor = 0
+        while cursor < len(text):
+            pos = text.find(emoji, cursor)
+            if pos < 0:
+                break
+            end = pos + len(emoji)
+            cursor = end
+            if _overlaps(pos, end, occupied) or _inside_url(text, pos):
+                continue
+            spans.append((pos, end, emoji, str(mapping.custom_emoji_id)))
+            occupied.append((pos, end))
+            if len(spans) >= max_emoji:
+                return sorted(spans)
+    return sorted(spans)
+
+
+def render_emoji_html(text: str, spans: list[tuple[int, int, str, str]]) -> str:
+    """Escape the whole message, then wrap only the mapped emoji spans."""
+    if not spans:
+        return html.escape(text)
+    parts: list[str] = []
+    last = 0
+    for start, end, emoji, custom_id in spans:
+        parts.append(html.escape(text[last:start]))
+        parts.append(f'<tg-emoji emoji-id="{html.escape(custom_id, quote=True)}">{html.escape(emoji)}</tg-emoji>')
+        last = end
+    parts.append(html.escape(text[last:]))
+    return "".join(parts)
+
+
+def build_emoji_entities(
+    text: str,
+    mappings: list[EmojiMapping],
+    category: str,
+    max_emoji: int = 12,
+) -> tuple[str, list[dict]]:
+    spans = find_emoji_spans(text, mappings, category, max_emoji=max_emoji, force=False)
+    if not spans:
+        spans = find_emoji_spans(text, mappings, category, max_emoji=max_emoji, force=True)
+    html_text = render_emoji_html(text, spans)
+    entities = [
+        {"type": "custom_emoji", "offset": start, "length": end - start, "custom_emoji_id": cid}
+        for start, end, _emoji, cid in spans
+    ]
+    return html_text, entities
+
+
+_TAG_RE = re.compile(r"<[^>]+>")
+
+
+def visible_length(text: str, html_text: str | None = None) -> int:
+    if html_text:
+        return len(_TAG_RE.sub("", html_text))
+    return len(text or "")

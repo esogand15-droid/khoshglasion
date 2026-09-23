@@ -1,14 +1,15 @@
-import { Routes, Route, Navigate } from "react-router-dom";
-import Login from "./pages/Login";
+import { Navigate, Route, Routes } from "react-router-dom";
 import Layout from "./layouts/Layout";
-import Dashboard from "./pages/Dashboard";
+import Audit from "./pages/Audit";
 import Channels from "./pages/Channels";
-import Messages from "./pages/Messages";
+import Dashboard from "./pages/Dashboard";
 import Emojis from "./pages/Emojis";
-import Styles from "./pages/Styles";
+import Health from "./pages/Health";
+import Login from "./pages/Login";
+import Messages from "./pages/Messages";
 import Preview from "./pages/Preview";
 import Settings from "./pages/Settings";
-import Health from "./pages/Health";
+import Styles from "./pages/Styles";
 import { useAuth } from "./stores/auth";
 
 function Protected({ children }: { children: React.ReactNode }) {
@@ -30,6 +31,7 @@ export default function App() {
         <Route path="preview" element={<Preview />} />
         <Route path="settings" element={<Settings />} />
         <Route path="health" element={<Health />} />
+        <Route path="audit" element={<Audit />} />
       </Route>
     </Routes>
   );

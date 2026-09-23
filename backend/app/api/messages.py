@@ -1,26 +1,89 @@
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import desc, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, desc
+
 from backend.app.db.base import get_db
 from backend.app.models.message_log import MessageLog
 from backend.app.security.deps import get_current_admin
+from backend.app.telegram.pipeline import reprocess_log
 
 router = APIRouter(prefix="/api/messages", tags=["messages"])
 
+
+def dump_message(row: MessageLog, full: bool = False) -> dict:
+    original = row.original_text
+    formatted = row.formatted_text
+    if not full:
+        original = original[:240] if original else None
+        formatted = formatted[:240] if formatted else None
+    return {
+        "id": row.id,
+        "chat_id": row.chat_id,
+        "message_id": row.message_id,
+        "original_text": original,
+        "formatted_text": formatted,
+        "html_text": row.html_text if full else None,
+        "category": row.category,
+        "status": row.status,
+        "error": row.error,
+        "applied_rules": row.applied_rules,
+        "processing_time_ms": row.processing_time_ms,
+        "has_media": row.has_media,
+        "message_type": row.message_type,
+        "ai_used": row.ai_used,
+        "attempt_count": row.attempt_count,
+        "edit_method": row.edit_method,
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+        "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+    }
+
+
 @router.get("")
-async def list_messages(limit: int = Query(50, le=200), offset: int = 0, status: str | None = None, db: AsyncSession = Depends(get_db), admin=Depends(get_current_admin)):
-    q = select(MessageLog).order_by(desc(MessageLog.created_at)).limit(limit).offset(offset)
+async def list_messages(
+    limit: int = Query(40, le=200),
+    offset: int = 0,
+    status: str | None = None,
+    category: str | None = None,
+    q: str | None = None,
+    db: AsyncSession = Depends(get_db),
+    admin=Depends(get_current_admin),
+):
+    filters = []
     if status:
-        q = select(MessageLog).where(MessageLog.status==status).order_by(desc(MessageLog.created_at)).limit(limit).offset(offset)
-    res = await db.execute(q)
-    items = res.scalars().all()
-    return [{"id":m.id,"chat_id":m.chat_id,"message_id":m.message_id,"original_text":(m.original_text[:200] if m.original_text else None),"formatted_text":(m.formatted_text[:200] if m.formatted_text else None),"category":m.category,"status":m.status,"error":m.error,"processing_time_ms":m.processing_time_ms,"has_media":m.has_media,"message_type":m.message_type,"created_at": m.created_at.isoformat() if m.created_at else None} for m in items]
+        filters.append(MessageLog.status == status)
+    if category:
+        filters.append(MessageLog.category == category)
+    if q:
+        like = f"%{q.strip()}%"
+        filters.append(or_(
+            MessageLog.original_text.ilike(like),
+            MessageLog.formatted_text.ilike(like),
+            MessageLog.error.ilike(like),
+            MessageLog.category.ilike(like),
+        ))
+    total = (await db.execute(select(func.count()).select_from(MessageLog).where(*filters))).scalar() or 0
+    rows = (
+        await db.execute(
+            select(MessageLog).where(*filters).order_by(desc(MessageLog.created_at)).limit(limit).offset(offset)
+        )
+    ).scalars().all()
+    return {"items": [dump_message(row) for row in rows], "total": total}
+
 
 @router.get("/{msg_id}")
 async def get_message(msg_id: str, db: AsyncSession = Depends(get_db), admin=Depends(get_current_admin)):
-    res = await db.execute(select(MessageLog).where(MessageLog.id==msg_id))
-    m = res.scalar_one_or_none()
-    if not m:
-        from fastapi import HTTPException
-        raise HTTPException(status_code=404, detail="Not found")
-    return {"id":m.id,"chat_id":m.chat_id,"message_id":m.message_id,"original_text":m.original_text,"formatted_text":m.formatted_text,"category":m.category,"status":m.status,"error":m.error,"applied_rules":m.applied_rules,"processing_time_ms":m.processing_time_ms,"has_media":m.has_media,"message_type":m.message_type,"created_at": m.created_at.isoformat() if m.created_at else None}
+    row = (await db.execute(select(MessageLog).where(MessageLog.id == msg_id))).scalar_one_or_none()
+    if not row:
+        raise HTTPException(status_code=404, detail="پیام پیدا نشد")
+    return dump_message(row, full=True)
+
+
+@router.post("/{msg_id}/retry")
+async def retry_message(msg_id: str, db: AsyncSession = Depends(get_db), admin=Depends(get_current_admin)):
+    row = (await db.execute(select(MessageLog).where(MessageLog.id == msg_id))).scalar_one_or_none()
+    if not row:
+        raise HTTPException(status_code=404, detail="پیام پیدا نشد")
+    result = await reprocess_log(db, row)
+    await db.flush()
+    refreshed = (await db.execute(select(MessageLog).where(MessageLog.id == row.id))).scalar_one_or_none()
+    return {"result": result, "message": dump_message(refreshed or row, full=True)}

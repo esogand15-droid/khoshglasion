@@ -28,8 +28,8 @@ def test_emoji_mapping():
 def test_caption_limit():
     long_text = "a" * 1025
     r = format_message(long_text, is_caption=True, enable_emoji=False)
-    # should fallback to original due to limit
-    assert r.changed is False
+    assert len(r.text) <= 1024
+    assert r.changed is True
 
 def test_hash_idempotent():
     r1 = format_message("متن یکسان", enable_emoji=False)

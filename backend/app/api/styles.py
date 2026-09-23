@@ -1,42 +1,91 @@
+import json
+
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from backend.app.db.base import get_db
+from backend.app.formatting.styles import BUILTIN_STYLES
 from backend.app.models.style import StylePreset
 from backend.app.security.deps import get_current_admin
-from backend.app.formatting.styles import BUILTIN_STYLES
-import json
 
 router = APIRouter(prefix="/api/styles", tags=["styles"])
 
+
+def _builtin():
+    return [{
+        "id": f"builtin_{key}",
+        "name": style.name,
+        "slug": style.slug,
+        "description": None,
+        "config": json.dumps({
+            "footer": style.footer_template,
+            "divider": style.divider,
+            "header": style.header_template,
+            "add_footer": style.add_footer,
+        }, ensure_ascii=False),
+        "is_builtin": True,
+    } for key, style in BUILTIN_STYLES.items()]
+
+
 @router.get("")
 async def list_styles(db: AsyncSession = Depends(get_db), admin=Depends(get_current_admin)):
-    # merge builtin + db
-    res = await db.execute(select(StylePreset))
-    custom = res.scalars().all()
-    builtin = [{"id": f"builtin_{k}", "name": v.name, "slug": v.slug, "description": None, "config": json.dumps({"footer": v.footer_template, "divider": v.divider}), "is_builtin": True} for k,v in BUILTIN_STYLES.items()]
-    custom_out = [{"id": c.id, "name": c.name, "slug": c.slug, "description": c.description, "config": c.config, "is_builtin": False} for c in custom]
-    return builtin + custom_out
+    custom = (await db.execute(select(StylePreset).order_by(StylePreset.created_at.desc()))).scalars().all()
+    custom_out = [{
+        "id": row.id,
+        "name": row.name,
+        "slug": row.slug,
+        "description": row.description,
+        "config": row.config,
+        "is_builtin": False,
+    } for row in custom]
+    return _builtin() + custom_out
+
 
 @router.post("")
 async def create_style(payload: dict, db: AsyncSession = Depends(get_db), admin=Depends(get_current_admin)):
-    s = StylePreset(name=payload["name"], slug=payload["slug"], description=payload.get("description"), config=json.dumps(payload.get("config", {}), ensure_ascii=False))
-    db.add(s)
+    slug = (payload.get("slug") or "").strip()
+    name = (payload.get("name") or "").strip()
+    if not slug or not name:
+        raise HTTPException(status_code=400, detail="نام و شناسه لازم است")
+    if slug in BUILTIN_STYLES:
+        raise HTTPException(status_code=400, detail="این شناسه برای استایل داخلی رزرو شده")
+    exists = (await db.execute(select(StylePreset).where(StylePreset.slug == slug))).scalar_one_or_none()
+    if exists:
+        raise HTTPException(status_code=400, detail="این شناسه قبلاً استفاده شده")
+    config = payload.get("config") or {}
+    row = StylePreset(
+        name=name,
+        slug=slug,
+        description=payload.get("description"),
+        config=json.dumps(config, ensure_ascii=False),
+    )
+    db.add(row)
     await db.flush()
-    return {"id": s.id}
+    return {"id": row.id, "slug": row.slug}
+
 
 @router.patch("/{style_id}")
 async def update_style(style_id: str, payload: dict, db: AsyncSession = Depends(get_db), admin=Depends(get_current_admin)):
     if style_id.startswith("builtin_"):
-        raise HTTPException(status_code=400, detail="Cannot edit builtin style")
-    res = await db.execute(select(StylePreset).where(StylePreset.id==style_id))
-    s = res.scalar_one_or_none()
-    if not s:
-        raise HTTPException(status_code=404, detail="Not found")
-    for k in ["name","slug","description"]:
-        if k in payload:
-            setattr(s,k,payload[k])
+        raise HTTPException(status_code=400, detail="استایل داخلی را کپی کن و نسخه سفارشی را ویرایش کن")
+    row = (await db.execute(select(StylePreset).where(StylePreset.id == style_id))).scalar_one_or_none()
+    if not row:
+        raise HTTPException(status_code=404, detail="استایل پیدا نشد")
+    for key in ("name", "slug", "description"):
+        if key in payload and payload[key]:
+            setattr(row, key, payload[key])
     if "config" in payload:
-        s.config = json.dumps(payload["config"], ensure_ascii=False)
-    await db.flush()
+        row.config = json.dumps(payload["config"], ensure_ascii=False)
+    return {"ok": True}
+
+
+@router.delete("/{style_id}")
+async def delete_style(style_id: str, db: AsyncSession = Depends(get_db), admin=Depends(get_current_admin)):
+    if style_id.startswith("builtin_"):
+        raise HTTPException(status_code=400, detail="استایل داخلی حذف نمی‌شود")
+    row = (await db.execute(select(StylePreset).where(StylePreset.id == style_id))).scalar_one_or_none()
+    if not row:
+        raise HTTPException(status_code=404, detail="استایل پیدا نشد")
+    await db.delete(row)
     return {"ok": True}

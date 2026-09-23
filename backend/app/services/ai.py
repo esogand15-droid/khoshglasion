@@ -1,267 +1,169 @@
-import httpx
-import logging
+from __future__ import annotations
+
 import hashlib
-import json
-from typing import Optional, Dict, List
-from backend.app.core.config import get_settings
+import logging
+from typing import Optional
+
+import httpx
+
+from backend.app.core.runtime import RuntimeState
+from backend.app.formatting.textutil import (
+    clean_ai_output,
+    looks_like_refusal,
+    missing_long_numbers,
+    missing_protected_tokens,
+    restore_protected_tokens,
+)
 
 logger = logging.getLogger(__name__)
 
-# Track recent outputs for anti-repetition
-_recent_hashes: List[str] = []
-_MAX_HISTORY = 50
+_recent_hashes: list[str] = []
+_MAX_HISTORY = 40
 
-def _content_hash(text: str) -> str:
-    return hashlib.md5(text.encode()).hexdigest()[:12]
-
-def _is_repetitive(text: str) -> bool:
-    h = _content_hash(text)
-    return h in _recent_hashes
-
-def _record_output(text: str):
-    h = _content_hash(text)
-    _recent_hashes.append(h)
-    if len(_recent_hashes) > _MAX_HISTORY:
-        _recent_hashes.pop(0)
-
-# Category-specific prompt templates for Konkuri style
-CATEGORY_PROMPTS = {
-    "announcement": """شما کپشن‌نویس حرفه‌ای کانال تلگرام «رتبه لند» (مشاوره کنکور) هستید.
-متن زیر یک «اطلاعیه مهم» است. آن را بازنویسی کنید با:
-- تیتر جذاب با ایموجی ⚡📢
-- لحن رسمی اما صمیمی و معتبر
-- ساختار: تیتر → متن اصلی → نکات کلیدی → دعوت به اقدام
-- ایموجی‌های پرمیوم طبیعی در متن (نه در انتهای همه جملات)
-- فوتر استاندارد کانال در آخر اضافه می‌شود (نیازی به اضافه کردن ندارید)
-- از تکرار عبارات کلیشه‌ای خودداری کنید
-- حداکثر ۳-۴ پاراگراف، خوانا و اسکن‌پذیر
-
-متن اصلی:
-{text}""",
-
-    "exam": """شما کپشن‌نویس کانال «رتبه لند» هستید. متن زیر درباره «آزمون/کنکور/نمونه سوال» است.
-بازنویسی با سبک:
-- تیتر تخصصی 🎯📝
-- نکات طلایی/نکته کلیدی با بولت‌پوینت‌های جذاب
-- لحن مشجع،減壓‌کننده، و راهبردی
-- مثال یا نکته عملی حتما داشته باشد
-- ساختار: تیتر → نکته اصلی → جزئیات/نکات → تمرین پیشنهادی → فوتر
-- ایموجی‌های تخصصی (📝✏️🎯📊💡) در جایگاه‌های درست
-- جلوگیری از لحن خشک اداری
-
-متن اصلی:
-{text}""",
-
-    "resource": """شما کپشن‌نویس کانال «رتبه لند» هستید. متن زیر «معرفی منبع/کتاب/جزوه» است.
-بازنویسی جذاب با:
-- تیتر: 📚 معرفی منبع + نام منبع
-- چرا این منبع خوبه؟ (۳ دلیل قانع‌کننده)
-- برای چه کسی مناسبه؟ (هدف/سطح)
-- نکته خرید/دسترسی/قیمت اگر هست
-- مقایسه کوتاه با رقبا اگر relevants
-- لحن مشاوره‌دهنده دوست‌داشتنی، نه فروشنده
-- ایموجی‌های کتاب/دانش/پیشرفت
-
-متن اصلی:
-{text}""",
-
-    "motivational": """شما کپشن‌نویس کانال «رتبه لند» هستید. متن زیر «انگیزشی/حماسی» است.
-بازنویسی با روح کنکوری واقعی:
-- تیتر قدرتمند ✨💪🔥
-- داستان کوتاه/چالش واقعی/نقل قولNZ
-- نکته عملی برای فردا صبح
-- لحن: هم‌دل، قوی، واقعی (نه کلیشه‌های اینستاگرامی)
-- پایان‌بند با اقدام کوچک قابل انجام
-- ایموجی‌های انرژی/رشد/پیروزی در لحظه‌های کلیدی
-
-متن اصلی:
-{text}""",
-
-    "consulting": """شما کپشن‌نویس کانال «رتبه لند» هستید. متن زیر درباره «مشاوره/برنامه‌ریزی/راهنمایی» است.
-بازنویسی مشاوره‌گرانه:
-- تیتر: 🎓 مشاوره تخصصی + موضوع
-- تحلیل مسئله از نگاه دانش‌آموز
-- ۳ راهکار عملی قدم‌به‌قدم
-- نکته طلایی از تجربه مشاوران رتبه لند
-- CTA طبیعی برای رزرو مشاوره
-- لحن متخصص، مهربان، قابل اعتماد
-
-متن اصلی:
-{text}""",
-
-    "news": """شما کپشن‌نویس کانال «رتبه لند» هستید. متن زیر «خبر/اعلامیه رسمی/تغییرات کنکور» است.
-بازنویسی خبری حرفه‌ای:
-- تیتر خبری 📰⚡
-- خلاصه خبر در ۱ خط (Lead)
-- جزئیات مهم: چی، کی، کی اثر می‌گذارد، چه باید کرد
-- تحلیل تأثیر روی داوطلبان
-- اقدام فوری اگر لازم است
-- لحن خبری، دقیق، بی‌طرف اما حامی دانش‌آموز
-
-متن اصلی:
-{text}""",
-
-    "planning": """شما کپشن‌نویس کانال «رتبه لند» هستید. متن زیر «برنامه‌ریزی/تقویم/استراتژی مطالعه» است.
-بازنویسی استراتژیک:
-- تیتر: 🗓️ برنامه/استراتژی + بازه زمانی
-- اصل کلیدی برنامه‌ریزی
-- تقسیم‌بندی هفته/ماه (البته خلاصه)
-- تکنیک مطالعه پیشنهادی
-- پرریه‌های رایج و راه‌حل
-- قالب قابل ذخیره/اسکرین‌شات
-
-متن اصلی:
-{text}""",
-
-    "rank": """شما کپشن‌نویس کانال «رتبه لند» هستید. متن زیر درباره «رتبه/نتیجه/موفقیت/آمار» است.
-بازنویسی با تمرکز بر امید و راهکار:
-- تیتر: 🏆 رتبه/موفقیت + عدد/آمار کلیدی
-- تحلیل چی باعث این نتیجه شده
-- الگوی قابل تکرار برای دیگران
-- نکته manj کتبی/غیرکتبی
-- پیام امید برای کسانی که هنوز نرسیده‌اند
-- لحن تحسین‌کننده اما واقع‌بینانه
-
-متن اصلی:
-{text}""",
-
-    "discount": """شما کپشن‌نویس کانال «رتبه لند» هستید. متن زیر «تخفیف/کمپین/فرصت ویژه» است.
-بازنویسی بدون حس فروشی:
-- تیتر: 🎁 فرصت ویژه / تخفیف + نام خدمت
-- ارزش واقعی برای دانش‌آموز (نه قیمت)
-- چرا الان؟ (دلیل منطقی)
-- جزئیات شفاف: چه می‌گیرید، تا کی، چطور
-- مقایسه با قیمت واقعی
-- CTA با حس اکسیژن‌دهی، نه فشار
-
-متن اصلی:
-{text}""",
-
-    "general": """شما کپشن‌نویس کانال «رتبه لند» (مشاوره کنکور) هستید.
-متن زیر را برای پست کانال بازنویسی کنید:
-- تیتر جذاب با ایموجی مرتبط
-- ساختار منظم: مقدمه → بدنه اصلی → جمع‌بندی/عملی
-- لحن: صمیمی، تخصصی، مشجع، غیرکلیشه‌ای
-- ایموجی‌های پرمیوم در جاهای استراتژیک (تیتر، نکات کلیدی، انتقالات)
-- فوتر استاندارد در آخر جداگانه اضافه می‌شود
-- جلوگیری از تکرار الگوهای قبلی
-- حداکثر ۴۰۰۰ کاراکتر، قابل اسکن
-
-متن اصلی:
-{text}""",
+CATEGORY_HINTS = {
+    "announcement": "این متن اطلاعیه است. تیتر واضح، لحن معتبر و صمیمی، و اگر اقدام لازم است همان را برجسته کن.",
+    "exam": "این متن درباره آزمون یا تست است. نکته کاربردی را جدا کن و لحن را مشوق اما دقیق نگه دار.",
+    "resource": "این متن معرفی منبع است. بگو برای چه سطحی مناسب است، بدون لحن فروشنده.",
+    "motivational": "این متن انگیزشی است. واقعی و کنکوری بنویس، نه شعار اینستاگرامی.",
+    "consulting": "این متن مشاوره‌ای است. مسئله را روشن کن و اگر راهکار در متن هست، قدم‌به‌قدم و کوتاه بچین.",
+    "news": "این متن خبری است. واقعیت را دقیق نگه دار و اثرش روی داوطلب را فقط اگر در خود متن هست بگو.",
+    "planning": "این متن برنامه‌ریزی است. ساختار قابل اسکن بده، بدون اختراع برنامه جدید.",
+    "rank": "این متن درباره رتبه یا نتیجه است. امید واقعی بده و آمار را دست نزن.",
+    "discount": "این متن پیشنهاد یا تخفیف است. شفاف بنویس، فشار فروش نساز.",
+    "general": "ساختار خوانا بده: تیتر کوتاه، بدنه، و در صورت نیاز بولت.",
 }
 
-def _build_prompt(text: str, category: str, previous_context: str = "") -> str:
-    """Build intelligent prompt based on category and context."""
-    template = CATEGORY_PROMPTS.get(category, CATEGORY_PROMPTS["general"])
-    prompt = template.format(text=text)
-    
-    # Anti-repetition guidance
-    if _recent_hashes:
-        prompt += "\n\n⚠️ مهم: از الگوهای تکراری در پست‌های قبلی خودداری کنید. تنوع در تیترها، واژگان، و ساختار جملات ایجاد کنید."
-    
-    # Add context if available
-    if previous_context:
-        prompt += f"\n\n📝 بافت قبلی (برای انسجام): {previous_context[:200]}"
-    
-    return prompt
+SYSTEM_PROMPT = """تو ویراستار کانال تلگرام «رتبه لند» هستی؛ کانال مشاوره کنکور.
+متن ادمین را خوشگل، خوانا و طبیعی کن. واقعیت را عوض نکن.
 
-async def enhance_with_ai(text: str, category: str = "general", previous_context: str = "") -> Optional[str]:
-    """
-    Intelligently enhance/rewrite content for Konkuri channel.
-    Returns enhanced text or None if AI fails/disabled.
-    """
-    s = get_settings()
-    if not s.ai_enabled or not s.ai_base_url or not s.ai_model or not s.ai_api_key:
-        return None
-    
-    # Build smart prompt
-    prompt = _build_prompt(text, category, previous_context)
-    
+قانون‌های سخت:
+- عدد، تاریخ، درصد، قیمت، اسم شخص، اسم کتاب، لینک، @یوزرنیم و هشتگ را حذف یا عوض نکن.
+- ادعا، خبر یا توصیهٔ تازه اختراع نکن. اگر متن کوتاه است، زیادش نکن.
+- لحن: صمیمی، دقیق، کنکوری. کلیشه و شعار توخالی ننویس.
+- ایموجی یونیکد را فقط در تیتر و چند نقطهٔ کلیدی بگذار، نه ته هر خط.
+- فوتر کانال، خط ━ و دعوت عضویت را ننویس؛ سیستم جدا اضافه می‌کند.
+- فقط متن نهایی را برگردان. توضیح، مارک‌داون کد و پیشوند «بازنویسی» ممنوع.
+- از الگوهای تکراری پست‌های قبلی فاصله بگیر، ولی معنی این پست را حفظ کن."""
+
+
+def _content_hash(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+
+
+def _record_output(text: str) -> None:
+    _recent_hashes.append(_content_hash(text))
+    del _recent_hashes[:-_MAX_HISTORY]
+
+
+def build_messages(text: str, category: str, previous_context: str = "", extra_variation: bool = False) -> list[dict]:
+    hint = CATEGORY_HINTS.get(category, CATEGORY_HINTS["general"])
+    user = f"{hint}\n\nمتن اصلی:\n{text}"
+    if previous_context:
+        user += f"\n\nبرای اینکه این پست شبیه پست قبلی نشود، فقط لحن و چینش را عوض کن. پست قبلی این بود:\n{previous_context[:280]}"
+    if extra_variation:
+        user += "\n\nاین بار ساختار جمله‌ها را کاملاً متفاوت بچین، ولی واقعیت‌ها همان بماند."
+    return [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "user", "content": user},
+    ]
+
+
+def accept_ai_output(original: str, raw: str | None, limit: int) -> tuple[str | None, str]:
+    cleaned = clean_ai_output(raw)
+    if not cleaned or len(cleaned) < 8:
+        return None, "empty"
+    if looks_like_refusal(cleaned):
+        return None, "refusal"
+    if len(cleaned) > limit:
+        return None, "too_long"
+    if len(original) > 120 and len(cleaned) < int(len(original) * 0.35):
+        return None, "too_short"
+    if missing_long_numbers(original, cleaned):
+        return None, "dropped_numbers"
+    missing = missing_protected_tokens(original, cleaned)
+    if missing:
+        cleaned = restore_protected_tokens(cleaned, missing)
+        if len(cleaned) > limit:
+            return None, "tokens_overflow"
+    return cleaned, "ok"
+
+
+async def _call_model(runtime: RuntimeState, messages: list[dict], temperature: float) -> str | None:
     headers = {
-        "Authorization": f"Bearer {s.ai_api_key}",
+        "Authorization": f"Bearer {runtime.ai_api_key}",
         "Content-Type": "application/json",
     }
-    
-    # OpenAI-compatible payload with optimized params
     payload = {
-        "model": s.ai_model,
-        "messages": [
-            {"role": "system", "content": "You are the expert content writer for 'RankLand' (رتبه لند) - Iran's premier Konkur counseling Telegram channel. Rewrite content in professional, engaging, emoji-rich Konkuri style. Never use clichés. Vary structure and vocabulary every time. Output ONLY the enhanced Persian text, no explanations."},
-            {"role": "user", "content": prompt}
-        ],
-        "temperature": 0.85,  # Higher for creativity/variation
-        "top_p": 0.95,
-        "max_tokens": 2500,
-        "presence_penalty": 0.3,  # Discourage repetition
-        "frequency_penalty": 0.3,
+        "model": runtime.ai_model,
+        "messages": messages,
+        "temperature": temperature,
+        "top_p": 0.9,
+        "max_tokens": runtime.ai_max_tokens,
+        "presence_penalty": 0.4,
+        "frequency_penalty": 0.2,
     }
-    
-    url = s.ai_base_url.rstrip("/") + "/v1/chat/completions"
-    
+    url = runtime.ai_base_url.rstrip("/") + "/v1/chat/completions"
+    timeout = httpx.Timeout(40.0, connect=10.0)
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        response = await client.post(url, json=payload, headers=headers)
+        response.raise_for_status()
+        data = response.json()
+        return data.get("choices", [{}])[0].get("message", {}).get("content", "")
+
+
+async def enhance_with_ai(
+    text: str,
+    category: str = "general",
+    previous_context: str = "",
+    runtime: RuntimeState | None = None,
+    limit: int = 3600,
+) -> Optional[str]:
+    if runtime is None or not runtime.ai_ready:
+        return None
+    if not text or len(text.strip()) < runtime.ai_min_chars:
+        return None
+
+    messages = build_messages(text, category, previous_context)
     try:
-        async with httpx.AsyncClient(timeout=45.0) as client:
-            resp = await client.post(url, json=payload, headers=headers)
-            resp.raise_for_status()
-            data = resp.json()
-            content = data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
-            
-            if content and len(content) > 20:
-                # Anti-repetition check
-                if _is_repetitive(content):
-                    logger.warning("AI output detected as repetitive, trying once more with higher temperature...")
-                    payload["temperature"] = 0.95
-                    resp2 = await client.post(url, json=payload, headers=headers)
-                    resp2.raise_for_status()
-                    data2 = resp2.json()
-                    content = data2.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
-                
-                _record_output(content)
-                logger.info(f"AI enhanced: category={category}, len={len(content)}, tokens≈{len(content)//3}")
-                return content
-            else:
-                logger.warning("AI returned empty/short content")
-    except httpx.HTTPStatusError as e:
-        logger.error(f"AI API error {e.response.status_code}: {e.response.text[:200]}")
+        raw = await _call_model(runtime, messages, runtime.ai_temperature)
+        accepted, reason = accept_ai_output(text, raw, limit)
+        if accepted and _content_hash(accepted) in _recent_hashes:
+            logger.info("AI output repeated a recent post; retrying once")
+            messages = build_messages(text, category, previous_context, extra_variation=True)
+            raw = await _call_model(runtime, messages, min(0.95, runtime.ai_temperature + 0.15))
+            accepted, reason = accept_ai_output(text, raw, limit)
+        if not accepted:
+            logger.info("AI output rejected: %s", reason)
+            return None
+        _record_output(accepted)
+        logger.info("AI enhanced category=%s len=%s", category, len(accepted))
+        return accepted
+    except httpx.HTTPStatusError as exc:
+        body = exc.response.text[:180].replace("\n", " ")
+        logger.error("AI API error %s: %s", exc.response.status_code, body)
     except httpx.TimeoutException:
-        logger.error("AI request timeout (45s)")
-    except Exception as e:
-        logger.error(f"AI call failed: {type(e).__name__}: {e}")
+        logger.error("AI request timed out")
+    except Exception as exc:
+        logger.error("AI call failed: %s: %s", type(exc).__name__, exc)
     return None
 
-async def test_ai_connection() -> dict:
-    """Test AI connection with a simple prompt."""
-    s = get_settings()
-    if not s.ai_enabled or not s.ai_base_url or not s.ai_model or not s.ai_api_key:
-        return {"ok": False, "error": "AI not configured"}
-    
-    headers = {
-        "Authorization": f"Bearer {s.ai_api_key}",
-        "Content-Type": "application/json",
-    }
+
+async def test_ai_connection(runtime: RuntimeState) -> dict:
+    if not runtime.ai_ready:
+        return {"ok": False, "error": "AI کامل تنظیم نشده (آدرس، مدل یا کلید)"}
+    headers = {"Authorization": f"Bearer {runtime.ai_api_key}", "Content-Type": "application/json"}
     payload = {
-        "model": s.ai_model,
-        "messages": [{"role": "user", "content": "سلام، تست اتصال"}],
-        "max_tokens": 10,
+        "model": runtime.ai_model,
+        "messages": [{"role": "user", "content": "فقط همین کلمه را برگردان: سلام"}],
+        "max_tokens": 16,
+        "temperature": 0,
     }
-    url = s.ai_base_url.rstrip("/") + "/v1/chat/completions"
-    
+    url = runtime.ai_base_url.rstrip("/") + "/v1/chat/completions"
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
-            resp = await client.post(url, json=payload, headers=headers)
-            if resp.status_code == 200:
-                return {"ok": True, "model": s.ai_model}
-            return {"ok": False, "error": f"HTTP {resp.status_code}: {resp.text}"}
-    except Exception as e:
-        return {"ok": False, "error": str(e)}
-
-async def enhance_preview(text: str, category: str = "general") -> dict:
-    """For preview panel - returns both original and enhanced."""
-    enhanced = await enhance_with_ai(text, category)
-    return {
-        "original": text,
-        "enhanced": enhanced,
-        "category": category,
-        "ai_used": enhanced is not None,
-    }
-
+            response = await client.post(url, json=payload, headers=headers)
+            if response.status_code == 200:
+                return {"ok": True, "model": runtime.ai_model}
+            return {"ok": False, "error": f"HTTP {response.status_code}: {response.text[:180]}"}
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}

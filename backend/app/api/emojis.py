@@ -1,115 +1,149 @@
-from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.ext.asyncio import AsyncSession
+import json
+
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from backend.app.db.base import get_db
 from backend.app.models.emoji import EmojiMapping
 from backend.app.schemas.emoji import EmojiCreate, EmojiUpdate
 from backend.app.security.deps import get_current_admin
-import json
+from backend.app.services.audit import write_audit
+from backend.app.telegram.bot import get_bot
 
 router = APIRouter(prefix="/api/emojis", tags=["emojis"])
 
+
+def dump_emoji(row: EmojiMapping) -> dict:
+    return {
+        "id": row.id,
+        "unicode_emoji": row.unicode_emoji,
+        "custom_emoji_id": row.custom_emoji_id,
+        "enabled": row.enabled,
+        "category": row.category,
+        "contexts": row.contexts,
+        "priority": row.priority,
+        "usage_count": row.usage_count,
+        "label": row.label,
+        "source": row.source,
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+    }
+
+
 @router.get("/export")
 async def export_emojis(db: AsyncSession = Depends(get_db), admin=Depends(get_current_admin)):
-    res = await db.execute(select(EmojiMapping))
-    items = res.scalars().all()
-    return [{"unicode_emoji":e.unicode_emoji,"custom_emoji_id":e.custom_emoji_id,"enabled":e.enabled,"category":e.category,"contexts":e.contexts,"priority":e.priority} for e in items]
+    rows = (await db.execute(select(EmojiMapping))).scalars().all()
+    return [dump_emoji(row) for row in rows]
+
 
 @router.post("/import")
 async def import_emojis(payload: list[dict], db: AsyncSession = Depends(get_db), admin=Depends(get_current_admin)):
+    imported = 0
     for item in payload:
-        rec = EmojiMapping(
-            unicode_emoji=item["unicode_emoji"],
-            custom_emoji_id=item["custom_emoji_id"],
+        emoji = item.get("unicode_emoji")
+        custom_id = str(item.get("custom_emoji_id") or "")
+        if not emoji or not custom_id.isdigit():
+            continue
+        existing = (
+            await db.execute(
+                select(EmojiMapping).where(EmojiMapping.unicode_emoji == emoji, EmojiMapping.custom_emoji_id == custom_id)
+            )
+        ).scalar_one_or_none()
+        contexts = item.get("contexts")
+        if isinstance(contexts, list):
+            contexts = json.dumps(contexts, ensure_ascii=False)
+        if existing:
+            existing.enabled = item.get("enabled", existing.enabled)
+            existing.category = item.get("category", existing.category)
+            existing.priority = item.get("priority", existing.priority)
+            existing.label = item.get("label", existing.label)
+            if contexts is not None:
+                existing.contexts = contexts
+            continue
+        db.add(EmojiMapping(
+            unicode_emoji=emoji,
+            custom_emoji_id=custom_id,
             enabled=item.get("enabled", True),
             category=item.get("category"),
-            contexts=json.dumps(item["contexts"], ensure_ascii=False) if isinstance(item.get("contexts"), list) else item.get("contexts"),
+            contexts=contexts,
             priority=item.get("priority", 50),
-        )
-        db.add(rec)
+            label=item.get("label"),
+            source="import",
+        ))
+        imported += 1
     await db.flush()
-    return {"imported": len(payload)}
+    return {"imported": imported}
+
+
 @router.post("/validate")
-async def validate_emojis(payload: dict, db: AsyncSession = Depends(get_db), admin=Depends(get_current_admin)):
-    """Validate custom_emoji_ids via Telegram Bot API getCustomEmojiStickers. Returns which are real."""
-    ids: list[str] = payload.get("custom_emoji_ids", []) or payload.get("ids", [])
+async def validate_emojis(payload: dict, admin=Depends(get_current_admin)):
+    ids = [str(item).strip() for item in (payload.get("custom_emoji_ids") or payload.get("ids") or [])]
+    ids = [item for item in ids if item.isdigit()][:50]
     if not ids:
         return {"found": [], "valid": [], "invalid": []}
-    # limit
-    ids = [str(x).strip() for x in ids[:20] if str(x).strip().isdigit()]
-    if not ids:
-        return {"found": [], "valid": [], "invalid": ids}
+    bot = get_bot()
+    if not bot:
+        return {"found": [], "valid": [], "invalid": ids, "note": "توکن ربات تنظیم نشده"}
     try:
-        from backend.app.telegram.bot import get_bot
-        bot = get_bot()
-        if not bot:
-            return {"found": [], "valid": [], "invalid": ids, "note": "bot not configured"}
         stickers = await bot.get_custom_emoji_stickers(custom_emoji_ids=ids)
-        found_ids = {str(s.custom_emoji_id) for s in stickers} if stickers else set()
-        # Some versions return .custom_emoji_id as int
-        found_ids = {str(x) for x in found_ids}
-        invalid = [x for x in ids if x not in found_ids]
-        return {"found": list(found_ids), "valid": list(found_ids), "invalid": invalid}
-    except Exception as e:
-        return {"found": [], "valid": [], "invalid": ids, "error": str(e)}
+        found = {str(getattr(sticker, "custom_emoji_id", "")) for sticker in (stickers or [])}
+        found.discard("")
+        return {"found": sorted(found), "valid": sorted(found), "invalid": [item for item in ids if item not in found]}
+    except Exception as exc:
+        return {"found": [], "valid": [], "invalid": ids, "error": str(exc)}
+
 
 @router.post("/cleanup-fake")
 async def cleanup_fake(db: AsyncSession = Depends(get_db), admin=Depends(get_current_admin)):
-    """Remove sequential fake IDs (53683241...) that never work."""
-    from sqlalchemy import delete as sa_delete
-    res = await db.execute(select(EmojiMapping).where(EmojiMapping.custom_emoji_id.like("53683241%")))
-    fakes = res.scalars().all()
-    count = len(fakes)
-    for f in fakes:
-        await db.delete(f)
+    rows = (await db.execute(select(EmojiMapping).where(EmojiMapping.custom_emoji_id.like("53683241%")))).scalars().all()
+    for row in rows:
+        await db.delete(row)
     await db.flush()
-    return {"removed": count, "message": f"{count} fake mappings removed"}
-
+    return {"removed": len(rows)}
 
 
 @router.get("")
 async def list_emojis(db: AsyncSession = Depends(get_db), admin=Depends(get_current_admin)):
-    res = await db.execute(select(EmojiMapping).order_by(EmojiMapping.priority.desc()))
-    items = res.scalars().all()
-    out=[]
-    for e in items:
-        out.append({"id":e.id,"unicode_emoji":e.unicode_emoji,"custom_emoji_id":e.custom_emoji_id,"enabled":e.enabled,"category":e.category,"contexts":e.contexts,"priority":e.priority,"usage_count":e.usage_count,"created_at": e.created_at.isoformat() if e.created_at else None})
-    return out
+    rows = (await db.execute(select(EmojiMapping).order_by(EmojiMapping.priority.desc(), EmojiMapping.usage_count.desc()))).scalars().all()
+    return [dump_emoji(row) for row in rows]
+
 
 @router.post("")
-async def create_emoji(payload: EmojiCreate, db: AsyncSession = Depends(get_db), admin=Depends(get_current_admin)):
-    rec = EmojiMapping(
+async def create_emoji(payload: EmojiCreate, request: Request, db: AsyncSession = Depends(get_db), admin=Depends(get_current_admin)):
+    if not str(payload.custom_emoji_id).isdigit():
+        raise HTTPException(status_code=400, detail="custom_emoji_id باید عدد باشد")
+    row = EmojiMapping(
         unicode_emoji=payload.unicode_emoji,
-        custom_emoji_id=payload.custom_emoji_id,
+        custom_emoji_id=payload.custom_emoji_id.strip(),
         enabled=payload.enabled,
         category=payload.category,
         contexts=json.dumps(payload.contexts, ensure_ascii=False) if payload.contexts else None,
         priority=payload.priority,
+        source="panel",
     )
-    db.add(rec)
+    db.add(row)
     await db.flush()
-    return {"id": rec.id}
+    await write_audit(db, admin=admin, action="create", resource="emoji", resource_id=row.id, ip_address=request.client.host if request.client else None)
+    return dump_emoji(row)
+
 
 @router.patch("/{emoji_id}")
 async def update_emoji(emoji_id: str, payload: EmojiUpdate, db: AsyncSession = Depends(get_db), admin=Depends(get_current_admin)):
-    res = await db.execute(select(EmojiMapping).where(EmojiMapping.id==emoji_id))
-    e = res.scalar_one_or_none()
-    if not e:
-        raise HTTPException(status_code=404, detail="Not found")
+    row = (await db.execute(select(EmojiMapping).where(EmojiMapping.id == emoji_id))).scalar_one_or_none()
+    if not row:
+        raise HTTPException(status_code=404, detail="ایموجی پیدا نشد")
     data = payload.model_dump(exclude_unset=True)
     if "contexts" in data and data["contexts"] is not None:
         data["contexts"] = json.dumps(data["contexts"], ensure_ascii=False)
-    for k,v in data.items():
-        setattr(e,k,v)
-    await db.flush()
-    return {"ok": True}
+    for key, value in data.items():
+        setattr(row, key, value)
+    return dump_emoji(row)
+
 
 @router.delete("/{emoji_id}")
 async def delete_emoji(emoji_id: str, db: AsyncSession = Depends(get_db), admin=Depends(get_current_admin)):
-    res = await db.execute(select(EmojiMapping).where(EmojiMapping.id==emoji_id))
-    e = res.scalar_one_or_none()
-    if not e:
-        raise HTTPException(status_code=404, detail="Not found")
-    await db.delete(e)
-    await db.flush()
+    row = (await db.execute(select(EmojiMapping).where(EmojiMapping.id == emoji_id))).scalar_one_or_none()
+    if not row:
+        raise HTTPException(status_code=404, detail="ایموجی پیدا نشد")
+    await db.delete(row)
     return {"ok": True}

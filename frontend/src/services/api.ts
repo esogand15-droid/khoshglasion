@@ -1,18 +1,19 @@
 import axios from "axios";
-const api = axios.create({ baseURL: "" });
+
+const api = axios.create({ baseURL: "", timeout: 60000 });
 api.interceptors.request.use((cfg) => {
-  const t = localStorage.getItem("token");
-  if (t) cfg.headers.Authorization = `Bearer ${t}`;
+  const token = localStorage.getItem("token");
+  if (token) cfg.headers.Authorization = `Bearer ${token}`;
   return cfg;
 });
 api.interceptors.response.use(
-  (r) => r,
-  (e) => {
-    if (e.response?.status === 401) {
+  (response) => response,
+  (error) => {
+    if (error.response?.status === 401 && !error.config?.url?.includes("/api/auth/login")) {
       localStorage.removeItem("token");
-      window.location.href = "/login";
+      if (window.location.pathname !== "/login") window.location.href = "/login";
     }
-    return Promise.reject(e);
+    return Promise.reject(error);
   }
 );
 export default api;

@@ -1,50 +1,63 @@
-import { Outlet, NavLink, useNavigate } from "react-router-dom";
+import { useEffect, useState } from "react";
+import { NavLink, Outlet, useNavigate } from "react-router-dom";
+import api from "../services/api";
 import { useAuth } from "../stores/auth";
 
-const nav = [
-  { to: "/", label: "داشبورد", icon: "◈" },
-  { to: "/channels", label: "کانال‌ها", icon: "📢" },
-  { to: "/messages", label: "پیام‌ها", icon: "💬" },
-  { to: "/emojis", label: "کتابخانه ایموجی", icon: "😊" },
-  { to: "/styles", label: "استایل‌ها", icon: "🎨" },
-  { to: "/preview", label: "پیش‌نمایش زنده", icon: "✨" },
-  { to: "/health", label: "سلامت سیستم", icon: "🟢" },
-  { to: "/settings", label: "تنظیمات", icon: "⚙️" },
+const NAV = [
+  ["/", "داشبورد"],
+  ["/channels", "کانال‌ها"],
+  ["/messages", "پیام‌ها"],
+  ["/emojis", "ایموجی پرمیوم"],
+  ["/styles", "استایل و فوتر"],
+  ["/preview", "میز آزمایش"],
+  ["/health", "سلامت و وبهوک"],
+  ["/settings", "اتاق تنظیم"],
+  ["/audit", "ردپا"],
 ];
 
 export default function Layout() {
   const { username, logout } = useAuth();
   const navigate = useNavigate();
+  const [overview, setOverview] = useState<any>(null);
+
+  useEffect(() => {
+    let stop = false;
+    const load = () => api.get("/api/system/overview").then((r) => { if (!stop) setOverview(r.data); }).catch(() => {});
+    load();
+    const id = setInterval(load, 20000);
+    return () => { stop = true; clearInterval(id); };
+  }, []);
+
+  const health = overview?.health;
+  const runtime = overview?.runtime;
   return (
-    <div className="min-h-screen gradient-bg flex">
-      {/* Sidebar */}
-      <aside className="w-[260px] shrink-0 glass-strong m-3 rounded-2xl p-4 flex flex-col gap-2 sticky top-3 h-[calc(100vh-24px)] overflow-y-auto scrollbar-thin">
-        <div className="flex items-center gap-3 px-2 py-3 mb-2">
-          <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-violet-500 to-blue-500 flex items-center justify-center text-lg">👑</div>
+    <div className="app-shell">
+      <aside className="sidebar">
+        <div className="brand">
+          <div className="mark">خ</div>
           <div>
-            <div className="font-bold text-white text-sm">خوشگلاسیون</div>
-            <div className="text-[11px] text-white/50">هر پست، یکم خوشگل‌تر ✨</div>
+            <b>خوشگلاسیون</b>
+            <span>اتاق فرمان رتبه لند</span>
           </div>
         </div>
-        <div className="glass rounded-xl px-3 py-2 flex items-center gap-2 text-xs">
-          <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-          <span className="text-white/70">بات آنلاین</span>
-          <span className="mr-auto text-white/40">{username}</span>
-        </div>
-        <nav className="flex flex-col gap-1 mt-2">
-          {nav.map((n) => (
-            <NavLink key={n.to} to={n.to} end={n.to === "/"} className={({ isActive }) => `flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm transition ${isActive ? "bg-white/10 text-white" : "text-white/60 hover:bg-white/5 hover:text-white/90"}`}>
-              <span className="text-base">{n.icon}</span>
-              {n.label}
-            </NavLink>
+        <nav className="nav">
+          {NAV.map(([to, label]) => (
+            <NavLink key={to} to={to} end={to === "/"} className={({ isActive }) => isActive ? "active" : ""}>{label}</NavLink>
           ))}
         </nav>
-        <div className="mt-auto pt-4 border-t border-white/5">
-          <button onClick={() => { logout(); navigate("/login"); }} className="w-full glass rounded-xl py-2.5 text-sm text-white/60 hover:text-white/90">خروج</button>
+        <div className="side-foot">
+          <div className="tiny">{username} · {health?.bot_info?.username ? `@${health.bot_info.username}` : "ربات وصل نیست"}</div>
+          <button className="btn" onClick={() => { logout(); navigate("/login"); }}>خروج</button>
         </div>
       </aside>
-      {/* Main */}
-      <main className="flex-1 p-6 overflow-y-auto">
+      <main className="main">
+        <div className="pills" style={{ marginBottom: 18 }}>
+          <span className={`pill ${health?.external_database ? "ok" : "bad"}`}>{health?.external_database ? "Postgres پایدار" : "SQLite موقت"}</span>
+          <span className={`pill ${health?.bot === "connected" ? "ok" : "bad"}`}>{health?.bot === "connected" ? "بات آنلاین" : "بات قطع"}</span>
+          <span className={`pill ${runtime?.ai_ready ? "ok" : "warn"}`}>{runtime?.ai_ready ? "هوش مصنوعی آماده" : "هوش مصنوعی خاموش"}</span>
+          <span className={`pill ${runtime?.kill_switch ? "bad" : "ok"}`}>{runtime?.kill_switch ? "توقف اضطراری" : "پردازش روشن"}</span>
+          {runtime?.dry_run && <span className="pill warn">حالت آزمایشی</span>}
+        </div>
         <Outlet />
       </main>
     </div>

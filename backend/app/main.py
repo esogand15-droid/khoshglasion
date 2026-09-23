@@ -1,38 +1,88 @@
-from fastapi import FastAPI, Request, Depends, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
-from fastapi.responses import JSONResponse, FileResponse
+from contextlib import asynccontextmanager
+import hmac
 import logging
-import json
 from pathlib import Path
 
-from backend.app.core.config import get_settings
-from backend.app.logging_config.setup import setup_logging
-from backend.app.db.base import Base, get_engine, get_db
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
+
 from backend.app.api.auth import router as auth_router
 from backend.app.api.channels import router as channels_router
+from backend.app.api.dashboard import router as dashboard_router
 from backend.app.api.emojis import router as emojis_router
-from backend.app.api.styles import router as styles_router
 from backend.app.api.messages import router as messages_router
 from backend.app.api.preview import router as preview_router
-from backend.app.api.dashboard import router as dashboard_router
+from backend.app.api.styles import router as styles_router
 from backend.app.api.system import router as system_router
+from backend.app.core.config import get_settings
+from backend.app.db.bootstrap import bootstrap
+from backend.app.logging_config.setup import setup_logging
+from backend.app.telegram.bot import close_bot, get_bot
+from backend.app.telegram.dispatch import process_update_safely, spawn
+from backend.app.telegram.user_editor import close_user_client
 
 settings = get_settings()
 setup_logging(settings.log_level)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="Khoshgelasion Bot", version="1.0.0", description="Telegram Channel Content Beautifier")
+ALLOWED_UPDATES = [
+    "channel_post",
+    "edited_channel_post",
+    "message",
+    "edited_message",
+    "my_chat_member",
+    "callback_query",
+]
+
+
+async def setup_webhook() -> None:
+    bot = get_bot()
+    url = settings.resolved_webhook_url
+    if not bot or not url:
+        logger.warning("Webhook skipped: bot token or public URL is missing")
+        return
+    secret = settings.webhook_secret or None
+    try:
+        await bot.set_webhook(
+            url=url,
+            secret_token=secret,
+            drop_pending_updates=settings.drop_pending_updates,
+            allowed_updates=ALLOWED_UPDATES,
+        )
+        logger.info("Webhook set: %s", url)
+    except Exception as exc:
+        logger.warning("Set webhook failed: %s", exc)
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    try:
+        await bootstrap()
+    except Exception:
+        logger.exception("Startup bootstrap failed")
+    await setup_webhook()
+    yield
+    await close_user_client()
+    await close_bot()
+
+
+app = FastAPI(
+    title="Khoshgelasion",
+    version=settings.app_version,
+    description="رتبه‌لند channel beautifier",
+    lifespan=lifespan,
+)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=[origin.strip() for origin in settings.cors_origins.split(",")] if settings.cors_origins != "*" else ["*"],
+    allow_credentials=settings.cors_origins != "*",
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Routers
 app.include_router(auth_router)
 app.include_router(channels_router)
 app.include_router(emojis_router)
@@ -42,198 +92,65 @@ app.include_router(preview_router)
 app.include_router(dashboard_router)
 app.include_router(system_router)
 
+
 @app.get("/health")
 async def health():
-    return {"status": "ok", "service": "khoshgelasion"}
+    return {"status": "ok", "service": "khoshgelasion", "version": settings.app_version}
+
 
 @app.get("/ready")
 async def ready():
-    # check DB
     try:
         from sqlalchemy import text
         from backend.app.db.base import get_session_factory
-        factory = get_session_factory()
-        async with factory() as s:
-            await s.execute(text("SELECT 1"))
-        return {"status": "ready", "db": "connected"}
-    except Exception as e:
-        return JSONResponse(status_code=503, content={"status": "not_ready", "error": str(e)})
+
+        async with get_session_factory()() as session:
+            await session.execute(text("SELECT 1"))
+        return {"status": "ready"}
+    except Exception as exc:
+        return JSONResponse(status_code=503, content={"status": "not_ready", "error": str(exc)})
+
 
 @app.post("/telegram/webhook")
 async def telegram_webhook(request: Request):
-    # verify secret
-    secret = request.headers.get("X-Telegram-Bot-Api-Secret-Token")
-    if settings.webhook_secret and secret != settings.webhook_secret:
-        # allow if no secret configured, but if configured must match
-        # For flexibility during dev, don't block if secret header missing but webhook_secret empty
-        if settings.webhook_secret:
+    expected = settings.webhook_secret or ""
+    if expected:
+        provided = request.headers.get("X-Telegram-Bot-Api-Secret-Token") or ""
+        if not hmac.compare_digest(provided, expected):
             raise HTTPException(status_code=403, detail="Invalid webhook secret")
-
     try:
         data = await request.json()
-    except:
-        return {"ok": False, "error": "invalid json"}
+    except Exception:
+        return {"ok": True, "skipped": "invalid_json"}
+    if not isinstance(data, dict):
+        return {"ok": True, "skipped": "invalid_payload"}
+    # Ack Telegram immediately. Editing, AI and retries happen in the background
+    # so a slow model cannot make Telegram retry the same post.
+    spawn(process_update_safely(data))
+    return {"ok": True}
 
-    # Handle channel_post
-    update_id = data.get("update_id")
-    channel_post = data.get("channel_post")
-    edited_post = data.get("edited_channel_post")
 
-    # Avoid loops: if edited_channel_post from bot itself, ignore
-    target = channel_post or edited_post
-    if edited_post and not channel_post:
-        # This is an edit event — ignore to prevent loops
-        logger.info(f"Ignoring edited_channel_post update_id={update_id}")
-        return {"ok": True, "skipped": "edited_channel_post"}
-
-    if not target:
-        return {"ok": True, "skipped": "no_channel_post"}
-
-    chat = target.get("chat", {})
-    chat_id = chat.get("id")
-    message_id = target.get("message_id")
-    text = target.get("text")
-    caption = target.get("caption")
-    has_media = any(k in target for k in ["photo","video","animation","document","audio","voice"])
-    media_type = None
-    for k in ["photo","video","animation","document","audio","voice","sticker","poll"]:
-        if k in target:
-            media_type = k
-            break
-    # Skip non-editable
-    if media_type in ["poll","sticker","location","contact"]:
-        return {"ok": True, "skipped": f"non_editable_{media_type}"}
-
-    # Process via pipeline
-    from backend.app.db.base import get_session_factory
-    from backend.app.telegram.pipeline import process_channel_post
-    factory = get_session_factory()
-    async with factory() as db:
-        try:
-            result = await process_channel_post(db, chat_id, message_id, text, caption, has_media, media_type)
-            await db.commit()
-            status = result.get("status")
-            reason = result.get("reason", "")
-            if status == "skipped":
-                logger.info(f"Skipped chat={chat_id} msg={message_id} reason={reason} category={result.get('category')}")
-            else:
-                logger.info(f"Processed chat={chat_id} msg={message_id} result={status}")
-            return {"ok": True, "result": result}
-        except Exception as e:
-            await db.rollback()
-            logger.exception(f"Pipeline error chat={chat_id} msg={message_id}: {e}")
-            return JSONResponse(status_code=500, content={"ok": False, "error": str(e)})
-
-# Serve frontend static if exists
-FRONTEND_DIST = Path(__file__).parent.parent.parent / "frontend" / "dist"
+FRONTEND_DIST = Path(__file__).resolve().parents[2] / "frontend" / "dist"
 if FRONTEND_DIST.exists():
-    app.mount("/assets", StaticFiles(directory=str(FRONTEND_DIST / "assets")), name="assets")
-    # SPA fallback: serve index.html for any non-API non-telegram route
-    from fastapi.responses import FileResponse as _FileResponse
+    assets = FRONTEND_DIST / "assets"
+    if assets.exists():
+        app.mount("/assets", StaticFiles(directory=str(assets)), name="assets")
+
     @app.get("/{full_path:path}")
     async def serve_spa(full_path: str):
-        # Don't intercept API / health / telegram routes
         if full_path.startswith(("api/", "telegram/", "health", "ready", "docs", "openapi.json", "redoc")):
-            from fastapi import HTTPException as _HTTPException
-            raise _HTTPException(status_code=404, detail="Not Found")
+            raise HTTPException(status_code=404, detail="Not Found")
         index = FRONTEND_DIST / "index.html"
         if index.exists():
-            return _FileResponse(index)
-        from fastapi import HTTPException as _HTTPException2
-        raise _HTTPException2(status_code=404, detail="Not Found")
+            return FileResponse(index)
+        raise HTTPException(status_code=404, detail="Not Found")
 else:
     @app.get("/")
     async def root_hint():
-        return {"service": "khoshgelasion", "status": "ok", "hint": "Frontend not built. See /health and /docs", "docs": "/docs", "health": "/health"}
-
-@app.on_event("startup")
-async def on_startup():
-    # Create tables via SQLAlchemy (SQLite: create_all, Postgres: also works)
-    try:
-        engine = get_engine()
-        async with engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all)
-        logger.info("DB tables ensured")
-        # Seed admin if not exists
-        from sqlalchemy import select
-        from backend.app.models.admin import Admin
-        from backend.app.security.auth import hash_password
-        from backend.app.db.base import get_session_factory
-        factory = get_session_factory()
-        async with factory() as db:
-            res = await db.execute(select(Admin).where(Admin.username=="admin"))
-            if not res.scalar_one_or_none():
-                # read admin_secret fresh (env may vary in Railway)
-                secret = settings.admin_secret or "admin"
-                admin = Admin(username="admin", password_hash=hash_password(secret), role="OWNER", display_name="Owner")
-                db.add(admin)
-                await db.commit()
-                logger.info("Seeded admin user: admin")
-            # Seed default emoji mappings if empty — rich premium pack
-            from backend.app.models.emoji import EmojiMapping
-            import json as _json
-            from pathlib import Path as _Path
-            er = await db.execute(select(EmojiMapping))
-            if not er.scalars().first():
-                # Try loading from JSON file, fallback to inline
-                seed_path = _Path(__file__).parent / "data" / "premium_emoji_seed.json"
-                if seed_path.exists():
-                    try:
-                        raw = _json.loads(seed_path.read_text(encoding="utf-8"))
-                        count = 0
-                        for item in raw:
-                            db.add(EmojiMapping(
-                                unicode_emoji=item["unicode_emoji"],
-                                custom_emoji_id=str(item["custom_emoji_id"]),
-                                category=item.get("category"),
-                                priority=item.get("priority", 50),
-                            ))
-                            count += 1
-                        await db.commit()
-                        logger.info(f"Seeded {count} premium emojis from JSON")
-                    except Exception as e:
-                        logger.warning(f"Seed JSON failed {e}, using inline fallback")
-                        raise
-                else:
-                    defaults = [
-                        ("📢","5424818078833715060", None),
-                        ("🚨","5456140674028019486", None),
-                        ("🔥","5424972470023104089", None),
-                        ("⚡","5224607267797606837", None),
-                        ("❗","5274099962655816924", None),
-                        ("📌","5397782960512444700", None),
-                        ("✅","5206607081334906820", None),
-                        ("⭐","5438496463044752972", None),
-                        ("💡","5422439311196834318", None),
-                        ("📅","5413879192267805083", None),
-                        ("📊","5231200819986047254", None),
-                        ("📈","5449683594425410231", None),
-                        ("📚","5305265301917549162", None),
-                        ("🎯","5415655814079723871", None),
-                        ("🎓","5438496463044752972", None),
-                        ("📝","5395444784611480792", None),
-                        ("💪","5424972470023104089", None),
-                        ("🏆","5438496463044752972", None),
-                        ("🎉","5382357040008021292", None),
-                        ("🚀","5415655814079723871", None),
-                        ("❤️","4996980495100150380", None),
-                        ("💎","5406683434124859552", None),
-                        ("✨","5438496463044752972", None),
-                    ]
-                    for uni, cid, cat in defaults:
-                        db.add(EmojiMapping(unicode_emoji=uni, custom_emoji_id=cid, category=cat, priority=50))
-                    await db.commit()
-                    logger.info("Seeded default emojis (inline)")
-    except Exception as e:
-        logger.warning(f"Startup DB init failed: {e}")
-
-    # Set webhook if configured
-    if settings.bot_token and settings.webhook_url:
-        try:
-            from backend.app.telegram.bot import get_bot
-            bot = get_bot()
-            if bot:
-                await bot.set_webhook(url=settings.webhook_url, secret_token=settings.webhook_secret or None, drop_pending_updates=True)
-                logger.info(f"Webhook set: {settings.webhook_url}")
-        except Exception as e:
-            logger.warning(f"Set webhook failed: {e}")
+        return {
+            "service": "khoshgelasion",
+            "status": "ok",
+            "hint": "Frontend is not built yet.",
+            "docs": "/docs",
+            "health": "/health",
+        }
