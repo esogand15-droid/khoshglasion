@@ -22,6 +22,7 @@ from backend.app.models.system import SystemSetting
 from backend.app.security.auth import hash_password
 from backend.app.security.deps import get_current_admin, require_role
 from backend.app.services.ai import test_ai_connection
+from backend.app.services.ai_provider import detect_provider, resolve_chat_completions_url
 from backend.app.services.audit import write_audit
 from backend.app.telegram.bot import get_bot
 from backend.app.telegram.user_editor import session_configured, user_session_status
@@ -190,7 +191,7 @@ async def get_settings_api(db: AsyncSession = Depends(get_db), admin=Depends(get
         "user_session_configured": session_configured(),
         "bot_configured": bool(settings.bot_token),
     })
-    return data
+    return _annotate_ai(data, runtime.ai_base_url)
 
 
 @router.post("/settings")
@@ -203,7 +204,20 @@ async def update_settings(payload: RuntimePatch, request: Request, db: AsyncSess
         new_value={k: ("***" if k == "ai_api_key" else v) for k, v in updates.items()},
         ip_address=request.client.host if request.client else None,
     )
-    return saved.public_dict()
+    return _annotate_ai(saved.public_dict(), saved.ai_base_url)
+
+
+def _annotate_ai(data: dict, base_url: str) -> dict:
+    data["ai_provider"] = detect_provider(base_url)
+    data["ai_endpoint"] = _safe_endpoint(base_url)
+    return data
+
+
+def _safe_endpoint(base_url: str) -> str:
+    try:
+        return resolve_chat_completions_url(base_url) if base_url else ""
+    except ValueError:
+        return ""
 
 
 @router.post("/ai/test")

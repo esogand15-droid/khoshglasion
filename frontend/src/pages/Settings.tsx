@@ -5,6 +5,8 @@ import { Card, Field, Page, Toggle } from "../components";
 export default function Settings() {
   const [data, setData] = useState<any>(null);
   const [msg, setMsg] = useState("");
+  const [aiTest, setAiTest] = useState<any>(null);
+  const [testing, setTesting] = useState(false);
   const [password, setPassword] = useState({ current_password: "", new_password: "" });
   const [adminForm, setAdminForm] = useState({ username: "", password: "", role: "ADMIN" });
 
@@ -32,13 +34,33 @@ export default function Settings() {
         <Card title="هوش مصنوعی">
           <Toggle on={data.ai_enabled} label="بازنویسی هوشمند" onClick={() => save({ ai_enabled: !data.ai_enabled })} />
           <div className="grid" style={{ marginTop: 12 }}>
-            <Field label="Base URL"><input value={data.ai_base_url || ""} onChange={(e) => setData({ ...data, ai_base_url: e.target.value })} placeholder="https://api.openai.com" /></Field>
-            <Field label="Model"><input value={data.ai_model || ""} onChange={(e) => setData({ ...data, ai_model: e.target.value })} /></Field>
+            <Field label="Base URL"><input value={data.ai_base_url || ""} onChange={(e) => setData({ ...data, ai_base_url: e.target.value })} placeholder="https://integrate.api.nvidia.com/v1" /></Field>
+            <p className="tiny">برای NVIDIA همین را بگذار: https://integrate.api.nvidia.com/v1 — سیستم خودش /chat/completions را اضافه می‌کند و /v1 را دوباره نمی‌چسباند. درخواست واقعی: {data.ai_endpoint || "بعد از ذخیره دیده می‌شود"} · provider: {data.ai_provider || "—"}</p>
+            <Field label="Model"><input value={data.ai_model || ""} onChange={(e) => setData({ ...data, ai_model: e.target.value })} placeholder="openai/gpt-oss-20b" /></Field>
             <Field label={`کلید API ${data.ai_api_key_masked || ""}`}><input type="password" placeholder="خالی = بدون تغییر" onChange={(e) => setData({ ...data, ai_api_key: e.target.value })} /></Field>
             <div className="row">
               <button className="btn-gold" onClick={() => save({ ai_enabled: data.ai_enabled, ai_base_url: data.ai_base_url, ai_model: data.ai_model, ai_api_key: data.ai_api_key || undefined, ai_temperature: Number(data.ai_temperature), ai_max_tokens: Number(data.ai_max_tokens) })}>ذخیره AI</button>
-              <button className="btn" onClick={async () => setMsg(JSON.stringify((await api.post("/api/system/ai/test")).data))}>تست اتصال</button>
+              <button className="btn" disabled={testing} onClick={async () => {
+                setTesting(true);
+                setAiTest(null);
+                try {
+                  await save({ ai_enabled: data.ai_enabled, ai_base_url: data.ai_base_url, ai_model: data.ai_model, ai_api_key: data.ai_api_key || undefined });
+                  const { data: result } = await api.post("/api/system/ai/test");
+                  setAiTest(result);
+                  setMsg(result.ok ? `اتصال برقرار شد · ${result.provider} · ${result.latency_ms}ms` : result.error);
+                } catch (error: any) {
+                  setMsg(error.response?.data?.detail || error.message || "تست انجام نشد");
+                } finally {
+                  setTesting(false);
+                }
+              }}>{testing ? "در حال تست..." : "تست اتصال"}</button>
             </div>
+            {aiTest && (
+              <div className={aiTest.ok ? "alert info" : "alert danger"}>
+                <div>{aiTest.ok ? `مدل جواب داد: ${aiTest.sample || "سلام"}` : aiTest.error}</div>
+                <div className="tiny">{aiTest.provider} · {aiTest.endpoint}{aiTest.latency_ms ? ` · ${aiTest.latency_ms}ms` : ""}</div>
+              </div>
+            )}
           </div>
         </Card>
       </div>

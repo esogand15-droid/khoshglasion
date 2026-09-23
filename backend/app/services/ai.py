@@ -2,11 +2,21 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import time
 from typing import Optional
 
 import httpx
 
 from backend.app.core.runtime import RuntimeState
+from backend.app.services.ai_provider import (
+    build_headers,
+    build_payload,
+    detect_provider,
+    extract_message_text,
+    format_http_error,
+    redact,
+    resolve_chat_completions_url,
+)
 from backend.app.formatting.textutil import (
     clean_ai_output,
     looks_like_refusal,
@@ -88,27 +98,37 @@ def accept_ai_output(original: str, raw: str | None, limit: int) -> tuple[str | 
     return cleaned, "ok"
 
 
+def _provider_call(runtime: RuntimeState, messages: list[dict], temperature: float, *, health: bool = False) -> tuple[str, dict]:
+    provider = detect_provider(runtime.ai_base_url)
+    url = resolve_chat_completions_url(runtime.ai_base_url)
+    payload = build_payload(
+        provider,
+        runtime.ai_model,
+        messages,
+        temperature=temperature,
+        max_tokens=runtime.ai_max_tokens,
+        health=health,
+    )
+    return url, {
+        "provider": provider,
+        "headers": build_headers(provider, runtime.ai_api_key),
+        "payload": payload,
+    }
+
+
 async def _call_model(runtime: RuntimeState, messages: list[dict], temperature: float) -> str | None:
-    headers = {
-        "Authorization": f"Bearer {runtime.ai_api_key}",
-        "Content-Type": "application/json",
-    }
-    payload = {
-        "model": runtime.ai_model,
-        "messages": messages,
-        "temperature": temperature,
-        "top_p": 0.9,
-        "max_tokens": runtime.ai_max_tokens,
-        "presence_penalty": 0.4,
-        "frequency_penalty": 0.2,
-    }
-    url = runtime.ai_base_url.rstrip("/") + "/v1/chat/completions"
-    timeout = httpx.Timeout(40.0, connect=10.0)
+    url, spec = _provider_call(runtime, messages, temperature)
+    timeout = httpx.Timeout(45.0, connect=10.0)
     async with httpx.AsyncClient(timeout=timeout) as client:
-        response = await client.post(url, json=payload, headers=headers)
-        response.raise_for_status()
-        data = response.json()
-        return data.get("choices", [{}])[0].get("message", {}).get("content", "")
+        response = await client.post(url, json=spec["payload"], headers=spec["headers"])
+        if response.status_code >= 400:
+            raise httpx.HTTPStatusError(
+                format_http_error(response.status_code, response.text, url, spec["provider"], runtime.ai_api_key),
+                request=response.request,
+                response=response,
+            )
+        text, _reason = extract_message_text(response.json())
+        return text
 
 
 async def enhance_with_ai(
@@ -139,8 +159,7 @@ async def enhance_with_ai(
         logger.info("AI enhanced category=%s len=%s", category, len(accepted))
         return accepted
     except httpx.HTTPStatusError as exc:
-        body = exc.response.text[:180].replace("\n", " ")
-        logger.error("AI API error %s: %s", exc.response.status_code, body)
+        logger.error("AI API error %s", redact(str(exc), runtime.ai_api_key if runtime else None))
     except httpx.TimeoutException:
         logger.error("AI request timed out")
     except Exception as exc:
@@ -149,21 +168,63 @@ async def enhance_with_ai(
 
 
 async def test_ai_connection(runtime: RuntimeState) -> dict:
+    provider = detect_provider(runtime.ai_base_url)
     if not runtime.ai_ready:
-        return {"ok": False, "error": "AI کامل تنظیم نشده (آدرس، مدل یا کلید)"}
-    headers = {"Authorization": f"Bearer {runtime.ai_api_key}", "Content-Type": "application/json"}
-    payload = {
-        "model": runtime.ai_model,
-        "messages": [{"role": "user", "content": "فقط همین کلمه را برگردان: سلام"}],
-        "max_tokens": 16,
-        "temperature": 0,
-    }
-    url = runtime.ai_base_url.rstrip("/") + "/v1/chat/completions"
+        return {
+            "ok": False,
+            "provider": provider,
+            "model": runtime.ai_model,
+            "endpoint": "",
+            "error": "AI کامل تنظیم نشده (آدرس، مدل یا کلید)",
+        }
     try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            response = await client.post(url, json=payload, headers=headers)
-            if response.status_code == 200:
-                return {"ok": True, "model": runtime.ai_model}
-            return {"ok": False, "error": f"HTTP {response.status_code}: {response.text[:180]}"}
+        url = resolve_chat_completions_url(runtime.ai_base_url)
+    except ValueError as exc:
+        return {"ok": False, "provider": provider, "model": runtime.ai_model, "endpoint": "", "error": str(exc)}
+    messages = [{"role": "user", "content": "فقط همین کلمه را برگردان: سلام"}]
+    spec_url, spec = _provider_call(runtime, messages, 0.2, health=True)
+    started = time.perf_counter()
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(30.0, connect=10.0)) as client:
+            response = await client.post(spec_url, json=spec["payload"], headers=spec["headers"])
+        latency = round((time.perf_counter() - started) * 1000)
+        if response.status_code != 200:
+            return {
+                "ok": False,
+                "provider": provider,
+                "model": runtime.ai_model,
+                "endpoint": url,
+                "status_code": response.status_code,
+                "latency_ms": latency,
+                "error": format_http_error(response.status_code, response.text, url, provider, runtime.ai_api_key),
+            }
+        text, finish = extract_message_text(response.json())
+        if not text:
+            return {
+                "ok": False,
+                "provider": provider,
+                "model": runtime.ai_model,
+                "endpoint": url,
+                "status_code": 200,
+                "latency_ms": latency,
+                "finish_reason": finish,
+                "error": "مدل پاسخ خالی داد. اگر مدل reasoning است، سقف توکن را بالاتر ببر.",
+            }
+        return {
+            "ok": True,
+            "provider": provider,
+            "model": runtime.ai_model,
+            "endpoint": url,
+            "status_code": 200,
+            "latency_ms": latency,
+            "finish_reason": finish,
+            "sample": text[:80],
+        }
     except Exception as exc:
-        return {"ok": False, "error": str(exc)}
+        return {
+            "ok": False,
+            "provider": provider,
+            "model": runtime.ai_model,
+            "endpoint": url,
+            "error": redact(str(exc), runtime.ai_api_key),
+        }
