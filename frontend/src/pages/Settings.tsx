@@ -87,15 +87,15 @@ export default function Settings() {
       <div className="grid cards-2">
         <Card title="رمز پنل">
           <div className="grid">
-            <input type="password" placeholder="رمز فعلی" value={password.current_password} onChange={(e) => setPassword({ ...password, current_password: e.target.value })} />
-            <input type="password" placeholder="رمز جدید، حداقل ۸ کاراکتر" value={password.new_password} onChange={(e) => setPassword({ ...password, new_password: e.target.value })} />
+            <Field label="رمز فعلی"><input type="password" autoComplete="current-password" value={password.current_password} onChange={(e) => setPassword({ ...password, current_password: e.target.value })} /></Field>
+            <Field label="رمز جدید، حداقل ۸ کاراکتر"><input type="password" autoComplete="new-password" value={password.new_password} onChange={(e) => setPassword({ ...password, new_password: e.target.value })} /></Field>
             <button className="btn" onClick={async () => { try { await api.post("/api/auth/password", password); setMsg("رمز عوض شد"); } catch (e: any) { setMsg(e.response?.data?.detail || "عوض نشد"); } }}>تغییر رمز</button>
           </div>
         </Card>
         <Card title="ادمین تازه و پشتیبان">
           <div className="grid">
-            <input placeholder="نام کاربری" value={adminForm.username} onChange={(e) => setAdminForm({ ...adminForm, username: e.target.value })} />
-            <input placeholder="رمز" value={adminForm.password} onChange={(e) => setAdminForm({ ...adminForm, password: e.target.value })} />
+            <Field label="نام کاربری ادمین تازه"><input autoComplete="off" value={adminForm.username} onChange={(e) => setAdminForm({ ...adminForm, username: e.target.value })} /></Field>
+            <Field label="رمز ادمین تازه"><input type="password" autoComplete="new-password" value={adminForm.password} onChange={(e) => setAdminForm({ ...adminForm, password: e.target.value })} /></Field>
             <button className="btn" onClick={async () => { try { await api.post("/api/system/admins", adminForm); setMsg("ادمین ساخته شد"); } catch (e: any) { setMsg(e.response?.data?.detail || "ساخته نشد"); } }}>ساخت ادمین</button>
             <div className="row">
               <button className="btn" onClick={async () => { const { data } = await api.get("/api/system/backup"); const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" }); const url = URL.createObjectURL(blob); const a = document.createElement("a"); a.href = url; a.download = "khoshgelasion-backup.json"; a.click(); }}>دانلود پشتیبان</button>

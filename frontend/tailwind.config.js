@@ -1,14 +1,22 @@
 /** @type {import('tailwindcss').Config} */
 export default {
-  content: ["./index.html","./src/**/*.{js,ts,jsx,tsx}"],
+  content: ["./index.html", "./src/**/*.{js,ts,jsx,tsx}"],
   theme: {
     extend: {
-      fontFamily: { vazir: ["Vazirmatn","sans-serif"] },
+      fontFamily: {
+        sans: ["Vazirmatn", "Fira Sans", "Tahoma", "sans-serif"],
+        mono: ["Fira Code", "Vazirmatn", "ui-monospace", "monospace"],
+      },
       colors: {
-        glass: "rgba(255,255,255,0.06)",
-        glassBorder: "rgba(255,255,255,0.10)",
-      }
-    }
+        background: "#020617",
+        foreground: "#F8FAFC",
+        card: "#0E1223",
+        accent: "#16A34A",
+        border: "#334155",
+        destructive: "#DC2626",
+      },
+      borderRadius: { none: "0px" },
+    },
   },
-  plugins: []
-}
+  plugins: [],
+};

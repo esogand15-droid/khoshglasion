@@ -46,7 +46,7 @@ export default function Channels() {
   return (
     <Page kicker="پوشش کانال" title="کانال‌ها" actions={<button className="btn" onClick={() => load()}>تازه‌سازی</button>}>
       <Card title="افزودن یا همگام‌سازی">
-        <div className="grid" style={{ gridTemplateColumns: "1.2fr 1fr 1fr auto auto", alignItems: "end" }}>
+        <div className="form-row channels">
           <Field label="Chat ID"><input value={form.chat_id} onChange={(e) => setForm({ ...form, chat_id: e.target.value })} placeholder="-100…" /></Field>
           <Field label="عنوان"><input value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} /></Field>
           <Field label="یوزرنیم"><input value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} /></Field>

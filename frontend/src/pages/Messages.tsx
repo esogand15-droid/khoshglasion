@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import api from "../services/api";
-import { Badge, Modal, Page, STATUS, statusTone, TelegramPreview } from "../components";
+import { Badge, DiffList, Modal, Page, STATUS, statusTone, TelegramPreview } from "../components";
 
 export default function Messages() {
   const [items, setItems] = useState<any[]>([]);
@@ -19,14 +19,20 @@ export default function Messages() {
   return (
     <Page kicker="بایگانی ادیت" title="پیام‌ها" actions={<span className="pill">{total} رکورد</span>}>
       <div className="row">
-        <input style={{ maxWidth: 280 }} value={q} onChange={(e) => setQ(e.target.value)} placeholder="جستجو در متن یا خطا" onKeyDown={(e) => e.key === "Enter" && load()} />
-        <select style={{ maxWidth: 180 }} value={status} onChange={(e) => setStatus(e.target.value)}>
-          <option value="">همه</option>
-          <option value="edited">ادیت شده</option>
-          <option value="failed">ناموفق</option>
-          <option value="skipped">رد شده</option>
-          <option value="dry_run">آزمایشی</option>
-        </select>
+        <label className="field" style={{ maxWidth: 280 }}>
+          <span>جستجو در متن یا خطا</span>
+          <input value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => e.key === "Enter" && load()} />
+        </label>
+        <label className="field" style={{ maxWidth: 180 }}>
+          <span>وضعیت</span>
+          <select value={status} onChange={(e) => setStatus(e.target.value)}>
+            <option value="">همه</option>
+            <option value="edited">ادیت شده</option>
+            <option value="failed">ناموفق</option>
+            <option value="skipped">رد شده</option>
+            <option value="dry_run">آزمایشی</option>
+          </select>
+        </label>
         <button className="btn" onClick={load}>جستجو</button>
       </div>
       <div className="card" style={{ padding: 0 }}>
@@ -58,12 +64,24 @@ export default function Messages() {
           </div>
           <div className="tiny">روش: {selected.edit_method || "—"} · تلاش: {selected.attempt_count || 0} · تصمیم: {selected.decision?.strategy || "—"} · قالب: {selected.selection?.template_id || "—"}</div>
           <div className="tiny">{selected.applied_rules}</div>
-          {!!selected.diff?.length && <div className="tiny">{selected.diff.slice(0, 8).map((row: any, index: number) => <div key={index}>{row.kind === "add" ? "+ " : "− "}{row.text}</div>)}</div>}
-          <button className="btn-gold" style={{ marginTop: 12 }} onClick={async () => {
-            const { data } = await api.post(`/api/messages/${selected.id}/retry`);
-            setSelected(data.message);
-            load();
-          }}>پردازش دوباره</button>
+          <DiffList rows={selected.diff} />
+          <div className="row" style={{ marginTop: 12 }}>
+            <button className="btn-gold" onClick={async () => {
+              const { data } = await api.post(`/api/messages/${selected.id}/retry`);
+              setSelected(data.message);
+              load();
+            }}>پردازش دوباره</button>
+            <button className="btn" onClick={async () => {
+              setSelected(await (await api.post(`/api/messages/${selected.id}/skip`)).data);
+              load();
+            }}>رد کن</button>
+            {selected.status !== "edited" && <button className="btn-danger" onClick={async () => {
+              if (!confirm("این رکورد از بایگانی حذف شود؟ ادیت کانال برنمی‌گردد.")) return;
+              await api.delete(`/api/messages/${selected.id}`);
+              setSelected(null);
+              load();
+            }}>حذف از بایگانی</button>}
+          </div>
         </Modal>
       )}
     </Page>

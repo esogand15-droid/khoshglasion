@@ -18,7 +18,7 @@ export default function Emojis() {
         <p className="tiny">به ربات در خصوصی یک پیام با ایموجی پرمیوم فوروارد کن. همان لحظه <b>custom_emoji_id</b> وارد کتابخانه می‌شود. یا از Saved Messages به @userinfobot فوروارد کن. صاحب ربات باید تلگرام پرمیوم داشته باشد؛ برای کانال، اگر Bot API ایموجی را رد کرد، نشست کاربر را در تنظیمات وصل کن.</p>
       </Card>
       <Card title="نگاشت تازه">
-        <div className="grid" style={{ gridTemplateColumns: "120px 1.4fr 1fr 90px auto" }}>
+        <div className="form-row emojis">
           <Field label="ایموجی"><input value={form.unicode_emoji} onChange={(e) => setForm({ ...form, unicode_emoji: e.target.value })} /></Field>
           <Field label="custom_emoji_id"><input value={form.custom_emoji_id} onChange={(e) => setForm({ ...form, custom_emoji_id: e.target.value })} /></Field>
           <Field label="دسته"><input value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })} /></Field>
@@ -35,7 +35,7 @@ export default function Emojis() {
         {msg && <div className="tiny">{msg}</div>}
       </Card>
       <div className="row">
-        <input style={{ maxWidth: 280 }} value={q} onChange={(e) => setQ(e.target.value)} placeholder="جستجو" />
+        <label className="field" style={{ maxWidth: 280 }}><span>جستجو</span><input value={q} onChange={(e) => setQ(e.target.value)} /></label>
         <button className="btn" onClick={async () => { const ids = shown.slice(0, 20).map((item) => item.custom_emoji_id); const { data } = await api.post("/api/emojis/validate", { custom_emoji_ids: ids }); setMsg(`معتبر: ${data.valid?.length || 0} / نامعتبر: ${data.invalid?.length || 0}${data.error ? " · " + data.error : ""}`); }}>اعتبارسنجی ۲۰ تای اول</button>
         <button className="btn" onClick={async () => { await api.post("/api/emojis/cleanup-fake"); load(); }}>حذف IDهای فیک</button>
       </div>
@@ -52,7 +52,7 @@ export default function Emojis() {
                 <td><Badge tone={item.enabled ? "ok" : "info"}>{item.enabled ? "فعال" : "خاموش"}</Badge></td>
                 <td className="row">
                   <button className="btn" onClick={async () => { await api.patch(`/api/emojis/${item.id}`, { enabled: !item.enabled }); load(); }}>{item.enabled ? "خاموش" : "روشن"}</button>
-                  <button className="btn-danger" onClick={async () => { await api.delete(`/api/emojis/${item.id}`); load(); }}>حذف</button>
+                  <button className="btn-danger" onClick={async () => { if (!confirm("این نگاشت حذف شود؟")) return; await api.delete(`/api/emojis/${item.id}`); load(); }}>حذف</button>
                 </td>
               </tr>
             ))}
