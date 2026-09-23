@@ -28,6 +28,7 @@ CATEGORY_LEAD_EMOJI: dict[str, str] = {
     "registration": "📌",
     "school": "🏫",
     "major_choice": "🎓",
+    "lesson": "📘",
     "general": "✨",
 }
 

@@ -35,6 +35,18 @@ BUILTIN_STYLES: dict[str, StyleConfig] = {
 }
 
 
+def style_is_enabled(config: dict | str | None) -> bool:
+    data = config
+    if isinstance(config, str):
+        try:
+            data = json.loads(config or "{}")
+        except json.JSONDecodeError:
+            return True
+    if not isinstance(data, dict):
+        return True
+    return data.get("enabled", True) is not False
+
+
 def get_style(slug: str | None) -> StyleConfig:
     if not slug:
         return BUILTIN_STYLES["educational"]
@@ -59,7 +71,10 @@ def style_for_category(category: str) -> str:
         "service": "educational",
         "class_intro": "announcement",
         "product": "premium",
-        "occasion": "motivational",
+        "lesson": "educational",
+        "qa": "educational",
+        "ad": "premium",
+        "schedule": "educational",
     }
     return mapping.get(category, "educational")
 

@@ -39,6 +39,7 @@ class Mark:
     url: str | None = None
     custom_emoji_id: str | None = None
     collapsed: bool | None = None
+    language: str | None = None
 
     def shift(self, delta: int) -> "Mark":
         return replace(self, start=self.start + delta, end=self.end + delta)
@@ -67,6 +68,7 @@ def parse_telegram_entities(text: str, raw: list | None) -> list[Mark]:
         user = item.get("user") or {}
         if kind == "text_mention" and not url and user.get("id"):
             url = f"tg://user?id={user.get('id')}"
+        language = item.get("language")
         marks.append(Mark(
             type=kind,
             start=start,
@@ -74,6 +76,7 @@ def parse_telegram_entities(text: str, raw: list | None) -> list[Mark]:
             url=str(url) if url else None,
             custom_emoji_id=str(custom_id) if custom_id else None,
             collapsed=item.get("collapsed"),
+            language=str(language) if language else None,
         ))
     return marks
 
@@ -625,6 +628,7 @@ _OPEN = {
     "strikethrough": "<s>",
     "spoiler": "<tg-spoiler>",
     "code": "<code>",
+    "pre": "<pre>",
     "blockquote": "<blockquote>",
     "expandable_blockquote": "<blockquote expandable>",
 }
@@ -635,9 +639,16 @@ _CLOSE = {
     "strikethrough": "</s>",
     "spoiler": "</tg-spoiler>",
     "code": "</code>",
+    "pre": "</pre>",
     "blockquote": "</blockquote>",
     "expandable_blockquote": "</blockquote>",
 }
+_LANG = re.compile(r"^[A-Za-z0-9_+-]{1,32}$")
+
+
+def _pre_language(mark: Mark) -> str | None:
+    lang = (mark.language or "").strip()
+    return lang if _LANG.fullmatch(lang) else None
 
 
 def _open_tag(mark: Mark) -> str:
@@ -647,6 +658,11 @@ def _open_tag(mark: Mark) -> str:
         return f'<a href="{html.escape(mark.url, quote=True)}">'
     if mark.type == "custom_emoji" and mark.custom_emoji_id and str(mark.custom_emoji_id).isdigit():
         return f'<tg-emoji emoji-id="{html.escape(mark.custom_emoji_id, quote=True)}">'
+    if mark.type == "pre":
+        lang = _pre_language(mark)
+        if lang:
+            return f'<pre><code class="language-{html.escape(lang, quote=True)}">'
+        return "<pre>"
     return _OPEN.get(mark.type, "")
 
 
@@ -655,6 +671,8 @@ def _close_tag(mark: Mark) -> str:
         return "</a>"
     if mark.type == "custom_emoji" and mark.custom_emoji_id:
         return "</tg-emoji>"
+    if mark.type == "pre" and _pre_language(mark):
+        return "</code></pre>"
     return _CLOSE.get(mark.type, "")
 
 
@@ -690,6 +708,7 @@ def marks_to_dicts(marks: list[Mark]) -> list[dict]:
             "length": mark.end - mark.start,
             "url": mark.url,
             "custom_emoji_id": mark.custom_emoji_id,
+            "language": mark.language,
         }
         for mark in marks
         if mark.end > mark.start

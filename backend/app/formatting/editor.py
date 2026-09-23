@@ -46,7 +46,7 @@ def _template_family(category: str, length_class: str) -> str:
         return "minimal"
     if category in {"announcement", "registration", "news"}:
         return "announcement"
-    if category in {"exam", "solution", "resource", "planning"}:
+    if category in {"exam", "solution", "resource", "planning", "lesson"}:
         return "educational"
     if category in {"rank", "experience"}:
         return "result"

@@ -43,11 +43,13 @@ async def dashboard(db: AsyncSession = Depends(get_db), admin=Depends(get_curren
             stmt = stmt.where(*where)
         return (await db.execute(stmt)).scalar() or 0
 
-    total = await count()
-    edited = await count(MessageLog.status == "edited")
-    skipped = await count(MessageLog.status == "skipped")
-    failed = await count(MessageLog.status == "failed")
-    dry = await count(MessageLog.status == "dry_run")
+    status_rows = (await db.execute(select(MessageLog.status, func.count()).group_by(MessageLog.status))).all()
+    status_counts = {status: count for status, count in status_rows}
+    total = sum(status_counts.values())
+    edited = status_counts.get("edited", 0)
+    skipped = status_counts.get("skipped", 0)
+    failed = status_counts.get("failed", 0)
+    dry = status_counts.get("dry_run", 0)
     ai_used = await count(MessageLog.ai_used == True)  # noqa: E712
 
     today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)

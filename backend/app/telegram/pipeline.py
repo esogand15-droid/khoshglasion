@@ -15,13 +15,14 @@ from backend.app.formatting.emoji import EmojiMapping as EmojiMap
 from backend.app.formatting.editor import analyze_post
 from backend.app.formatting.engine import format_message
 from backend.app.formatting.rotation import choose_template
-from backend.app.formatting.styles import get_style, style_from_payload
+from backend.app.formatting.styles import get_style, style_from_payload, style_is_enabled
 from backend.app.formatting.textutil import strip_footer_block
 from backend.app.models.channel import Channel
 from backend.app.models.emoji import EmojiMapping
 from backend.app.models.message_log import MessageLog
 from backend.app.models.style import StylePreset
 from backend.app.services.ai import enhance_with_ai
+from backend.app.services.ai_provider import detect_provider
 from backend.app.services.notify import notify
 from backend.app.telegram.edit import edit_telegram_message, merge_signature
 from backend.app.telegram.user_editor import edit_via_user, session_configured
@@ -145,7 +146,7 @@ async def resolve_style(db: AsyncSession, slug: str | None):
     row = (await db.execute(select(StylePreset).where(StylePreset.slug == slug))).scalar_one_or_none()
     if row is None:
         row = (await db.execute(select(StylePreset).where(StylePreset.id == slug))).scalar_one_or_none()
-    if row is None:
+    if row is None or not style_is_enabled(row.config):
         return None
     return style_from_payload(row.slug, row.name, row.config)
 
@@ -292,6 +293,7 @@ async def process_channel_post(
         return {"status": "skipped", "reason": "idempotent_duplicate"}
 
     style = await resolve_style(db, channel.style_id)
+    active_style = channel.style_id if style is not None or (channel.style_id and get_style(channel.style_id).slug == channel.style_id) else None
     footer = channel.footer_text if channel.footer_text is not None else (runtime.default_footer or None)
     if footer == "":
         footer = None
@@ -305,7 +307,7 @@ async def process_channel_post(
     recent_structures, recent_emoji_styles, recent_emoji_ids = await recent_template_state(db, chat_id, message_id)
     choice = choose_template(
         decision,
-        channel_style=channel.style_id,
+        channel_style=active_style,
         recent_structures=recent_structures,
         recent_emoji_styles=recent_emoji_styles,
         emoji_enabled=bool(channel.emoji_replacement and runtime.premium_mode != "off"),
@@ -350,7 +352,7 @@ async def process_channel_post(
     result = format_message(
         raw_text=ai_text or effective,
         is_caption=has_media,
-        channel_style_slug=channel.style_id,
+        channel_style_slug=active_style,
         footer_text=footer,
         emoji_mappings=emoji_maps,
         header_enabled=channel.header_enabled and not entities and not ai_text,
@@ -376,6 +378,8 @@ async def process_channel_post(
     selection["used_emoji_ids"] = [cid for _start, _end, cid in result.emoji_spans]
     if ai_text:
         result.applied_rules.append("ai_enhanced")
+        selection["ai_provider"] = detect_provider(runtime.ai_base_url)
+        selection["ai_model"] = runtime.ai_model
     elapsed = (time.perf_counter() - started) * 1000
 
     if not result.changed and not force:

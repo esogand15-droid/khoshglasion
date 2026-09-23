@@ -106,7 +106,10 @@ def _entities(text: str, spans: list[tuple[int, int, str]] | None = None, format
             elif kind == "code":
                 built.append(MessageEntityCode(offset=offset, length=utf_length))
             elif kind == "pre":
-                built.append(MessageEntityPre(offset=offset, length=utf_length, language=""))
+                language = str(item.get("language") or "")
+                if not language.replace("+", "").replace("-", "").replace("_", "").isalnum():
+                    language = ""
+                built.append(MessageEntityPre(offset=offset, length=utf_length, language=language[:32]))
         return built
     for start, end, custom_id in spans or []:
         if not str(custom_id).isdigit():

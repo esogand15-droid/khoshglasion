@@ -5,7 +5,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.db.base import get_db
-from backend.app.formatting.styles import BUILTIN_STYLES
+from backend.app.formatting.styles import BUILTIN_STYLES, style_is_enabled
 from backend.app.models.style import StylePreset
 from backend.app.security.deps import get_current_admin
 
@@ -25,6 +25,7 @@ def _builtin():
             "add_footer": style.add_footer,
         }, ensure_ascii=False),
         "is_builtin": True,
+        "enabled": True,
     } for key, style in BUILTIN_STYLES.items()]
 
 
@@ -38,6 +39,7 @@ async def list_styles(db: AsyncSession = Depends(get_db), admin=Depends(get_curr
         "description": row.description,
         "config": row.config,
         "is_builtin": False,
+        "enabled": style_is_enabled(row.config),
     } for row in custom]
     return _builtin() + custom_out
 

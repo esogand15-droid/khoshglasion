@@ -101,3 +101,26 @@ async def retry_message(msg_id: str, db: AsyncSession = Depends(get_db), admin=D
     await db.flush()
     refreshed = (await db.execute(select(MessageLog).where(MessageLog.id == row.id))).scalar_one_or_none()
     return {"result": result, "message": dump_message(refreshed or row, full=True)}
+
+
+@router.post("/{msg_id}/skip")
+async def skip_message(msg_id: str, db: AsyncSession = Depends(get_db), admin=Depends(get_current_admin)):
+    row = (await db.execute(select(MessageLog).where(MessageLog.id == msg_id))).scalar_one_or_none()
+    if not row:
+        raise HTTPException(status_code=404, detail="پیام پیدا نشد")
+    row.status = "skipped"
+    row.error = "skipped_by_admin"
+    await db.flush()
+    return dump_message(row, full=True)
+
+
+@router.delete("/{msg_id}")
+async def delete_message(msg_id: str, db: AsyncSession = Depends(get_db), admin=Depends(get_current_admin)):
+    row = (await db.execute(select(MessageLog).where(MessageLog.id == msg_id))).scalar_one_or_none()
+    if not row:
+        raise HTTPException(status_code=404, detail="پیام پیدا نشد")
+    if row.status == "edited":
+        raise HTTPException(status_code=400, detail="ادیت موفق حذف نمی‌شود")
+    await db.delete(row)
+    await db.flush()
+    return {"ok": True}
