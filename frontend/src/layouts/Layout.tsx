@@ -138,6 +138,9 @@ export default function Layout() {
           <div className="flex flex-wrap items-center justify-end gap-1.5">
             <Badge variant={status?.bot === "connected" ? "success" : "destructive"}>{status?.bot === "connected" ? "بات زنده" : "بات قطع"}</Badge>
             <Badge variant={status?.database === "connected" ? "success" : "destructive"}>{status?.external_database ? "Postgres" : "دیتابیس"}</Badge>
+            {status && status.premium_mode !== "off" && status.premium_mode !== "bot" && (
+              <Badge variant={status.user_session_configured ? "success" : "warning"}>{status.user_session_configured ? "نشست وصل" : "نشست قطع"}</Badge>
+            )}
             {status?.dry_run && <Badge variant="warning">آزمایشی</Badge>}
             {status?.kill_switch && <Badge variant="destructive">توقف</Badge>}
           </div>

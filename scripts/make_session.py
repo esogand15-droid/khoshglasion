@@ -1,13 +1,8 @@
-"""Create a Telethon StringSession for premium emoji edits.
+"""Optional local fallback for a Telethon StringSession.
 
-Run this on your own computer, not on Railway:
-
-    pip install telethon
-    python scripts/make_session.py
-
-Then put the printed string in Railway as TG_SESSION_STRING, with TG_API_ID
-and TG_API_HASH from https://my.telegram.org. The account must be an admin of
-the channel and should have Telegram Premium.
+The admin panel is the normal path: Settings, نشست, then API ID, API hash,
+phone, Telegram code and 2FA. Use this script only if the panel cannot reach
+Telegram. Do not paste the printed string into a ticket or a log.
 """
 from __future__ import annotations
 

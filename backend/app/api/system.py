@@ -25,6 +25,19 @@ from backend.app.services.ai import test_ai_connection
 from backend.app.services.ai_provider import detect_provider, resolve_chat_completions_url
 from backend.app.services.audit import write_audit
 from backend.app.telegram.bot import get_bot
+from backend.app.telegram.session_login import (
+    SessionLoginError,
+    cancel_login,
+    check_saved_session,
+    disconnect_session,
+    is_secret_setting,
+    refresh_user_credentials,
+    resend_login_code,
+    session_public_status,
+    start_login,
+    submit_code,
+    submit_password,
+)
 from backend.app.telegram.user_editor import session_configured, user_session_status
 
 router = APIRouter(prefix="/api/system", tags=["system"])
@@ -55,6 +68,20 @@ class RuntimePatch(BaseModel):
     default_footer: str | None = None
     footer_url: str | None = None
     support_username: str | None = None
+
+
+class SessionStart(BaseModel):
+    api_id: str = Field(min_length=1, max_length=12)
+    api_hash: str = Field(min_length=16, max_length=64)
+    phone: str = Field(min_length=8, max_length=32)
+
+
+class SessionCode(BaseModel):
+    code: str = Field(min_length=1, max_length=16)
+
+
+class SessionPassword(BaseModel):
+    password: str = Field(min_length=1, max_length=256)
 
 
 class AdminCreate(BaseModel):
@@ -123,6 +150,18 @@ async def _alerts(db: AsyncSession, runtime, settings) -> list[dict]:
     last_emoji = (await db.execute(select(SystemSetting).where(SystemSetting.key == "last_emoji_error"))).scalar_one_or_none()
     if last_emoji and last_emoji.value:
         alerts.append({"level": "warn", "text": f"آخرین رد شدن ایموجی پرمیوم: {last_emoji.value[:180]}"})
+    if runtime.premium_mode in {"auto", "user"}:
+        session = await session_public_status(db)
+        if not session["configured"]:
+            alerts.append({
+                "level": "warn",
+                "text": "نشست پرمیوم داخل پنل وصل نیست. از تنظیمات، تب نشست، با شماره و کد تلگرام وصلش کن. بدون آن ایموجی متحرک داخل کانال ساده می‌ماند.",
+            })
+        elif session.get("premium") is False:
+            alerts.append({
+                "level": "warn",
+                "text": "نشست وصل است ولی این اکانت تلگرام پرمیوم نیست. خط طلایی داخل کانال با اکانت بدون پرمیوم ساخته نمی‌شود.",
+            })
     return alerts
 
 
@@ -130,6 +169,7 @@ async def _alerts(db: AsyncSession, runtime, settings) -> list[dict]:
 async def system_health(db: AsyncSession = Depends(get_db), admin=Depends(get_current_admin)):
     settings = get_settings()
     runtime = await load_runtime(db)
+    session = await session_public_status(db)
     db_ok = True
     db_error = None
     try:
@@ -172,7 +212,9 @@ async def system_health(db: AsyncSession = Depends(get_db), admin=Depends(get_cu
         "env": settings.app_env,
         "version": settings.app_version,
         "premium_mode": runtime.premium_mode,
-        "user_session_configured": session_configured(),
+        "user_session_configured": session["configured"],
+        "user_session_premium": session.get("premium"),
+        "user_session_username": session.get("username"),
         "alerts": await _alerts(db, runtime, settings),
     }
 
@@ -195,6 +237,7 @@ async def overview(db: AsyncSession = Depends(get_db), admin=Depends(get_current
 async def get_settings_api(db: AsyncSession = Depends(get_db), admin=Depends(get_current_admin)):
     runtime = await load_runtime(db)
     settings = get_settings()
+    await refresh_user_credentials(db)
     data = runtime.public_dict()
     data.update({
         "webhook_url": settings.resolved_webhook_url,
@@ -281,8 +324,118 @@ async def reset_webhook(db: AsyncSession = Depends(get_db), admin=Depends(requir
     return {"ok": True, "url": info.url, "pending": info.pending_update_count, "last_error": info.last_error_message}
 
 
+def _session_http(exc: SessionLoginError) -> HTTPException:
+    return HTTPException(status_code=exc.status, detail=exc.message)
+
+
+@router.get("/telegram-session")
+async def telegram_session_status(db: AsyncSession = Depends(get_db), admin=Depends(get_current_admin)):
+    return await session_public_status(db)
+
+
+@router.post("/telegram-session/start")
+async def telegram_session_start(
+    payload: SessionStart,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    admin=Depends(require_role("OWNER", "ADMIN")),
+):
+    try:
+        result = await start_login(db, payload.api_id, payload.api_hash, payload.phone)
+    except SessionLoginError as exc:
+        raise _session_http(exc) from None
+    await write_audit(
+        db, admin=admin, action="start", resource="telegram_session",
+        new_value={"step": result.get("step"), "phone_masked": result.get("phone_masked")},
+        ip_address=request.client.host if request.client else None,
+    )
+    return result
+
+
+@router.post("/telegram-session/code")
+async def telegram_session_code(
+    payload: SessionCode,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    admin=Depends(require_role("OWNER", "ADMIN")),
+):
+    try:
+        result = await submit_code(db, payload.code)
+    except SessionLoginError as exc:
+        raise _session_http(exc) from None
+    if result.get("step") == "ready":
+        await write_audit(
+            db, admin=admin, action="connect", resource="telegram_session",
+            new_value={"user_id": result.get("user_id"), "premium": result.get("premium")},
+            ip_address=request.client.host if request.client else None,
+        )
+    return result
+
+
+@router.post("/telegram-session/password")
+async def telegram_session_password(
+    payload: SessionPassword,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    admin=Depends(require_role("OWNER", "ADMIN")),
+):
+    try:
+        result = await submit_password(db, payload.password)
+    except SessionLoginError as exc:
+        raise _session_http(exc) from None
+    await write_audit(
+        db, admin=admin, action="connect", resource="telegram_session",
+        new_value={"user_id": result.get("user_id"), "premium": result.get("premium")},
+        ip_address=request.client.host if request.client else None,
+    )
+    return result
+
+
+@router.post("/telegram-session/resend")
+async def telegram_session_resend(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    admin=Depends(require_role("OWNER", "ADMIN")),
+):
+    try:
+        result = await resend_login_code(db)
+    except SessionLoginError as exc:
+        raise _session_http(exc) from None
+    await write_audit(
+        db, admin=admin, action="resend", resource="telegram_session",
+        new_value={"step": result.get("step"), "phone_masked": result.get("phone_masked")},
+        ip_address=request.client.host if request.client else None,
+    )
+    return result
+
+
+@router.post("/telegram-session/check")
+async def telegram_session_check(db: AsyncSession = Depends(get_db), admin=Depends(require_role("OWNER", "ADMIN"))):
+    return await check_saved_session(db)
+
+
+@router.post("/telegram-session/cancel")
+async def telegram_session_cancel(db: AsyncSession = Depends(get_db), admin=Depends(require_role("OWNER", "ADMIN"))):
+    return await cancel_login(db)
+
+
+@router.post("/telegram-session/disconnect")
+async def telegram_session_disconnect(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    admin=Depends(require_role("OWNER", "ADMIN")),
+):
+    result = await disconnect_session(db)
+    await write_audit(
+        db, admin=admin, action="disconnect", resource="telegram_session",
+        ip_address=request.client.host if request.client else None,
+    )
+    return result
+
+
 @router.get("/premium")
-async def premium_status(admin=Depends(get_current_admin)):
+async def premium_status(db: AsyncSession = Depends(get_db), admin=Depends(get_current_admin)):
+    await refresh_user_credentials(db)
     return await user_session_status()
 
 
@@ -344,6 +497,8 @@ async def backup(include_secrets: bool = False, db: AsyncSession = Depends(get_d
     runtime = {}
     for row in settings_rows:
         if row.key == "ai_api_key" and not include_secrets:
+            continue
+        if is_secret_setting(row.key):
             continue
         runtime[row.key] = row.value
     return {

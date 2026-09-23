@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import api from "../services/api";
+import SessionLogin from "../components/SessionLogin";
 import { Page } from "../components/page";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -30,6 +32,8 @@ export default function Settings() {
   const [testing, setTesting] = useState(false);
   const [password, setPassword] = useState({ current_password: "", new_password: "" });
   const [adminForm, setAdminForm] = useState({ username: "", password: "", role: "ADMIN" });
+  const [params, setParams] = useSearchParams();
+  const tab = ["run", "ai", "look", "session", "access"].includes(params.get("tab") || "") ? params.get("tab")! : "run";
 
   async function load() { setData((await api.get("/api/system/settings")).data); }
   useEffect(() => { load().catch(() => {}); }, []);
@@ -43,11 +47,12 @@ export default function Settings() {
   return (
     <Page kicker="کنترل زنده" title="اتاق تنظیم">
       {msg && <Alert>{msg}</Alert>}
-      <Tabs defaultValue="run">
+      <Tabs value={tab} defaultValue="run" onValueChange={(value) => setParams({ tab: value })}>
         <TabsList aria-label="بخش تنظیمات">
           <TabsTrigger value="run">پردازش</TabsTrigger>
           <TabsTrigger value="ai">هوش مصنوعی</TabsTrigger>
           <TabsTrigger value="look">ظاهر پست</TabsTrigger>
+          <TabsTrigger value="session">نشست</TabsTrigger>
           <TabsTrigger value="access">دسترسی</TabsTrigger>
         </TabsList>
         <TabsContent value="run">
@@ -125,7 +130,10 @@ export default function Settings() {
               <Field label="فوتر پیش‌فرض سراسری"><Textarea value={data.default_footer || ""} onChange={(e) => setData({ ...data, default_footer: e.target.value })} onBlur={() => save({ default_footer: data.default_footer })} /></Field>
             </CardContent>
           </Card>
-          <p className="mt-3 text-xs text-muted-foreground">نشست کاربر از محیط TG_SESSION_STRING خوانده می‌شود و در پنل ذخیره نمی‌شود. وضعیت: {data.user_session_configured ? "تنظیم شده" : "تنظیم نشده"}.</p>
+          <p className="mt-3 text-xs text-muted-foreground">وضعیت نشست: {data.user_session_configured ? "وصل است" : "هنوز وصل نیست"}. ورود شماره و کد در تب نشست است، نه در متغیر Railway.</p>
+        </TabsContent>
+        <TabsContent value="session">
+          <SessionLogin premiumMode={data.premium_mode} onChange={load} />
         </TabsContent>
         <TabsContent value="access">
           <div className="grid gap-4 lg:grid-cols-2">

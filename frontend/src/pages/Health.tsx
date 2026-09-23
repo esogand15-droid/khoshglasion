@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import api from "../services/api";
 import { Page } from "../components/page";
 import { Alert } from "@/components/ui/alert";
@@ -31,7 +32,7 @@ export default function Health() {
         <Stat label="نسخه" value={data.version || "—"} />
         <Stat label="صف وبهوک" value={webhook.pending_update_count == null ? "—" : fa(webhook.pending_update_count)} />
         <Stat label="حالت ایموجی" value={data.premium_mode} />
-        <Stat label="نشست کاربر" value={data.user_session_configured ? "وصل" : "ندارد"} />
+        <Stat label="نشست کاربر" value={data.user_session_configured ? (data.user_session_username ? `@${data.user_session_username}` : "وصل") : "ندارد"} />
       </div>
       <Card>
         <CardHeader><CardTitle>وبهوک</CardTitle></CardHeader>
@@ -48,8 +49,8 @@ export default function Health() {
           {msg && <p className="text-xs text-muted-foreground">{msg}</p>}
         </CardContent>
       </Card>
-      {!data.user_session_configured && data.premium_mode !== "off" && (
-        <Alert variant="warning">نشست پرمیوم وصل نیست. نقل‌قول و لینک عضویت اعمال می‌شوند، ولی ایموجی متحرک داخل کانال تا وقتی TG_SESSION_STRING تنظیم نشود به شکل ساده می‌ماند. Bot API این را برای کانال تضمین نمی‌کند.</Alert>
+      {!data.user_session_configured && data.premium_mode !== "off" && data.premium_mode !== "bot" && (
+        <Alert variant="warning">نشست پرمیوم وصل نیست. نقل‌قول و لینک عضویت اعمال می‌شوند، ولی ایموجی متحرک داخل کانال ساده می‌ماند. از <Link className="underline" to="/settings?tab=session">تنظیمات، تب نشست</Link> با شماره و کد تلگرام وصلش کن. متغیر Railway لازم نیست.</Alert>
       )}
       <Card>
         <CardHeader><CardTitle>چک‌لیست راه‌اندازی</CardTitle></CardHeader>
@@ -59,7 +60,7 @@ export default function Health() {
             <li>BOT_TOKEN، ADMIN_SECRET، JWT_SECRET و WEBHOOK_SECRET را بگذار.</li>
             <li>ربات را ادمین کانال کن و تیک Edit messages را روشن کن.</li>
             <li>یک پست آزمایشی بفرست. اگر حالت آزمایشی روشن است، اول از تنظیمات خاموشش کن.</li>
-            <li>برای ایموجی متحرک داخل کانال، اگر Bot API رد کرد، نشست پرمیوم را وصل کن.</li>
+            <li>برای ایموجی متحرک داخل کانال، در تنظیمات تب نشست با اکانت پرمیوم وارد شو. صاحب ربات بودن کافی نیست.</li>
           </ol>
         </CardContent>
       </Card>

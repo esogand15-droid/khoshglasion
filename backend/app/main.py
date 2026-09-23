@@ -64,6 +64,8 @@ async def lifespan(_app: FastAPI):
         logger.exception("Startup bootstrap failed")
     await setup_webhook()
     yield
+    from backend.app.telegram.session_login import close_pending_login
+    await close_pending_login()
     await close_user_client()
     await close_bot()
 

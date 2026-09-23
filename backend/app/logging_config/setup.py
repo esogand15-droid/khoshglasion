@@ -3,7 +3,7 @@ import re
 import sys
 
 _SECRET = re.compile(
-    r"(nvapi-[A-Za-z0-9_-]{8,}|Bearer\s+[A-Za-z0-9._-]{8,}|\b\d{6,}:[A-Za-z0-9_-]{20,})",
+    r"(nvapi-[A-Za-z0-9_-]{8,}|Bearer\s+[A-Za-z0-9._-]{8,}|\b\d{6,}:[A-Za-z0-9_-]{20,}|1[A-Za-z0-9+/_-]{200,}={0,2})",
     re.IGNORECASE,
 )
 

@@ -86,4 +86,6 @@ async def bootstrap() -> None:
         await seed_admin(db)
         await seed_emojis(db)
         await seed_runtime_defaults(db)
+        from backend.app.telegram.session_login import refresh_user_credentials
+        await refresh_user_credentials(db)
         await db.commit()

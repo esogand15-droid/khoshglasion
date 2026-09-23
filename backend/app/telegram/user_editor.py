@@ -1,9 +1,9 @@
-"""Optional premium-emoji editor through the owner's user account.
+"""Premium-emoji editor through a human account that can edit the channel.
 
-Bot API can attach custom emoji when the bot owner has Telegram Premium, but
-channel posts are still the unreliable case. A user session that is admin of
-the channel can place animated custom-emoji entities directly. The session
-string stays in the environment and is never written to the database or panel.
+Bot API custom emoji is documented for private, group and supergroup messages
+the bot sends. Channel posts use this user session instead. Credentials come
+from the panel store when that store has been written, otherwise from the
+environment. The session string is never logged.
 """
 from __future__ import annotations
 
@@ -15,17 +15,39 @@ from backend.app.formatting.textutil import utf16_len
 logger = logging.getLogger(__name__)
 
 _client = None
+_override: dict[str, str] | None = None
+
+
+def set_credential_override(api_id: str, api_hash: str, session: str) -> None:
+    global _override
+    _override = {
+        "api_id": str(api_id or "").strip(),
+        "api_hash": str(api_hash or "").strip(),
+        "session": str(session or "").strip(),
+    }
+
+
+def clear_credential_override() -> None:
+    global _override
+    _override = None
+
+
+def current_credentials() -> tuple[str, str, str]:
+    if _override is not None:
+        return _override["api_id"], _override["api_hash"], _override["session"]
+    settings = get_settings()
+    return settings.tg_api_id, settings.tg_api_hash, settings.tg_session_string
 
 
 def session_configured() -> bool:
-    settings = get_settings()
-    return bool(settings.tg_api_id and settings.tg_api_hash and settings.tg_session_string)
+    api_id, api_hash, session = current_credentials()
+    return bool(api_id and api_hash and session)
 
 
 async def get_user_client():
     global _client
-    settings = get_settings()
-    if not session_configured():
+    api_id, api_hash, session = current_credentials()
+    if not (api_id and api_hash and session):
         return None
     if _client is not None and _client.is_connected():
         return _client
@@ -36,16 +58,16 @@ async def get_user_client():
         logger.warning("telethon is not installed; user-session premium editor disabled")
         return None
     try:
-        client = TelegramClient(StringSession(settings.tg_session_string), int(settings.tg_api_id), settings.tg_api_hash)
+        client = TelegramClient(StringSession(session), int(api_id), api_hash)
         await client.connect()
         if not await client.is_user_authorized():
-            logger.error("TG_SESSION_STRING is not authorized")
+            logger.error("Stored user session is not authorized")
             await client.disconnect()
             return None
         _client = client
         return client
     except Exception as exc:
-        logger.error("Could not start user session: %s", exc)
+        logger.error("Could not start user session: %s", type(exc).__name__)
         return None
 
 
@@ -146,13 +168,13 @@ async def edit_via_user(
 
 
 async def user_session_status() -> dict:
-    settings = get_settings()
+    api_id, _api_hash, _session = current_credentials()
     configured = session_configured()
     if not configured:
-        return {"configured": False, "authorized": False}
+        return {"configured": False, "authorized": False, "api_id_set": bool(api_id)}
     client = await get_user_client()
     if client is None:
-        return {"configured": True, "authorized": False, "api_id_set": bool(settings.tg_api_id)}
+        return {"configured": True, "authorized": False, "api_id_set": bool(api_id)}
     me = await client.get_me()
     return {
         "configured": True,

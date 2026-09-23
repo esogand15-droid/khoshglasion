@@ -25,6 +25,7 @@ from backend.app.services.ai import enhance_with_ai
 from backend.app.services.ai_provider import detect_provider
 from backend.app.services.notify import notify
 from backend.app.telegram.edit import edit_telegram_message, merge_signature
+from backend.app.telegram.session_login import refresh_user_credentials
 from backend.app.telegram.user_editor import edit_via_user, session_configured
 
 logger = logging.getLogger(__name__)
@@ -430,6 +431,7 @@ async def process_channel_post(
     wait_for = 0.3 if force else max(0.4, min(float(delay or 0), 20))
     await asyncio.sleep(wait_for)
 
+    await refresh_user_credentials(db)
     edit_result = await _edit(runtime, channel, chat_id, message_id, result, has_media, markup)
     log.edit_method = edit_result.get("method")
     log.processing_time_ms = (time.perf_counter() - started) * 1000
