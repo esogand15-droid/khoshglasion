@@ -1,130 +1,92 @@
-# خوشگلاسیون — Khoshgelasion Bot ✨
+# خوشگلاسیون ۲ — ربات زیباسازی کانال رتبه لند
 
-> «هر پست، یکم خوشگل‌تر» — ربات هوشمند زیباسازی محتوای کانال تلگرام برای مشاوره کنکور
+ربات ادمین کانال است. پست جدید را می‌خواند، بدون عوض کردن واقعیت خوشگلش می‌کند، ایموجی پرمیوم را جایگزین می‌کند و **همان پیام** را ادیت می‌کند. پنل، تنظیم زنده و دیتابیس خارجی دارد تا دیپلوی Railway دیگر همه‌چیز را پاک نکند.
 
-ربات به‌عنوان ادمین کانال، هر پست جدید را دریافت کرده، بدون تغییر معنایی، آن را مرتب و برندشده می‌کند، ایموجی‌ها را به Custom Emoji تبدیل می‌کند و همان پیام را Edit می‌کند. پنل مدیریتی شیشه‌ای (Glassmorphism) دارد.
+## چرا دیتابیس قبلی می‌پرید
 
----
+SQLite داخل کانتینر Railway با هر دیپلوی از بین می‌رود. نسخه ۲ Postgres را دیتابیس اصلی می‌داند. آدرس‌های `postgres://` و `postgresql://` که Railway می‌دهد خودکار به `asyncpg` تبدیل می‌شوند و `Chat ID` کانال به‌صورت `BIGINT` ذخیره می‌شود تا عددهای `-100…` در Postgres نپرند.
 
-## ویژگی‌ها
+## راه‌اندازی Railway
 
-- دریافت `channel_post` via Webhook (FastAPI) — Polling فقط برای dev
-- تشخیص نوع پیام (text / photo+caption / video+caption / ...) و Skip هوشمند برای Poll/Sticker
-- موتور Formatting مستقل: فاصله‌گذاری، نرمال‌سازی بولت‌ها، Divider و Footer برند
-- موتور Emoji با `custom_emoji_id` و `<tg-emoji>` — context-aware
-- تشخیص دستهٔ محتوا (اطلاعیه/خبر/منبع/انگیزشی/…)
-- Idempotency با hash — جلوگیری از حلقهٔ ادیت
-- Dry Run و Kill Switch
-- Retry با backoff برای 429
-- داشبورد RTL شیشه‌ای: آمار، کانال‌ها، پیام‌ها، ایموجی، استایل، پیش‌نمایش زنده، سلامت سیستم
+1. در همان پروژه یک سرویس **PostgreSQL** بساز.
+2. در سرویس ربات این متغیر را اضافه کن:
 
----
-
-## معماری
-
-```
-Telegram Channel → Bot API → POST /telegram/webhook → FastAPI
-  → validate channel allowlist → idempotency check
-  → detect category → format engine → emoji engine
-  → validate limits → editMessageText / editMessageCaption
-  → save MessageLog
-                    ↕
-              PostgreSQL (prod) / SQLite (dev)
-              SQLAlchemy 2 async + Alembic
-                    ↕
-              React + Vite + Tailwind Dashboard
+```text
+DATABASE_URL=${{Postgres.DATABASE_URL}}
 ```
 
----
+3. بقیه متغیرها را از `.env.example` پر کن: `BOT_TOKEN`، `ADMIN_SECRET`، `JWT_SECRET`، `WEBHOOK_SECRET`.
+4. `WEBHOOK_URL` را خالی بگذار. اگر `RAILWAY_PUBLIC_DOMAIN` وجود داشته باشد، وبهوک خودش ثبت می‌شود.
+5. ربات را ادمین کانال کن و مجوز **Edit messages** را بده. کانال خودکار ثبت می‌شود.
+6. وارد پنل شو: `https://دامنه-railway` با یوزر `admin` و رمز `ADMIN_SECRET`.
 
-## شروع سریع (Local)
+اگر رمز را گم کردی، یک‌بار `RESET_ADMIN_ON_BOOT=true` بگذار و بعد از بالا آمدن دوباره `false` کن. مسیر عمومی ریست رمز حذف شده است.
+
+## مکانیزم ربات
+
+```text
+ادمین در کانال پست می‌گذارد
+  → Telegram webhook را به /telegram/webhook می‌فرستد
+  → ربات فوراً 200 می‌دهد تا تلگرام پست را دوباره نفرستد
+  → دسته محتوا تشخیص داده می‌شود
+  → اگر AI روشن باشد، متن اصلی بازنویسی می‌شود و لینک، عدد، منشن و هشتگ حفظ می‌شود
+  → فاصله، بولت، فوتر و ایموجی پرمیوم اعمال می‌شود
+  → همان message_id ادیت می‌شود
+  → اگر ایموجی پرمیوم رد شود، متن خوشگل بدون تگ پرمیوم ارسال می‌شود تا پست نسوزد
+```
+
+دکمه‌های قبلی پست حفظ می‌شوند. ادیت خود ربات دوباره پردازش نمی‌شود. اگر ادمین بعداً پست را دستکاری کند، یک‌بار دیگر خوشگل می‌شود.
+
+## ایموجی پرمیوم متحرک
+
+از فوریه ۲۰۲۶، Bot API ایموجی سفارشی را در پیام‌هایی که خود ربات به چت خصوصی، گروه و سوپرگروه می‌فرستد قبول می‌کند، به شرطی که صاحب ربات تلگرام پرمیوم داشته باشد. کانال هنوز جای نامطمئن است.
+
+برای همین سه لایه وجود دارد:
+
+- `auto`: اگر نشست کاربر تنظیم شده باشد از آن استفاده می‌کند، وگرنه Bot API، و اگر هر دو رد کردند متن ساده.
+- `bot`: فقط `<tg-emoji>`.
+- `user`: ادیت از اکانت پرمیومی که ادمین کانال است.
+
+نشست را روی کامپیوتر خودت بساز، نه روی سرور:
 
 ```bash
-cp .env.example .env
-# BOT_TOKEN را از @BotFather بگیر و در .env بگذار
+pip install telethon
+python scripts/make_session.py
+```
 
+خروجی را در `TG_SESSION_STRING` بگذار، همراه `TG_API_ID` و `TG_API_HASH` از [my.telegram.org](https://my.telegram.org). این رشته در دیتابیس و پنل ذخیره نمی‌شود.
+
+راه ساده پر کردن کتابخانه: در خصوصی به ربات یک پیام دارای ایموجی پرمیوم فوروارد کن. `custom_emoji_id` استخراج و ذخیره می‌شود.
+
+## دستورهای تلگرام
+
+`/start` `/status` `/id` `/dry on|off` `/pause` `/resume`
+
+دستورهای حساس فقط وقتی کار می‌کنند که آیدی عددی‌ات در پنل، فیلد «ادمین‌های تلگرام» باشد. `/id` همان عدد را می‌دهد.
+
+## پنل
+
+داشبورد، کانال با فوتر و دکمه و کلمه ممنوع، بایگانی پیام با تلاش دوباره، کتابخانه ایموجی، استایل، میز آزمایش، سلامت وبهوک، تنظیم زنده بدون ری‌استارت، پشتیبان JSON و ردپای ادمین.
+
+## اجرای محلی
+
+```bash
+python -m venv .venv && source .venv/bin/activate
 pip install -r backend/requirements.txt
-
-# DB (SQLite برای dev کافی است)
-DATABASE_URL=sqlite+aiosqlite:///./khoshgelasion.db alembic upgrade head
-
+cp .env.example .env
+alembic upgrade head
 uvicorn backend.app.main:app --reload --port 8000
-# Frontend (اختیاری)
 cd frontend && npm install && npm run dev
 ```
 
-پنل: http://localhost:8000  (اگر frontend build شده باشد) یا http://localhost:5173
-ورود: `admin` / مقدار `ADMIN_SECRET` در .env
-
-### Polling برای تست بدون Webhook
+Postgres محلی:
 
 ```bash
-python -m backend.app.bot.polling  # اگر اسکریپت polling اضافه کردی
+docker compose up --build
 ```
-یا از `ngrok` برای Webhook لوکال استفاده کن.
-
----
-
-## متغیرهای محیطی
-
-| نام | توضیح |
-|---|---|
-| `BOT_TOKEN` | توکن از @BotFather |
-| `BOT_USERNAME` | یوزرنیم بات |
-| `DATABASE_URL` | `postgresql+asyncpg://...` یا `sqlite+aiosqlite:///...` |
-| `WEBHOOK_URL` | `https://domain/telegram/webhook` |
-| `WEBHOOK_SECRET` | رشتهٔ تصادفی ≥32 کاراکتر |
-| `ADMIN_SECRET` | رمز ادمین اولیه |
-| `SESSION_SECRET` / `JWT_SECRET` | کلید JWT |
-| `DRY_RUN` | `true` → هیچ پیامی واقعاً ادیت نمی‌شود |
-| `KILL_SWITCH` | `true` → پردازش کاملاً متوقف |
-| `MAX_CONCURRENT_PROCESSING` | همزمانی (پیش‌فرض 5) |
-
----
-
-## راه‌اندازی تلگرام
-
-1. @BotFather → `/newbot` → توکن بگیر
-2. `.env` را پر کن و Deploy کن
-3. `WEBHOOK_URL` را تنظیم کن — در startup خودکار `setWebhook` می‌شود
-4. ربات را به کانال به‌عنوان **Admin** اضافه کن (مجوز *Edit messages*)
-5. در پنل → کانال‌ها → `Chat ID` کانال را اضافه کن (از لاگ webhook یا @userinfobot)
-6. در **Dry Run** تست کن، سپس غیرفعال کن
-7. در **پیش‌نمایش زنده** متن‌های مختلف را تست کن
-8. در **کتابخانه ایموجی** Custom Emoji IDها را وارد کن
-
-برای گرفتن `custom_emoji_id`: یک custom emoji در تلگرام بفرست و از `getCustomEmojiStickers` یا لاگ بات ID را استخراج کن.
-
----
-
-## محدودیت‌های تلگرام
-
-- متن: 4096 کاراکتر، کپشن: 1024
-- Poll / Sticker / Location / Contact قابل Edit نیست — Skip می‌شود
-- پیام‌های خیلی قدیمی ممکن است قابل Edit نباشند
-- Custom Emoji فقط با ID معتبر نمایش داده می‌شود
-- Rate limit با backoff مدیریت می‌شود
-
----
-
-## استقرار Railway
-
-- `Dockerfile` آماده است — Railway خودکار build می‌کند
-- `railway.toml` شامل healthcheck است
-- متغیرها را در Railway Variables تنظیم کن
-- `DATABASE_URL` توسط Postgres addon خودکار پر می‌شود (اگر `postgresql+asyncpg` باشد)
-- `alembic upgrade head` در `CMD` خودکار اجرا می‌شود
-
----
 
 ## تست
 
 ```bash
-pytest tests/ -v
+pytest tests -q
 ```
-
----
-
-## لایسنس
-
-MIT
