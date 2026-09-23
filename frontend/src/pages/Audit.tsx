@@ -1,29 +1,39 @@
 import { useEffect, useState } from "react";
 import api from "../services/api";
-import { Page } from "../components";
+import { Page } from "../components/page";
+import { EmptyState } from "@/components/ui/empty-state";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { when } from "@/lib/format";
 
 export default function Audit() {
   const [rows, setRows] = useState<any[]>([]);
   useEffect(() => { api.get("/api/system/audit").then((r) => setRows(r.data)).catch(() => {}); }, []);
   return (
     <Page kicker="چه کسی چه کرد" title="ردپا">
-      <div className="card" style={{ padding: 0 }}>
-        <table>
-          <thead><tr><th>زمان</th><th>ادمین</th><th>کار</th><th>منبع</th><th>جزئیات</th></tr></thead>
-          <tbody>
+      {rows.length ? (
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>زمان</TableHead>
+              <TableHead>ادمین</TableHead>
+              <TableHead>کار</TableHead>
+              <TableHead>منبع</TableHead>
+              <TableHead>جزئیات</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
             {rows.map((row) => (
-              <tr key={row.id}>
-                <td className="tiny">{row.created_at ? new Date(row.created_at).toLocaleString("fa-IR") : "-"}</td>
-                <td>{row.admin_username || "—"}</td>
-                <td>{row.action}</td>
-                <td>{row.resource}</td>
-                <td className="tiny">{row.new_value || row.ip_address || "—"}</td>
-              </tr>
+              <TableRow key={row.id}>
+                <TableCell className="text-xs text-muted-foreground">{when(row.created_at)}</TableCell>
+                <TableCell>{row.admin_username || "—"}</TableCell>
+                <TableCell>{row.action}</TableCell>
+                <TableCell>{row.resource}</TableCell>
+                <TableCell className="text-xs text-muted-foreground">{row.new_value || row.ip_address || "—"}</TableCell>
+              </TableRow>
             ))}
-            {!rows.length && <tr><td colSpan={5} className="tiny">هنوز ردپایی نیست.</td></tr>}
-          </tbody>
-        </table>
-      </div>
+          </TableBody>
+        </Table>
+      ) : <EmptyState title="هنوز ردپایی نیست" />}
     </Page>
   );
 }

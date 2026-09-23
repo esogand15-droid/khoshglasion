@@ -1,8 +1,28 @@
 import { useEffect, useState } from "react";
+import { RefreshCw } from "lucide-react";
 import api from "../services/api";
-import { Badge, Card, Field, Modal, Page } from "../components";
+import { Page } from "../components/page";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Dialog } from "@/components/ui/dialog";
+import { EmptyState } from "@/components/ui/empty-state";
+import { Field, Input } from "@/components/ui/input";
+import { Select } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Textarea } from "@/components/ui/textarea";
+import { fa } from "@/lib/utils";
 
 const EMPTY = { chat_id: "", title: "", username: "" };
+
+function Flag({ label, checked, onChange }: { label: string; checked: boolean; onChange: (value: boolean) => void }) {
+  return (
+    <label className="flex items-center justify-between gap-3 rounded-lg border border-border px-3 py-2 text-sm">
+      <span>{label}</span>
+      <Switch checked={checked} onCheckedChange={onChange} />
+    </label>
+  );
+}
 
 export default function Channels() {
   const [items, setItems] = useState<any[]>([]);
@@ -44,62 +64,102 @@ export default function Channels() {
   }
 
   return (
-    <Page kicker="پوشش کانال" title="کانال‌ها" actions={<button className="btn" onClick={() => load()}>تازه‌سازی</button>}>
-      <Card title="افزودن یا همگام‌سازی">
-        <div className="form-row channels">
-          <Field label="Chat ID"><input value={form.chat_id} onChange={(e) => setForm({ ...form, chat_id: e.target.value })} placeholder="-100…" /></Field>
-          <Field label="عنوان"><input value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} /></Field>
-          <Field label="یوزرنیم"><input value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} /></Field>
-          <button className="btn-gold" onClick={add}>افزودن</button>
-          <button className="btn" onClick={async () => { if (!form.chat_id) return; await api.post("/api/channels/sync", { chat_id: Number(form.chat_id) }); load(); }}>خواندن از تلگرام</button>
+    <Page
+      kicker="پوشش کانال"
+      title="کانال‌ها"
+      description="اگر ربات ادمین کانال شود، کانال خودش ثبت می‌شود. Chat ID منفی است و با ‎-100 شروع می‌شود."
+      actions={<Button variant="outline" onClick={() => load()}><RefreshCw /> تازه‌سازی</Button>}
+    >
+      <div className="rounded-2xl border border-border bg-card p-5">
+        <div className="grid gap-3 md:grid-cols-3">
+          <Field label="Chat ID" htmlFor="chat-id"><Input id="chat-id" dir="ltr" value={form.chat_id} onChange={(e) => setForm({ ...form, chat_id: e.target.value })} placeholder="-100…" /></Field>
+          <Field label="عنوان" htmlFor="title"><Input id="title" value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} /></Field>
+          <Field label="یوزرنیم" htmlFor="username"><Input id="username" dir="ltr" value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} /></Field>
         </div>
-        {msg && <div className="tiny" style={{ marginTop: 10 }}>{msg}</div>}
-        <p className="tiny">اگر ربات را ادمین کانال کنی، کانال خودش ثبت می‌شود. Chat ID کانال منفی است و با ‎-100 شروع می‌شود.</p>
-      </Card>
-      <Card>
-        <div className="table-wrap">
-          <table>
-            <thead><tr><th>کانال</th><th>Chat ID</th><th>ادیت‌ها</th><th>وضعیت</th><th></th></tr></thead>
-            <tbody>
-              {items.map((channel) => (
-                <tr key={channel.id}>
-                  <td><b>{channel.title || "بدون عنوان"}</b><div className="tiny">{channel.username || channel.notes || ""}</div></td>
-                  <td className="muted">{channel.chat_id}</td>
-                  <td>{channel.posts_edited || 0}</td>
-                  <td><Badge tone={channel.enabled && channel.can_edit ? "ok" : "bad"}>{channel.can_edit ? (channel.enabled ? "فعال" : "خاموش") : "بدون دسترسی ادیت"}</Badge></td>
-                  <td className="row">
-                    <button className="btn" onClick={() => setEdit({ ...channel, ai_rewrite: channel.ai_rewrite ?? "" })}>تنظیم</button>
-                    <button className="btn-danger" onClick={async () => { if (confirm("کانال حذف شود؟")) { await api.delete(`/api/channels/${channel.id}`); load(); } }}>حذف</button>
-                  </td>
-                </tr>
-              ))}
-              {!items.length && <tr><td colSpan={5} className="tiny">هنوز کانالی نیست.</td></tr>}
-            </tbody>
-          </table>
+        <div className="mt-4 flex flex-wrap gap-2">
+          <Button variant="brand" onClick={add}>افزودن</Button>
+          <Button variant="outline" onClick={async () => { if (!form.chat_id) return; await api.post("/api/channels/sync", { chat_id: Number(form.chat_id) }); load(); }}>خواندن از تلگرام</Button>
         </div>
-      </Card>
-      {edit && (
-        <Modal title={edit.title || "تنظیم کانال"} onClose={() => setEdit(null)}>
-          <div className="grid cards-2">
-            <Field label="عنوان"><input value={edit.title || ""} onChange={(e) => setEdit({ ...edit, title: e.target.value })} /></Field>
-            <Field label="استایل"><select value={edit.style_id || ""} onChange={(e) => setEdit({ ...edit, style_id: e.target.value })}><option value="">خودکار بر اساس محتوا</option>{styles.map((s) => <option key={s.id} value={s.slug}>{s.name}</option>)}</select></Field>
-            <Field label="فوتر اختصاصی"><textarea value={edit.footer_text || ""} onChange={(e) => setEdit({ ...edit, footer_text: e.target.value })} /></Field>
-            <Field label="کلمات ممنوع، با ویرگول"><textarea value={edit.skip_keywords || ""} onChange={(e) => setEdit({ ...edit, skip_keywords: e.target.value })} /></Field>
-            <Field label="متن دکمه"><input value={edit.signature_text || ""} onChange={(e) => setEdit({ ...edit, signature_text: e.target.value })} /></Field>
-            <Field label="لینک دکمه"><input value={edit.signature_url || ""} onChange={(e) => setEdit({ ...edit, signature_url: e.target.value })} /></Field>
-            <Field label="حداقل کاراکتر"><input type="number" value={edit.min_chars || 1} onChange={(e) => setEdit({ ...edit, min_chars: e.target.value })} /></Field>
-            <Field label="تأخیر ادیت (ثانیه، خالی = سراسری)"><input value={edit.edit_delay_seconds ?? ""} onChange={(e) => setEdit({ ...edit, edit_delay_seconds: e.target.value })} /></Field>
+        {msg && <p className="mt-3 text-xs text-muted-foreground">{msg}</p>}
+      </div>
+
+      {items.length ? (
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>کانال</TableHead>
+              <TableHead>Chat ID</TableHead>
+              <TableHead>ادیت‌ها</TableHead>
+              <TableHead>وضعیت</TableHead>
+              <TableHead />
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {items.map((channel) => (
+              <TableRow key={channel.id}>
+                <TableCell>
+                  <b>{channel.title || "بدون عنوان"}</b>
+                  <div className="text-xs text-muted-foreground">{channel.username || channel.notes || ""}</div>
+                </TableCell>
+                <TableCell dir="ltr" className="text-muted-foreground">{channel.chat_id}</TableCell>
+                <TableCell numeric>{fa(channel.posts_edited || 0)}</TableCell>
+                <TableCell>
+                  <Badge variant={channel.enabled && channel.can_edit ? "success" : "destructive"}>
+                    {channel.can_edit ? (channel.enabled ? "فعال" : "خاموش") : "بدون دسترسی ادیت"}
+                  </Badge>
+                </TableCell>
+                <TableCell>
+                  <div className="flex flex-wrap gap-2">
+                    <Button size="sm" variant="outline" onClick={() => setEdit({ ...channel, ai_rewrite: channel.ai_rewrite ?? "" })}>تنظیم</Button>
+                    <Button size="sm" variant="destructive" onClick={async () => { if (confirm("کانال حذف شود؟")) { await api.delete(`/api/channels/${channel.id}`); load(); } }}>حذف</Button>
+                  </div>
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      ) : <EmptyState title="هنوز کانالی نیست" description="Chat ID را بالا وارد کن، یا ربات را ادمین کانال کن." />}
+
+      <Dialog open={!!edit} onOpenChange={(open) => !open && setEdit(null)} size="lg" title={edit?.title || "تنظیم کانال"}>
+        {edit && (
+          <div className="space-y-4">
+            <div className="grid gap-3 md:grid-cols-2">
+              <Field label="عنوان"><Input value={edit.title || ""} onChange={(e) => setEdit({ ...edit, title: e.target.value })} /></Field>
+              <Field label="استایل">
+                <Select
+                  value={edit.style_id || ""}
+                  onChange={(e) => setEdit({ ...edit, style_id: e.target.value })}
+                  options={[{ value: "", label: "خودکار بر اساس محتوا" }, ...styles.map((s) => ({ value: s.slug, label: s.name }))]}
+                />
+              </Field>
+              <Field label="فوتر اختصاصی"><Textarea value={edit.footer_text || ""} onChange={(e) => setEdit({ ...edit, footer_text: e.target.value })} /></Field>
+              <Field label="کلمات ممنوع، با ویرگول"><Textarea value={edit.skip_keywords || ""} onChange={(e) => setEdit({ ...edit, skip_keywords: e.target.value })} /></Field>
+              <Field label="متن دکمه"><Input value={edit.signature_text || ""} onChange={(e) => setEdit({ ...edit, signature_text: e.target.value })} /></Field>
+              <Field label="لینک دکمه"><Input dir="ltr" value={edit.signature_url || ""} onChange={(e) => setEdit({ ...edit, signature_url: e.target.value })} /></Field>
+              <Field label="حداقل کاراکتر"><Input type="number" value={edit.min_chars || 1} onChange={(e) => setEdit({ ...edit, min_chars: e.target.value })} /></Field>
+              <Field label="تأخیر ادیت (ثانیه، خالی = سراسری)"><Input value={edit.edit_delay_seconds ?? ""} onChange={(e) => setEdit({ ...edit, edit_delay_seconds: e.target.value })} /></Field>
+            </div>
+            <div className="grid gap-2 sm:grid-cols-2">
+              <Flag label="فعال" checked={!!edit.enabled} onChange={(v) => setEdit({ ...edit, enabled: v })} />
+              <Flag label="خوشگل‌سازی" checked={!!edit.auto_beautify} onChange={(v) => setEdit({ ...edit, auto_beautify: v })} />
+              <Flag label="ایموجی" checked={!!edit.emoji_replacement} onChange={(v) => setEdit({ ...edit, emoji_replacement: v })} />
+              <Flag label="حفظ دکمه‌ها" checked={!!edit.preserve_buttons} onChange={(v) => setEdit({ ...edit, preserve_buttons: v })} />
+            </div>
+            <Field label="هوش مصنوعی">
+              <Select
+                value={edit.ai_rewrite === "" ? "" : String(edit.ai_rewrite)}
+                onChange={(e) => setEdit({ ...edit, ai_rewrite: e.target.value === "" ? "" : e.target.value === "true" })}
+                options={[
+                  { value: "", label: "سراسری" },
+                  { value: "true", label: "اجباری" },
+                  { value: "false", label: "خاموش" },
+                ]}
+              />
+            </Field>
+            <Button variant="brand" onClick={save}>ذخیره کانال</Button>
           </div>
-          <div className="row" style={{ marginTop: 12 }}>
-            <button className="btn" onClick={() => setEdit({ ...edit, enabled: !edit.enabled })}>{edit.enabled ? "فعال" : "خاموش"}</button>
-            <button className="btn" onClick={() => setEdit({ ...edit, auto_beautify: !edit.auto_beautify })}>خوشگل‌سازی: {edit.auto_beautify ? "روشن" : "خاموش"}</button>
-            <button className="btn" onClick={() => setEdit({ ...edit, emoji_replacement: !edit.emoji_replacement })}>ایموجی: {edit.emoji_replacement ? "روشن" : "خاموش"}</button>
-            <button className="btn" onClick={() => setEdit({ ...edit, preserve_buttons: !edit.preserve_buttons })}>دکمه‌ها: {edit.preserve_buttons ? "حفظ" : "حذف"}</button>
-            <button className="btn" onClick={() => setEdit({ ...edit, ai_rewrite: edit.ai_rewrite === true ? false : edit.ai_rewrite === false ? "" : true })}>AI: {edit.ai_rewrite === "" ? "سراسری" : edit.ai_rewrite ? "اجباری" : "خاموش"}</button>
-          </div>
-          <button className="btn-gold" style={{ marginTop: 16 }} onClick={save}>ذخیره کانال</button>
-        </Modal>
-      )}
+        )}
+      </Dialog>
     </Page>
   );
 }

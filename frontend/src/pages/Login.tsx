@@ -1,67 +1,65 @@
-import { useState } from "react";
+import { FormEvent, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Icon } from "../icons";
+import { Sparkles } from "lucide-react";
 import api from "../services/api";
 import { useAuth } from "../stores/auth";
+import { Alert } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Field, Input } from "@/components/ui/input";
+import { PasswordInput } from "@/components/ui/password-input";
+import { Spinner } from "@/components/ui/spinner";
 
 export default function Login() {
-  const [username, setUsername] = useState("admin");
+  const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
-  const [show, setShow] = useState(false);
-  const [err, setErr] = useState("");
+  const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
-  const navigate = useNavigate();
   const setAuth = useAuth((s) => s.setAuth);
+  const navigate = useNavigate();
 
-  async function submit(e: React.FormEvent) {
-    e.preventDefault();
+  async function submit(event: FormEvent) {
+    event.preventDefault();
     setLoading(true);
-    setErr("");
+    setError("");
     try {
       const { data } = await api.post("/api/auth/login", { username, password });
       setAuth(data.access_token, data.username, data.role);
       navigate("/");
-    } catch (error: any) {
-      setErr(error.response?.data?.detail || "ورود انجام نشد. نام کاربری و رمز را دوباره بررسی کن.");
+    } catch (err: any) {
+      setError(err.response?.data?.detail || "ورود انجام نشد");
     } finally {
       setLoading(false);
     }
   }
 
   return (
-    <div className="login-wrap">
-      <aside className="login-aside">
-        <div className="brand">
-          <div className="mark" aria-hidden="true">خ</div>
-          <div><b>خوشگلاسیون</b><span>اتاق فرمان رتبه لند</span></div>
-        </div>
-        <h2>وضعیت ربات، کانال و ادیت‌ها اینجاست.</h2>
-        <p className="tiny">عدد ساختگی نشان داده نمی‌شود. اگر پستی پردازش نشده باشد، داشبورد خالی می‌ماند.</p>
-      </aside>
-      <div className="login-panel">
-        <form className="card login-card" onSubmit={submit}>
-          <div className="brand" style={{ marginBottom: 18 }}>
-            <div className="mark" aria-hidden="true">خ</div>
-            <div><h1 style={{ fontSize: 16, margin: 0 }}>ورود</h1><span>فقط ادمین پنل</span></div>
+    <div className="relative grid min-h-dvh place-items-center overflow-hidden bg-background px-4">
+      <div className="pointer-events-none absolute inset-0 bg-grid opacity-50 mask-radial" />
+      <div className="pointer-events-none absolute inset-x-0 top-0 h-72 bg-[radial-gradient(ellipse_at_top,oklch(from_var(--brand)_l_c_h/28%),transparent_70%)]" />
+      <Card className="relative w-full max-w-md border-border/80 bg-card/90 shadow-2xl backdrop-blur">
+        <CardHeader>
+          <div className="mb-3 flex size-11 items-center justify-center rounded-2xl bg-brand text-brand-foreground">
+            <Sparkles className="size-5" />
           </div>
-          {err && <div className="alert danger" role="alert" tabIndex={-1} style={{ marginBottom: 12 }}>{err}</div>}
-          <div className="grid">
-            <label className="field">
-              <span>نام کاربری</span>
-              <input id="username" name="username" autoComplete="username" value={username} onChange={(e) => setUsername(e.target.value)} />
-            </label>
-            <label className="field">
-              <span>رمز عبور</span>
-              <input id="password" name="password" autoComplete="current-password" type={show ? "text" : "password"} value={password} onChange={(e) => setPassword(e.target.value)} />
-            </label>
-          </div>
-          <button className="btn" type="button" style={{ marginTop: 8 }} onClick={() => setShow((value) => !value)} aria-pressed={show}>
-            <Icon name={show ? "eyeOff" : "eye"} />{show ? "پنهان کردن رمز" : "نمایش رمز"}
-          </button>
-          <button className="btn-gold" style={{ width: "100%", marginTop: 12 }} disabled={loading} aria-busy={loading}>{loading ? "در حال ورود..." : "ورود"}</button>
-          <p className="tiny" style={{ textAlign: "center" }}>رمز اولیه همان ADMIN_SECRET روی Railway است.</p>
-        </form>
-      </div>
+          <CardTitle>ورود به خوشگلاسیون</CardTitle>
+          <CardDescription>پست‌های کانال همین‌جا آرایش می‌شوند. عدد و رتبه دست نمی‌خورند.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <form className="space-y-4" onSubmit={submit}>
+            <Field label="نام کاربری">
+              <Input autoComplete="username" value={username} onChange={(e) => setUsername(e.target.value)} />
+            </Field>
+            <Field label="رمز عبور">
+              <PasswordInput autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} />
+            </Field>
+            {error && <Alert variant="destructive">{error}</Alert>}
+            <Button type="submit" variant="brand" className="w-full" disabled={loading}>
+              {loading ? <Spinner size="sm" className="text-brand-foreground" label="در حال ورود" /> : "ورود"}
+            </Button>
+          </form>
+        </CardContent>
+      </Card>
     </div>
   );
 }

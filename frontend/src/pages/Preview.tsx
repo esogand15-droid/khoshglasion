@@ -1,6 +1,14 @@
 import { useEffect, useState } from "react";
 import api from "../services/api";
-import { DiffList, Page, TelegramPreview } from "../components";
+import { Page } from "../components/page";
+import { Alert } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Select } from "@/components/ui/select";
+import { Spinner } from "@/components/ui/spinner";
+import { Textarea } from "@/components/ui/textarea";
+import { DiffList, TelegramPreview } from "@/lib/telegram";
 
 const SAMPLE = "هر کتابی که معروفه لزوماً برای تو مناسب نیست.\nیکی از مهم‌ترین تصمیم‌ها توی مسیر کنکور، انتخاب منبعیه که با سطح، هدف و زمان مطالعه‌ات هماهنگ باشه.";
 
@@ -23,21 +31,41 @@ export default function Preview() {
   }
 
   return (
-    <Page kicker="قبل از کانال" title="میز آزمایش" actions={<button className="btn-gold" onClick={run} disabled={loading}>{loading ? "در حال کار..." : "اجرا"}</button>}>
-      <div className="row">
-        <select style={{ maxWidth: 260 }} value={channelId} onChange={(e) => setChannelId(e.target.value)}>
-          <option value="">استایل خودکار</option>
-          {channels.map((c) => <option key={c.id} value={c.id}>{c.title || c.chat_id}</option>)}
-        </select>
-        <label className="check"><input type="checkbox" checked={isCaption} onChange={(e) => setIsCaption(e.target.checked)} /> کپشن</label>
-        <label className="check"><input type="checkbox" checked={useAi} onChange={(e) => setUseAi(e.target.checked)} /> بازنویسی هوشمند</label>
+    <Page
+      kicker="قبل از کانال"
+      title="میز آزمایش"
+      description="خروجی را پیش از انتشار ببین. نقل‌قول و لینک در حباب دیده می‌شوند؛ انیمیشن ایموجی فقط داخل تلگرام پخش می‌شود."
+      actions={<Button variant="brand" onClick={run} disabled={loading}>{loading ? <Spinner size="sm" className="text-brand-foreground" label="در حال کار" /> : "اجرا"}</Button>}
+    >
+      <div className="flex flex-wrap items-center gap-4">
+        <div className="w-full max-w-xs">
+          <Select
+            value={channelId}
+            onChange={(e) => setChannelId(e.target.value)}
+            options={[{ value: "", label: "استایل خودکار" }, ...channels.map((c) => ({ value: c.id, label: c.title || String(c.chat_id) }))]}
+          />
+        </div>
+        <Checkbox checked={isCaption} onCheckedChange={setIsCaption} label="کپشن" />
+        <Checkbox checked={useAi} onCheckedChange={setUseAi} label="بازنویسی هوشمند" />
       </div>
-      <textarea value={text} onChange={(e) => setText(e.target.value)} rows={8} />
-      {result?.error && <div className="alert danger">{result.error}</div>}
+      <Textarea value={text} onChange={(e) => setText(e.target.value)} rows={8} />
+      {result?.error && <Alert variant="destructive">{result.error}</Alert>}
       {result && !result.error && (
-        <div className="split">
-          <div className="card"><h3>اصل</h3><div className="preview-paper">{result.original}</div></div>
-          <div className="card"><h3>خروجی · {result.category}</h3><TelegramPreview html={result.html_formatted} plain={result.formatted} /><div className="tiny">تصمیم: {result.strategy || "—"}{result.ai_used ? " · بازنویسی شد" : " · بدون بازنویسی"}</div><div className="tiny">{result.applied_rules?.join(" · ")}</div>{result.warnings?.length > 0 && <div className="alert warn">{result.warnings.join(" · ")}</div>}<div className="tiny">نقل‌قول، لینک عضویت و ایموجی پرمیوم در همین حباب دیده می‌شوند. انیمیشن ایموجی فقط داخل تلگرام پخش می‌شود.</div><DiffList rows={result.diff} /></div>
+        <div className="grid gap-4 lg:grid-cols-2">
+          <Card>
+            <CardHeader><CardTitle>اصل</CardTitle></CardHeader>
+            <CardContent><div className="whitespace-pre-wrap text-sm">{result.original}</div></CardContent>
+          </Card>
+          <Card>
+            <CardHeader><CardTitle>خروجی · {result.category}</CardTitle></CardHeader>
+            <CardContent className="space-y-3">
+              <TelegramPreview html={result.html_formatted} plain={result.formatted} />
+              <p className="text-xs text-muted-foreground">تصمیم: {result.strategy || "—"}{result.ai_used ? " · بازنویسی شد" : " · بدون بازنویسی"}</p>
+              <p className="text-xs text-muted-foreground">{result.applied_rules?.join(" · ")}</p>
+              {result.warnings?.length > 0 && <Alert variant="warning">{result.warnings.join(" · ")}</Alert>}
+              <DiffList rows={result.diff} />
+            </CardContent>
+          </Card>
         </div>
       )}
     </Page>

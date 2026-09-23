@@ -1,123 +1,173 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
-import { Icon, IconName } from "../icons";
+import {
+  Activity,
+  FlaskConical,
+  LayoutDashboard,
+  LogOut,
+  Megaphone,
+  Menu,
+  MessagesSquare,
+  ScrollText,
+  Settings,
+  Smile,
+  SwatchBook,
+} from "lucide-react";
 import api from "../services/api";
 import { useAuth } from "../stores/auth";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Sheet } from "@/components/ui/sheet";
+import { Sidebar, SidebarGroup, SidebarItem } from "@/components/ui/sidebar";
+import { cn } from "@/lib/utils";
 
-const NAV: { to: string; label: string; icon: IconName }[] = [
-  { to: "/", label: "داشبورد", icon: "grid" },
-  { to: "/channels", label: "کانال‌ها", icon: "channels" },
-  { to: "/messages", label: "پیام‌ها", icon: "messages" },
-  { to: "/emojis", label: "ایموجی پرمیوم", icon: "emoji" },
-  { to: "/styles", label: "استایل و فوتر", icon: "styles" },
-  { to: "/preview", label: "میز آزمایش", icon: "preview" },
-  { to: "/health", label: "سلامت و وبهوک", icon: "health" },
-  { to: "/settings", label: "اتاق تنظیم", icon: "settings" },
-  { to: "/audit", label: "ردپا", icon: "audit" },
+const NAV = [
+  { to: "/", label: "خانه", icon: LayoutDashboard, end: true },
+  { to: "/channels", label: "کانال‌ها", icon: Megaphone },
+  { to: "/messages", label: "پیام‌ها", icon: MessagesSquare },
+  { to: "/styles", label: "استایل‌ها", icon: SwatchBook },
+  { to: "/emojis", label: "ایموجی", icon: Smile },
+  { to: "/preview", label: "آزمایش", icon: FlaskConical },
+  { to: "/health", label: "سلامت", icon: Activity },
+  { to: "/audit", label: "ردپا", icon: ScrollText },
+  { to: "/settings", label: "تنظیمات", icon: Settings },
 ];
 
-export default function Layout() {
-  const { username, logout } = useAuth();
-  const navigate = useNavigate();
+function NavItems({ onPick }: { onPick?: () => void }) {
   const location = useLocation();
-  const mainRef = useRef<HTMLElement>(null);
-  const [overview, setOverview] = useState<any>(null);
-  const [paused, setPaused] = useState(false);
-  const [updatedAt, setUpdatedAt] = useState<Date | null>(null);
-  const [stale, setStale] = useState(false);
+  const navigate = useNavigate();
+  return (
+    <>
+      <SidebarItem
+        icon={NAV[0].icon}
+        label={NAV[0].label}
+        href="/"
+        active={location.pathname === "/"}
+        onClick={(event) => {
+          event.preventDefault();
+          navigate("/");
+          onPick?.();
+        }}
+      />
+      <SidebarGroup title="کار روزانه">
+        {NAV.slice(1, 6).map((item) => (
+          <SidebarItem
+            key={item.to}
+            icon={item.icon}
+            label={item.label}
+            href={item.to}
+            active={location.pathname.startsWith(item.to)}
+            onClick={(event) => {
+              event.preventDefault();
+              navigate(item.to);
+              onPick?.();
+            }}
+          />
+        ))}
+      </SidebarGroup>
+      <SidebarGroup title="عملیات">
+        {NAV.slice(6).map((item) => (
+          <SidebarItem
+            key={item.to}
+            icon={item.icon}
+            label={item.label}
+            href={item.to}
+            active={location.pathname.startsWith(item.to)}
+            onClick={(event) => {
+              event.preventDefault();
+              navigate(item.to);
+              onPick?.();
+            }}
+          />
+        ))}
+      </SidebarGroup>
+    </>
+  );
+}
+
+export default function Layout() {
+  const username = useAuth((s) => s.username);
+  const role = useAuth((s) => s.role);
+  const logout = useAuth((s) => s.logout);
+  const navigate = useNavigate();
+  const [status, setStatus] = useState<any>(null);
+  const [open, setOpen] = useState(false);
 
   useEffect(() => {
-    mainRef.current?.focus();
-  }, [location.pathname]);
-
-  useEffect(() => {
-    let stop = false;
-    const load = () => api.get("/api/system/overview").then((r) => {
-      if (stop) return;
-      setOverview(r.data);
-      setUpdatedAt(new Date());
-      setStale(false);
-    }).catch(() => { if (!stop) setStale(true); });
-    load();
-    if (paused) return () => { stop = true; };
-    const id = setInterval(load, 20000);
-    return () => { stop = true; clearInterval(id); };
-  }, [paused]);
-
-  useEffect(() => {
-    if (!updatedAt || paused) return;
-    const id = setTimeout(() => setStale(true), 60000);
-    return () => clearTimeout(id);
-  }, [updatedAt, paused]);
-
-  const health = overview?.health;
-  const runtime = overview?.runtime;
-  const flags = overview ? [
-    { ok: !!health?.external_database, text: health?.external_database ? "Postgres پایدار" : "SQLite موقت" },
-    { ok: health?.bot === "connected", text: health?.bot === "connected" ? "بات آنلاین" : "بات قطع" },
-    { ok: !!runtime?.ai_ready, warn: !runtime?.ai_ready, text: runtime?.ai_ready ? "هوش مصنوعی آماده" : "هوش مصنوعی خاموش" },
-    { ok: !runtime?.kill_switch, text: runtime?.kill_switch ? "توقف اضطراری" : "پردازش روشن" },
-    ...(runtime?.dry_run ? [{ ok: false, warn: true, text: "حالت آزمایشی" }] : []),
-  ] : [];
-  const live = Boolean(overview && updatedAt && !stale && !paused);
-  const clock = updatedAt ? updatedAt.toLocaleTimeString("fa-IR") : "—";
-  const liveText = paused
-    ? `به‌روزرسانی متوقف است. آخرین داده ${clock}`
-    : stale
-      ? `وضعیت کهنه است. آخرین داده ${clock}`
-      : live
-        ? `وضعیت زنده تا ${clock}`
-        : "در حال خواندن وضعیت";
+    api.get("/api/system/health").then((r) => setStatus(r.data)).catch(() => {});
+  }, []);
 
   return (
-    <div className="app-shell">
-      <a className="skip" href="#content">پرش به محتوا</a>
-      <aside className="sidebar">
-        <div className="brand">
-          <div className="mark" aria-hidden="true">خ</div>
-          <div>
-            <b>خوشگلاسیون</b>
-            <span>اتاق فرمان رتبه لند</span>
+    <div className="flex min-h-dvh bg-background text-foreground">
+      <div className="hidden lg:block">
+      <Sidebar
+        className="h-dvh rounded-none border-0 border-e"
+        header={<span className="text-sm font-bold">خوشگلاسیون</span>}
+        footer={
+          <div className="flex items-center justify-between gap-2">
+            <div className="min-w-0">
+              <p className="truncate text-sm font-medium">{username || "ادمین"}</p>
+              <p className="text-[11px] text-muted-foreground">{role || "ADMIN"}</p>
+            </div>
+            <Button
+              variant="ghost"
+              size="icon"
+              aria-label="خروج"
+              onClick={() => {
+                logout();
+                navigate("/login");
+              }}
+            >
+              <LogOut />
+            </Button>
           </div>
-        </div>
-        <nav className="nav" aria-label="اصلی">
+        }
+      >
+        <NavItems />
+      </Sidebar>
+      </div>
+
+      <div className="flex min-w-0 flex-1 flex-col">
+        <header className="flex h-14 items-center justify-between gap-3 border-b border-border px-4 sm:px-6">
+          <div className="flex items-center gap-2">
+            <Button variant="ghost" size="icon" className="lg:hidden" aria-label="منو" onClick={() => setOpen(true)}>
+              <Menu />
+            </Button>
+            <span className="text-sm font-bold lg:hidden">خوشگلاسیون</span>
+          </div>
+          <div className="flex flex-wrap items-center justify-end gap-1.5">
+            <Badge variant={status?.bot === "connected" ? "success" : "destructive"}>{status?.bot === "connected" ? "بات زنده" : "بات قطع"}</Badge>
+            <Badge variant={status?.database === "connected" ? "success" : "destructive"}>{status?.external_database ? "Postgres" : "دیتابیس"}</Badge>
+            {status?.dry_run && <Badge variant="warning">آزمایشی</Badge>}
+            {status?.kill_switch && <Badge variant="destructive">توقف</Badge>}
+          </div>
+        </header>
+        <main className="flex-1 p-4 sm:p-6">
+          <Outlet />
+        </main>
+      </div>
+
+      <Sheet open={open} onOpenChange={setOpen} title="خوشگلاسیون" side="start">
+        <nav className="space-y-1">
           {NAV.map((item) => (
-            <NavLink key={item.to} to={item.to} end={item.to === "/"} className={({ isActive }) => isActive ? "active" : ""}>
-              <Icon name={item.icon} />{item.label}
+            <NavLink
+              key={item.to}
+              to={item.to}
+              end={item.end}
+              onClick={() => setOpen(false)}
+              className={({ isActive }) =>
+                cn(
+                  "flex items-center gap-2 rounded-lg px-3 py-2 text-sm text-muted-foreground hover:bg-accent hover:text-foreground",
+                  isActive && "bg-accent font-medium text-foreground",
+                )
+              }
+            >
+              <item.icon className="size-4" />
+              {item.label}
             </NavLink>
           ))}
         </nav>
-        <div className="side-foot">
-          <div className="tiny">{username} · {health?.bot_info?.username ? `@${health.bot_info.username}` : "ربات وصل نیست"}</div>
-          <button className="btn-danger" onClick={() => { logout(); navigate("/login"); }}><Icon name="logout" />خروج</button>
-        </div>
-      </aside>
-      <main className="main" id="content" tabIndex={-1} ref={mainRef}>
-        <nav className="mobile-nav" aria-label="اصلی">
-          {NAV.map((item) => (
-            <NavLink key={item.to} to={item.to} end={item.to === "/"} className={({ isActive }) => isActive ? "active" : ""}>
-              <Icon name={item.icon} />{item.label}
-            </NavLink>
-          ))}
-        </nav>
-        <section className="status-bar" aria-label="وضعیت عملیات">
-          <div className="status-flags">
-            {flags.map((flag) => (
-              <span key={flag.text} className={`pill ${flag.ok ? "ok" : flag.warn ? "warn" : "bad"}`}>
-                <Icon name={flag.ok ? "check" : flag.warn ? "warn" : "x"} />{flag.text}
-              </span>
-            ))}
-            {!overview && <span className="pill warn"><Icon name="warn" />وضعیت هنوز نرسیده</span>}
-          </div>
-          <div className="status-meta">
-            <div className="live-label" role="status"><strong>{live ? "زنده" : paused ? "متوقف" : "کهنه"}</strong> · {liveText}</div>
-            <button className="btn" type="button" onClick={() => setPaused((value) => !value)} aria-pressed={paused}>
-              <Icon name={paused ? "play" : "pause"} />{paused ? "ادامه به‌روزرسانی" : "توقف به‌روزرسانی"}
-            </button>
-          </div>
-        </section>
-        <Outlet />
-      </main>
+      </Sheet>
     </div>
   );
 }
