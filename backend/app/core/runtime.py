@@ -31,6 +31,8 @@ RUNTIME_KEYS = (
     "admin_telegram_ids",
     "premium_mode",
     "default_footer",
+    "footer_url",
+    "support_username",
 )
 
 _cache: dict = {"ts": 0.0, "data": None}
@@ -94,6 +96,8 @@ class RuntimeState:
     admin_telegram_ids: str
     premium_mode: str
     default_footer: str
+    footer_url: str = "https://t.me/Rotbeland1"
+    support_username: str = "Rotbeland_support"
 
     @property
     def admin_ids(self) -> list[int]:
@@ -149,6 +153,8 @@ def runtime_from_mapping(settings: Settings, mapping: dict[str, str | None]) -> 
         admin_telegram_ids=(raw("admin_telegram_ids") if raw("admin_telegram_ids") is not None else settings.admin_telegram_ids) or "",
         premium_mode=((raw("premium_mode") if raw("premium_mode") is not None else settings.premium_mode) or "auto").lower(),
         default_footer=(raw("default_footer") if raw("default_footer") is not None else "") or "",
+        footer_url=(raw("footer_url") or "https://t.me/Rotbeland1"),
+        support_username=(raw("support_username") or "Rotbeland_support").lstrip("@"),
     )
 
 
@@ -192,6 +198,8 @@ def env_seed_values(settings: Settings | None = None) -> dict[str, str]:
         "admin_telegram_ids": settings.admin_telegram_ids or "",
         "premium_mode": settings.premium_mode or "auto",
         "default_footer": "",
+        "footer_url": "https://t.me/Rotbeland1",
+        "support_username": "Rotbeland_support",
     }
     return values
 

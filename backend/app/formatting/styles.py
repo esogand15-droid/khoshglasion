@@ -4,9 +4,9 @@ import json
 DIVIDER = "━━━━━━━━━━━━"
 
 DEFAULT_FOOTER = (
-    "🎓 مشاوره تخصصی کنکور\n"
-    "📍 عضویت در کانال مشاوره رتبه لند\n"
-    "👩‍💻 رزرو مشاوره خصوصی: @Rotbeland_support"
+    "عضویت در کانال مشاوره رتبه لند\n"
+    "رزرو مشاوره خصوصی:\n"
+    "\u200e@Rotbeland_support"
 )
 
 
@@ -54,6 +54,12 @@ def style_for_category(category: str) -> str:
         "consulting": "educational",
         "rank": "premium",
         "discount": "premium",
+        "solution": "exam",
+        "experience": "premium",
+        "service": "educational",
+        "class_intro": "announcement",
+        "product": "premium",
+        "occasion": "motivational",
     }
     return mapping.get(category, "educational")
 

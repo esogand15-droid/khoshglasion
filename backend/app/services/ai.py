@@ -24,6 +24,8 @@ from backend.app.formatting.textutil import (
     missing_protected_tokens,
     restore_protected_tokens,
 )
+from backend.app.services.prompts import SYSTEM_PROMPT, wrap_post
+from backend.app.services.retry import retry_wait_seconds, should_retry_status
 
 logger = logging.getLogger(__name__)
 
@@ -43,18 +45,6 @@ CATEGORY_HINTS = {
     "general": "ساختار خوانا بده: تیتر کوتاه، بدنه، و در صورت نیاز بولت.",
 }
 
-SYSTEM_PROMPT = """تو ویراستار کانال تلگرام «رتبه لند» هستی؛ کانال مشاوره کنکور.
-متن ادمین را خوشگل، خوانا و طبیعی کن. واقعیت را عوض نکن.
-
-قانون‌های سخت:
-- عدد، تاریخ، درصد، قیمت، اسم شخص، اسم کتاب، لینک، @یوزرنیم و هشتگ را حذف یا عوض نکن.
-- ادعا، خبر یا توصیهٔ تازه اختراع نکن. اگر متن کوتاه است، زیادش نکن.
-- لحن: صمیمی، دقیق، کنکوری. کلیشه و شعار توخالی ننویس.
-- ایموجی یونیکد را فقط در تیتر و چند نقطهٔ کلیدی بگذار، نه ته هر خط.
-- فوتر کانال، خط ━ و دعوت عضویت را ننویس؛ سیستم جدا اضافه می‌کند.
-- فقط متن نهایی را برگردان. توضیح، مارک‌داون کد و پیشوند «بازنویسی» ممنوع.
-- از الگوهای تکراری پست‌های قبلی فاصله بگیر، ولی معنی این پست را حفظ کن."""
-
 
 def _content_hash(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
@@ -62,12 +52,15 @@ def _content_hash(text: str) -> str:
 
 def _record_output(text: str) -> None:
     _recent_hashes.append(_content_hash(text))
+    opening = (text or "").strip().split("\n", 1)[0][:80]
+    if opening:
+        _recent_hashes.append("open:" + _content_hash(opening))
     del _recent_hashes[:-_MAX_HISTORY]
 
 
 def build_messages(text: str, category: str, previous_context: str = "", extra_variation: bool = False) -> list[dict]:
     hint = CATEGORY_HINTS.get(category, CATEGORY_HINTS["general"])
-    user = f"{hint}\n\nمتن اصلی:\n{text}"
+    user = f"{hint}\n\nمتن اصلی:\n{wrap_post(text)}"
     if previous_context:
         user += f"\n\nبرای اینکه این پست شبیه پست قبلی نشود، فقط لحن و چینش را عوض کن. پست قبلی این بود:\n{previous_context[:280]}"
     if extra_variation:
@@ -78,7 +71,7 @@ def build_messages(text: str, category: str, previous_context: str = "", extra_v
     ]
 
 
-def accept_ai_output(original: str, raw: str | None, limit: int) -> tuple[str | None, str]:
+def accept_ai_output(original: str, raw: str | None, limit: int, required: list[str] | None = None) -> tuple[str | None, str]:
     cleaned = clean_ai_output(raw)
     if not cleaned or len(cleaned) < 8:
         return None, "empty"
@@ -90,6 +83,9 @@ def accept_ai_output(original: str, raw: str | None, limit: int) -> tuple[str | 
         return None, "too_short"
     if missing_long_numbers(original, cleaned):
         return None, "dropped_numbers"
+    for item in required or []:
+        if item and item not in cleaned and f"«{item}»" not in cleaned:
+            return None, "dropped_quote"
     missing = missing_protected_tokens(original, cleaned)
     if missing:
         cleaned = restore_protected_tokens(cleaned, missing)
@@ -119,16 +115,39 @@ def _provider_call(runtime: RuntimeState, messages: list[dict], temperature: flo
 async def _call_model(runtime: RuntimeState, messages: list[dict], temperature: float) -> str | None:
     url, spec = _provider_call(runtime, messages, temperature)
     timeout = httpx.Timeout(45.0, connect=10.0)
+    last_error: Exception | None = None
     async with httpx.AsyncClient(timeout=timeout) as client:
-        response = await client.post(url, json=spec["payload"], headers=spec["headers"])
-        if response.status_code >= 400:
-            raise httpx.HTTPStatusError(
-                format_http_error(response.status_code, response.text, url, spec["provider"], runtime.ai_api_key),
-                request=response.request,
-                response=response,
-            )
-        text, _reason = extract_message_text(response.json())
-        return text
+        for attempt in range(3):
+            try:
+                response = await client.post(url, json=spec["payload"], headers=spec["headers"])
+            except httpx.TimeoutException as exc:
+                last_error = exc
+                if attempt == 2:
+                    raise
+                await _sleep_retry(attempt, None)
+                continue
+            if response.status_code >= 400:
+                if should_retry_status(response.status_code) and attempt < 2:
+                    hinted = response.headers.get("retry-after")
+                    await _sleep_retry(attempt, hinted)
+                    continue
+                raise httpx.HTTPStatusError(
+                    format_http_error(response.status_code, response.text, url, spec["provider"], runtime.ai_api_key),
+                    request=response.request,
+                    response=response,
+                )
+            text, _reason = extract_message_text(response.json())
+            return text
+    if last_error:
+        raise last_error
+    return None
+
+
+async def _sleep_retry(attempt: int, retry_after: str | None) -> None:
+    import asyncio
+    wait = retry_wait_seconds(attempt, float(retry_after) if retry_after and retry_after.replace(".", "", 1).isdigit() else None)
+    logger.info("AI provider blip, retrying in %.1fs", wait)
+    await asyncio.sleep(wait)
 
 
 async def enhance_with_ai(
@@ -137,6 +156,7 @@ async def enhance_with_ai(
     previous_context: str = "",
     runtime: RuntimeState | None = None,
     limit: int = 3600,
+    required: list[str] | None = None,
 ) -> Optional[str]:
     if runtime is None or not runtime.ai_ready:
         return None
@@ -146,12 +166,14 @@ async def enhance_with_ai(
     messages = build_messages(text, category, previous_context)
     try:
         raw = await _call_model(runtime, messages, runtime.ai_temperature)
-        accepted, reason = accept_ai_output(text, raw, limit)
-        if accepted and _content_hash(accepted) in _recent_hashes:
+        accepted, reason = accept_ai_output(text, raw, limit, required)
+        opening = _content_hash((accepted or "").strip().split("\n", 1)[0][:80]) if accepted else ""
+        repeated = bool(accepted) and (_content_hash(accepted) in _recent_hashes or f"open:{opening}" in _recent_hashes)
+        if repeated:
             logger.info("AI output repeated a recent post; retrying once")
             messages = build_messages(text, category, previous_context, extra_variation=True)
             raw = await _call_model(runtime, messages, min(0.95, runtime.ai_temperature + 0.15))
-            accepted, reason = accept_ai_output(text, raw, limit)
+            accepted, reason = accept_ai_output(text, raw, limit, required)
         if not accepted:
             logger.info("AI output rejected: %s", reason)
             return None

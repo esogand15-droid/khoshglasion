@@ -21,3 +21,7 @@ class PreviewResponse(BaseModel):
     style: str
     applied_rules: list[str]
     warnings: list[str]
+    decision: dict | None = None
+    ai_used: bool = False
+    strategy: str | None = None
+    diff: list[dict] = []

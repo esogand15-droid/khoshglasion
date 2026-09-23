@@ -23,24 +23,31 @@ class PasswordChange(BaseModel):
     new_password: str
 
 
-def _too_many(ip: str) -> bool:
+def login_is_blocked(ip: str) -> bool:
     now = time.time()
     window = [stamp for stamp in _attempts.get(ip, []) if now - stamp < 600]
     _attempts[ip] = window
-    if len(window) >= 8:
-        return True
-    window.append(now)
-    return False
+    return len(window) >= 8
+
+
+def note_login_failure(ip: str) -> None:
+    _attempts.setdefault(ip, []).append(time.time())
+
+
+def clear_login_failures(ip: str) -> None:
+    _attempts.pop(ip, None)
 
 
 @router.post("/login", response_model=LoginResponse)
 async def login(payload: LoginRequest, request: Request, db: AsyncSession = Depends(get_db)):
     ip = request.client.host if request.client else "unknown"
-    if _too_many(ip):
+    if login_is_blocked(ip):
         raise HTTPException(status_code=429, detail="تلاش زیاد. چند دقیقه بعد دوباره وارد شو.")
     admin = (await db.execute(select(Admin).where(Admin.username == payload.username))).scalar_one_or_none()
     if not admin or not verify_password(payload.password, admin.password_hash):
+        note_login_failure(ip)
         raise HTTPException(status_code=401, detail="نام کاربری یا رمز اشتباه است")
+    clear_login_failures(ip)
     admin.last_login_at = datetime.now(timezone.utc)
     await write_audit(db, admin=admin, action="login", resource="auth", ip_address=ip)
     token = create_token({"sub": admin.username, "role": admin.role})

@@ -8,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.core.runtime import RuntimeState, load_runtime, save_runtime_values
+from backend.app.formatting.richtext import role_for_raw_entity
 from backend.app.formatting.textutil import utf16_slice
 from backend.app.models.emoji import EmojiMapping
 from backend.app.telegram.bot import get_bot
@@ -60,9 +61,13 @@ async def capture_custom_emoji(db: AsyncSession, message: dict) -> int:
         custom_id = str(entity.get("custom_emoji_id") or "")
         if not custom_id.isdigit():
             continue
-        emoji = utf16_slice(text, int(entity.get("offset") or 0), int(entity.get("length") or 0))
+        offset = int(entity.get("offset") or 0)
+        length = int(entity.get("length") or 0)
+        emoji = utf16_slice(text, offset, length)
         if not emoji:
             continue
+        role = role_for_raw_entity(text, entity)
+        category = role if role in {"divider", "membership", "support"} else None
         existing = (
             await db.execute(
                 select(EmojiMapping).where(
@@ -74,12 +79,16 @@ async def capture_custom_emoji(db: AsyncSession, message: dict) -> int:
         if existing:
             existing.enabled = True
             existing.source = existing.source or "capture"
+            if category and not existing.category:
+                existing.category = category
+                existing.priority = max(existing.priority or 0, 90)
             continue
         db.add(EmojiMapping(
             unicode_emoji=emoji,
             custom_emoji_id=custom_id,
             enabled=True,
-            priority=80,
+            category=category,
+            priority=90 if category else 80,
             source="capture",
             label="گرفته‌شده از فوروارد",
         ))

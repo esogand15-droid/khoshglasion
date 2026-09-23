@@ -1,13 +1,24 @@
+import json
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import desc, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.db.base import get_db
+from backend.app.formatting.diff import line_diff
 from backend.app.models.message_log import MessageLog
 from backend.app.security.deps import get_current_admin
 from backend.app.telegram.pipeline import reprocess_log
 
 router = APIRouter(prefix="/api/messages", tags=["messages"])
+
+
+def _meta(row: MessageLog) -> dict:
+    try:
+        parsed = json.loads(row.meta or "{}")
+    except json.JSONDecodeError:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
 
 
 def dump_message(row: MessageLog, full: bool = False) -> dict:
@@ -35,6 +46,9 @@ def dump_message(row: MessageLog, full: bool = False) -> dict:
         "edit_method": row.edit_method,
         "created_at": row.created_at.isoformat() if row.created_at else None,
         "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+        "decision": _meta(row).get("decision") if full else None,
+        "selection": _meta(row).get("selection") if full else None,
+        "diff": line_diff(row.original_text, row.formatted_text) if full else None,
     }
 
 

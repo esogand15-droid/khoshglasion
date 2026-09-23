@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, TelegramNetworkError, TelegramRetryAfter
 from aiogram.types import InlineKeyboardMarkup
@@ -50,6 +51,13 @@ def merge_signature(raw: dict | None, text: str | None, url: str | None) -> dict
     return {"inline_keyboard": keyboard}
 
 
+def strip_custom_emoji_html(html_text: str | None) -> str | None:
+    if not html_text:
+        return None
+    stripped = re.sub(r"<tg-emoji\b[^>]*>(.*?)</tg-emoji>", r"\1", html_text, flags=re.DOTALL)
+    return stripped if "<" in stripped else None
+
+
 def is_emoji_rejection(message: str) -> bool:
     lowered = (message or "").lower()
     return any(hint in lowered for hint in EMOJI_ERROR_HINTS)
@@ -70,8 +78,10 @@ async def edit_telegram_message(
         return {"ok": False, "error": "bot not configured"}
 
     markup = markup_from_raw(reply_markup)
+    formatting_html = strip_custom_emoji_html(html_text)
     attempts = [
         ("bot_html", html_text, "HTML") if prefer_html and html_text else None,
+        ("bot_html_text", formatting_html, "HTML") if formatting_html and formatting_html != html_text else None,
         ("bot_plain", text, None),
     ]
     attempts = [item for item in attempts if item]
@@ -112,7 +122,7 @@ async def edit_telegram_message(
                 if method == "bot_html" and is_emoji_rejection(msg):
                     emoji_rejected = True
                     last_error = msg
-                    logger.warning("Custom emoji rejected, falling back to plain text: %s", msg)
+                    logger.warning("Custom emoji rejected; keeping quote and links: %s", msg)
                     break
                 return {"ok": False, "error": msg, "method": method, "emoji_rejected": emoji_rejected}
             except TelegramForbiddenError as exc:

@@ -59,33 +59,79 @@ async def close_user_client() -> None:
         _client = None
 
 
-def _entities(text: str, spans: list[tuple[int, int, str]]):
-    from telethon.tl.types import MessageEntityCustomEmoji
+def _entities(text: str, spans: list[tuple[int, int, str]] | None = None, formatted: list[dict] | None = None):
+    from telethon.tl.types import (
+        MessageEntityBlockquote,
+        MessageEntityBold,
+        MessageEntityCode,
+        MessageEntityCustomEmoji,
+        MessageEntityItalic,
+        MessageEntityPre,
+        MessageEntitySpoiler,
+        MessageEntityStrike,
+        MessageEntityTextUrl,
+        MessageEntityUnderline,
+    )
 
-    entities = []
-    for start, end, custom_id in spans:
+    built = []
+    if formatted:
+        for item in formatted:
+            start = int(item.get("offset") or 0)
+            length = int(item.get("length") or 0)
+            if length <= 0:
+                continue
+            offset = utf16_len(text[:start])
+            utf_length = utf16_len(text[start:start + length])
+            if utf_length <= 0:
+                continue
+            kind = item.get("type")
+            if kind == "custom_emoji" and str(item.get("custom_emoji_id") or "").isdigit():
+                built.append(MessageEntityCustomEmoji(offset=offset, length=utf_length, document_id=int(item["custom_emoji_id"])))
+            elif kind == "text_link" and item.get("url"):
+                built.append(MessageEntityTextUrl(offset=offset, length=utf_length, url=str(item["url"])))
+            elif kind == "blockquote":
+                built.append(MessageEntityBlockquote(offset=offset, length=utf_length, collapsed=False))
+            elif kind == "expandable_blockquote":
+                built.append(MessageEntityBlockquote(offset=offset, length=utf_length, collapsed=True))
+            elif kind == "bold":
+                built.append(MessageEntityBold(offset=offset, length=utf_length))
+            elif kind == "italic":
+                built.append(MessageEntityItalic(offset=offset, length=utf_length))
+            elif kind == "underline":
+                built.append(MessageEntityUnderline(offset=offset, length=utf_length))
+            elif kind == "strikethrough":
+                built.append(MessageEntityStrike(offset=offset, length=utf_length))
+            elif kind == "spoiler":
+                built.append(MessageEntitySpoiler(offset=offset, length=utf_length))
+            elif kind == "code":
+                built.append(MessageEntityCode(offset=offset, length=utf_length))
+            elif kind == "pre":
+                built.append(MessageEntityPre(offset=offset, length=utf_length, language=""))
+        return built
+    for start, end, custom_id in spans or []:
         if not str(custom_id).isdigit():
             continue
-        entities.append(MessageEntityCustomEmoji(
+        built.append(MessageEntityCustomEmoji(
             offset=utf16_len(text[:start]),
             length=utf16_len(text[start:end]),
             document_id=int(custom_id),
         ))
-    return entities
+    return built
 
 
 async def edit_via_user(
     chat_id: int,
     message_id: int,
     text: str,
-    spans: list[tuple[int, int, str]],
+    spans: list[tuple[int, int, str]] | None = None,
+    entities: list[dict] | None = None,
 ) -> dict:
     client = await get_user_client()
     if client is None:
         return {"ok": False, "error": "user_session_not_configured"}
     try:
-        entities = _entities(text, spans) if spans else None
-        await client.edit_message(chat_id, message_id, text, formatting_entities=entities)
+        formatting = _entities(text, spans, entities) if (entities or spans) else None
+        await client.edit_message(chat_id, message_id, text, formatting_entities=formatting or None)
         return {"ok": True, "method": "user_session"}
     except Exception as exc:
         message = str(exc)

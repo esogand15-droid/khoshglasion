@@ -13,6 +13,7 @@ class EmojiMapping:
     enabled: bool = True
     contexts: list | None = None
     priority: int = 50
+    category: str | None = None
 
 
 def should_replace(category: str, mapping: EmojiMapping) -> bool:
@@ -42,13 +43,22 @@ def find_emoji_spans(
     category: str,
     max_emoji: int = 12,
     force: bool = False,
+    avoid_ids: set[str] | None = None,
 ) -> list[tuple[int, int, str, str]]:
-    """Return non-overlapping (start, end, emoji, custom_id) spans."""
+    """Return non-overlapping (start, end, emoji, custom_id) spans.
+
+    Recently used custom ids are tried last, so the same glyph can rotate
+    without dropping the replacement when it is the only candidate.
+    """
     if not text or not mappings or max_emoji <= 0:
         return []
     occupied: list[tuple[int, int]] = []
     spans: list[tuple[int, int, str, str]] = []
-    ordered = sorted(mappings, key=lambda m: (-m.priority, -len(m.unicode_emoji or "")))
+    avoided = {str(item) for item in (avoid_ids or set())}
+    ordered = sorted(
+        mappings,
+        key=lambda m: (1 if str(m.custom_emoji_id) in avoided else 0, -m.priority, -len(m.unicode_emoji or "")),
+    )
     for mapping in ordered:
         if not should_replace(category, mapping):
             if not force:

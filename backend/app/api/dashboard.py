@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+import json
 
 from fastapi import APIRouter, Depends
 from sqlalchemy import func, select
@@ -12,6 +13,24 @@ from backend.app.models.message_log import MessageLog
 from backend.app.security.deps import get_current_admin
 
 router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
+
+
+def template_usage(rules_list: list[str | None]) -> list[dict]:
+    counts: dict[str, int] = {}
+    for raw in rules_list:
+        try:
+            parsed = json.loads(raw or "[]")
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(parsed, list):
+            continue
+        for item in parsed:
+            text = str(item)
+            if text.startswith("template_id:"):
+                name = text.split(":", 1)[1]
+                counts[name] = counts.get(name, 0) + 1
+                break
+    return [{"name": name, "count": count} for name, count in sorted(counts.items(), key=lambda item: -item[1])]
 
 
 @router.get("")
@@ -58,7 +77,15 @@ async def dashboard(db: AsyncSession = Depends(get_db), admin=Depends(get_curren
         )
     ).all()
     recent = (await db.execute(select(MessageLog).order_by(MessageLog.created_at.desc()).limit(8))).scalars().all()
-    success = round((edited / total) * 100, 1) if total else 0
+    rule_rows = (
+        await db.execute(select(MessageLog.applied_rules).order_by(MessageLog.created_at.desc()).limit(40))
+    ).scalars().all()
+    success = round((edited / total) * 100, 1) if total else None
+    failures = (
+        await db.execute(
+            select(MessageLog).where(MessageLog.status == "failed").order_by(MessageLog.created_at.desc()).limit(5)
+        )
+    ).scalars().all()
     return {
         "total": total,
         "edited": edited,
@@ -69,6 +96,7 @@ async def dashboard(db: AsyncSession = Depends(get_db), admin=Depends(get_curren
         "today": today_count,
         "week": week_count,
         "success_rate": success,
+        "has_data": total > 0,
         "avg_ms": round(avg_time, 1) if avg_time else 0,
         "channels": channels_count,
         "emojis": emojis_count,
@@ -89,4 +117,12 @@ async def dashboard(db: AsyncSession = Depends(get_db), admin=Depends(get_curren
             "ai_used": row.ai_used,
             "created_at": row.created_at.isoformat() if row.created_at else None,
         } for row in recent],
+        "templates": template_usage(list(rule_rows)),
+        "failures": [{
+            "id": row.id,
+            "chat_id": row.chat_id,
+            "message_id": row.message_id,
+            "error": row.error,
+            "created_at": row.created_at.isoformat() if row.created_at else None,
+        } for row in failures],
     }

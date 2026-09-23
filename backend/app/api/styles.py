@@ -80,6 +80,50 @@ async def update_style(style_id: str, payload: dict, db: AsyncSession = Depends(
     return {"ok": True}
 
 
+@router.post("/{style_id}/duplicate")
+async def duplicate_style(style_id: str, db: AsyncSession = Depends(get_db), admin=Depends(get_current_admin)):
+    if style_id.startswith("builtin_"):
+        slug = style_id.removeprefix("builtin_")
+        style = BUILTIN_STYLES.get(slug)
+        if style is None:
+            raise HTTPException(status_code=404, detail="استایل پیدا نشد")
+        name = style.name
+        config = {
+            "footer": style.footer_template,
+            "divider": style.divider,
+            "header": style.header_template,
+            "add_footer": style.add_footer,
+            "use_divider_bottom": style.use_divider_bottom,
+        }
+        base_slug = slug
+    else:
+        row = (await db.execute(select(StylePreset).where(StylePreset.id == style_id))).scalar_one_or_none()
+        if not row:
+            raise HTTPException(status_code=404, detail="استایل پیدا نشد")
+        name = row.name
+        base_slug = row.slug
+        try:
+            config = json.loads(row.config or "{}")
+        except json.JSONDecodeError:
+            config = {}
+    copy_slug = f"{base_slug}-copy"
+    suffix = 2
+    while copy_slug in BUILTIN_STYLES or (
+        await db.execute(select(StylePreset).where(StylePreset.slug == copy_slug))
+    ).scalar_one_or_none():
+        copy_slug = f"{base_slug}-copy-{suffix}"
+        suffix += 1
+    created = StylePreset(
+        name=f"{name} (کپی)",
+        slug=copy_slug,
+        description="کپی از استایل موجود",
+        config=json.dumps(config, ensure_ascii=False),
+    )
+    db.add(created)
+    await db.flush()
+    return {"id": created.id, "slug": created.slug}
+
+
 @router.delete("/{style_id}")
 async def delete_style(style_id: str, db: AsyncSession = Depends(get_db), admin=Depends(get_current_admin)):
     if style_id.startswith("builtin_"):

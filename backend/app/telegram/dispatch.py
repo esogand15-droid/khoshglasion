@@ -157,6 +157,7 @@ async def handle_update(db: AsyncSession, data: dict) -> dict:
             is_edit_event=edited,
             update_id=data.get("update_id"),
             runtime=runtime,
+            entities=post.get("caption_entities") if has_media and post.get("caption") else post.get("entities"),
         )
         known = (await db.execute(select(Channel).where(Channel.chat_id == int(chat_id)))).scalar_one_or_none()
         if known:

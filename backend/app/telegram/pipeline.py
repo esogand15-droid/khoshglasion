@@ -12,7 +12,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.core.runtime import RuntimeState, load_runtime
 from backend.app.formatting.emoji import EmojiMapping as EmojiMap
+from backend.app.formatting.editor import analyze_post
 from backend.app.formatting.engine import format_message
+from backend.app.formatting.rotation import choose_template
 from backend.app.formatting.styles import get_style, style_from_payload
 from backend.app.formatting.textutil import strip_footer_block
 from backend.app.models.channel import Channel
@@ -35,6 +37,74 @@ FINAL_STATUSES = {"edited", "dry_run"}
 
 def content_hash(text: str) -> str:
     return hashlib.sha256((text or "").encode("utf-8")).hexdigest()[:16]
+
+
+def build_log_meta(
+    reply_markup: dict | None = None,
+    entities: list | None = None,
+    decision=None,
+    selection: dict | None = None,
+    warnings: list | None = None,
+) -> str:
+    """Keep retry data on every logged post, including no_change skips."""
+    payload: dict = {
+        "reply_markup": reply_markup,
+        "entities": entities or [],
+    }
+    if decision is not None:
+        payload["decision"] = decision.as_dict() if hasattr(decision, "as_dict") else decision
+    if selection:
+        payload["selection"] = selection
+    if warnings:
+        payload["warnings"] = warnings
+    return json.dumps(payload, ensure_ascii=False)
+
+
+def selection_from_meta(raw: str | None) -> dict:
+    try:
+        parsed = json.loads(raw or "{}")
+    except json.JSONDecodeError:
+        return {}
+    selection = parsed.get("selection") if isinstance(parsed, dict) else None
+    return selection if isinstance(selection, dict) else {}
+
+
+async def recent_template_state(db: AsyncSession, chat_id: int, message_id: int) -> tuple[list[str], list[str], list[str]]:
+    """Newest-last structure ids, emoji styles, and recently used custom emoji ids."""
+    rows = (
+        await db.execute(
+            select(MessageLog.meta)
+            .where(MessageLog.chat_id == chat_id, MessageLog.message_id != message_id)
+            .order_by(desc(MessageLog.created_at))
+            .limit(5)
+        )
+    ).scalars().all()
+    structures: list[str] = []
+    emoji_styles: list[str] = []
+    used_ids: list[str] = []
+    for raw in reversed(list(rows)):
+        selection = selection_from_meta(raw)
+        if selection.get("structure_id"):
+            structures.append(str(selection["structure_id"]))
+        if selection.get("emoji_style_id"):
+            emoji_styles.append(str(selection["emoji_style_id"]))
+        for item in selection.get("used_emoji_ids") or []:
+            used_ids.append(str(item))
+    return structures, emoji_styles, used_ids[-12:]
+
+
+def _ai_entities(text: str | None, marks) -> list | None:
+    if not text or not marks:
+        return None
+    from backend.app.formatting.textutil import utf16_len
+    return [
+        {
+            "type": mark.type,
+            "offset": utf16_len(text[:mark.start]),
+            "length": utf16_len(text[mark.start:mark.end]),
+        }
+        for mark in marks
+    ]
 
 
 def parse_contexts(raw: str | None):
@@ -60,6 +130,7 @@ async def load_emoji_maps(db: AsyncSession) -> list[EmojiMap]:
             enabled=row.enabled,
             contexts=parse_contexts(row.contexts),
             priority=row.priority or 50,
+            category=row.category,
         )
         for row in rows
     ]
@@ -128,6 +199,7 @@ async def process_channel_post(
     force: bool = False,
     update_id: int | None = None,
     runtime: RuntimeState | None = None,
+    entities: list | None = None,
 ) -> dict:
     runtime = runtime or await load_runtime(db)
     effective = (caption if has_media else text) or ""
@@ -174,6 +246,7 @@ async def process_channel_post(
             error=f"unknown_channel: chat_id {chat_id} ثبت نشده است.",
             applied_rules="[]", has_media=has_media, message_type=media_type or "text",
             update_id=update_id,
+            meta=build_log_meta(reply_markup, entities),
         )
         await db.flush()
         return {"status": "skipped", "reason": "unknown_channel", "log_id": log.id}
@@ -188,6 +261,7 @@ async def process_channel_post(
             error="channel_disabled",
             applied_rules="[]", has_media=has_media, message_type=media_type or "text",
             update_id=update_id,
+            meta=build_log_meta(reply_markup, entities),
         )
         await db.flush()
         return {"status": "skipped", "reason": "channel_disabled", "log_id": log.id}
@@ -206,6 +280,7 @@ async def process_channel_post(
             error=f"skip_keyword:{blocked}",
             applied_rules="[]", has_media=has_media, message_type=media_type or "text",
             update_id=update_id,
+            meta=build_log_meta(reply_markup, entities),
         )
         await db.flush()
         return {"status": "skipped", "reason": "skip_keyword", "log_id": log.id}
@@ -221,10 +296,29 @@ async def process_channel_post(
     if footer == "":
         footer = None
     emoji_maps = await load_emoji_maps(db) if channel.emoji_replacement else []
-    source_text = strip_footer_block(effective, footer, style.divider if style else None)
+    from backend.app.formatting.richtext import quote_texts, shield_quotes, unwrap_quotes
 
-    use_ai = runtime.ai_ready and (channel.ai_rewrite if channel.ai_rewrite is not None else True)
+    source_text = strip_footer_block(effective, footer, style.divider if style else None)
+    quotes = quote_texts(effective, entities)
+    ai_source = shield_quotes(source_text, quotes)
+    decision = analyze_post(effective, entities)
+    recent_structures, recent_emoji_styles, recent_emoji_ids = await recent_template_state(db, chat_id, message_id)
+    choice = choose_template(
+        decision,
+        channel_style=channel.style_id,
+        recent_structures=recent_structures,
+        recent_emoji_styles=recent_emoji_styles,
+        emoji_enabled=bool(channel.emoji_replacement and runtime.premium_mode != "off"),
+        has_entities=bool(entities),
+    )
+
+    use_ai = (
+        runtime.ai_ready
+        and (channel.ai_rewrite if channel.ai_rewrite is not None else True)
+        and decision.strategy == "light_edit"
+    )
     ai_text = None
+    ai_marks = None
     if use_ai:
         previous = ""
         prev = (
@@ -237,28 +331,49 @@ async def process_channel_post(
         ).scalar_one_or_none()
         if prev:
             previous = prev[:300]
-        from backend.app.formatting.category import detect_category
         ai_text = await enhance_with_ai(
-            source_text,
-            detect_category(source_text),
+            ai_source,
+            decision.category,
             previous,
             runtime=runtime,
             limit=900 if has_media else 3600,
+            required=quotes,
         )
+        if ai_text and quotes:
+            ai_text, ai_marks = unwrap_quotes(ai_text, quotes)
+            if any(quote not in (ai_text or "") for quote in quotes):
+                logger.info("AI dropped a quote; keeping the admin wording")
+                ai_text = None
+                ai_marks = None
 
     started = time.perf_counter()
     result = format_message(
-        raw_text=ai_text or source_text,
+        raw_text=ai_text or effective,
         is_caption=has_media,
         channel_style_slug=channel.style_id,
         footer_text=footer,
         emoji_mappings=emoji_maps,
-        header_enabled=channel.header_enabled,
+        header_enabled=channel.header_enabled and not entities and not ai_text,
         enable_emoji=channel.emoji_replacement and runtime.premium_mode != "off",
-        persian_normalize=runtime.persian_normalize,
+        persian_normalize=runtime.persian_normalize and not entities,
         max_emoji=runtime.max_emoji_per_post,
         style_config=style,
+        entities=_ai_entities(ai_text, ai_marks) if ai_text else entities,
+        footer_url=getattr(runtime, "footer_url", None),
+        support_username=getattr(runtime, "support_username", None),
+        category=decision.category,
+        structure_id=choice.structure_id,
+        body_emoji=choice.emoji_style_id == "accent",
+        avoid_emoji_ids=set(recent_emoji_ids),
     )
+    result.applied_rules.append(f"strategy:{decision.strategy}")
+    result.applied_rules.append(f"template:{decision.template_family}")
+    result.applied_rules.append(f"template_id:{choice.template_id}")
+    result.applied_rules.append(f"style_id:{choice.style_id}")
+    result.applied_rules.append(f"emoji_style:{choice.emoji_style_id}")
+    result.applied_rules.append(f"structure:{choice.structure_id}")
+    selection = choice.as_dict()
+    selection["used_emoji_ids"] = [cid for _start, _end, cid in result.emoji_spans]
     if ai_text:
         result.applied_rules.append("ai_enhanced")
     elapsed = (time.perf_counter() - started) * 1000
@@ -275,7 +390,7 @@ async def process_channel_post(
             applied_rules=json.dumps(result.applied_rules, ensure_ascii=False),
             processing_time_ms=elapsed, has_media=has_media, message_type=media_type or "text",
             ai_used=bool(ai_text), update_id=update_id,
-            meta=json.dumps({"reply_markup": reply_markup}, ensure_ascii=False),
+            meta=build_log_meta(reply_markup, entities, decision, selection, result.warnings),
         )
         await db.flush()
         return {"status": "skipped", "reason": "no_change", "category": result.category, "log_id": log.id}
@@ -283,7 +398,6 @@ async def process_channel_post(
     formatted_hash = content_hash(result.text)
     markup = reply_markup if channel.preserve_buttons else None
     markup = merge_signature(markup, channel.signature_text, channel.signature_url)
-    meta = {"reply_markup": reply_markup, "warnings": result.warnings}
     log = _upsert_log(
         db, existing,
         chat_id=chat_id, message_id=message_id,
@@ -294,7 +408,7 @@ async def process_channel_post(
         applied_rules=json.dumps(result.applied_rules, ensure_ascii=False),
         processing_time_ms=elapsed, has_media=has_media, message_type=media_type or "text",
         ai_used=bool(ai_text), edit_method=None, update_id=update_id,
-        meta=json.dumps(meta, ensure_ascii=False),
+        meta=build_log_meta(reply_markup, entities, decision, selection, result.warnings),
     )
     await db.flush()
 
@@ -348,9 +462,12 @@ async def process_channel_post(
 
 async def _edit(runtime: RuntimeState, channel: Channel, chat_id: int, message_id: int, result, has_media: bool, markup):
     mode = (runtime.premium_mode or "auto").lower()
-    want_premium = channel.emoji_replacement and mode != "off" and bool(result.emoji_spans)
-    if want_premium and mode in {"auto", "user"} and session_configured():
-        user_result = await edit_via_user(chat_id, message_id, result.text, result.emoji_spans)
+    has_formatting = bool(result.html_text)
+    want_user = channel.emoji_replacement and mode in {"auto", "user"} and session_configured() and bool(result.entities or result.emoji_spans)
+    if want_user:
+        user_result = await edit_via_user(
+            chat_id, message_id, result.text, result.emoji_spans, entities=result.entities,
+        )
         if user_result.get("ok"):
             return user_result
         logger.info("User-session edit failed, trying Bot API: %s", user_result.get("error"))
@@ -358,10 +475,10 @@ async def _edit(runtime: RuntimeState, channel: Channel, chat_id: int, message_i
         chat_id=chat_id,
         message_id=message_id,
         text=result.text,
-        html_text=result.html_text if want_premium and mode != "user" else None,
+        html_text=result.html_text if has_formatting and mode != "user" else None,
         is_caption=has_media,
         reply_markup=markup,
-        prefer_html=want_premium and mode != "user",
+        prefer_html=has_formatting and mode != "user",
     )
 
 
@@ -391,4 +508,5 @@ async def reprocess_log(db: AsyncSession, log: MessageLog, runtime: RuntimeState
         reply_markup=meta.get("reply_markup"),
         force=True,
         runtime=runtime,
+        entities=meta.get("entities"),
     )

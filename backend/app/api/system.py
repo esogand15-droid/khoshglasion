@@ -53,6 +53,8 @@ class RuntimePatch(BaseModel):
     admin_telegram_ids: str | None = None
     premium_mode: str | None = None
     default_footer: str | None = None
+    footer_url: str | None = None
+    support_username: str | None = None
 
 
 class AdminCreate(BaseModel):
@@ -83,8 +85,20 @@ def _runtime_updates(payload: RuntimePatch, current_key: str) -> dict[str, str]:
     return updates
 
 
+def webhook_secret_alert(secret: str | None) -> dict | None:
+    if (secret or "").strip():
+        return None
+    return {
+        "level": "warn",
+        "text": "WEBHOOK_SECRET خالی است. هر کسی که آدرس وبهوک را بداند می‌تواند آپدیت جعلی بفرستد.",
+    }
+
+
 async def _alerts(db: AsyncSession, runtime, settings) -> list[dict]:
     alerts = []
+    secret_alert = webhook_secret_alert(settings.webhook_secret)
+    if secret_alert:
+        alerts.append(secret_alert)
     external = is_external_database(settings.database_url)
     if not external:
         alerts.append({

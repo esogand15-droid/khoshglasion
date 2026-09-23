@@ -7,6 +7,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.core.runtime import load_runtime
 from backend.app.db.base import get_db
+from backend.app.formatting.diff import line_diff
+from backend.app.formatting.editor import analyze_post
 from backend.app.formatting.emoji import EmojiMapping as EmojiMap
 from backend.app.formatting.engine import format_message
 from backend.app.models.channel import Channel
@@ -19,6 +21,18 @@ from backend.app.telegram.pipeline import parse_contexts, resolve_style
 router = APIRouter(prefix="/api/preview", tags=["preview"])
 
 
+def preview_ai_plan(text: str, use_ai: bool, ai_ready: bool) -> tuple[bool, dict, str | None]:
+    """The lab uses the same lock as the bot. A checkbox must not rewrite facts."""
+    decision = analyze_post(text).as_dict()
+    if not use_ai:
+        return False, decision, None
+    if not ai_ready:
+        return False, decision, "هوش مصنوعی آماده نیست"
+    if decision.get("strategy") != "light_edit":
+        return False, decision, "این متن قفل است؛ واقعیت، گزینه و نقل‌قول بازنویسی نمی‌شوند"
+    return True, decision, None
+
+
 class AIPreviewRequest(BaseModel):
     text: str
     category: str = "general"
@@ -27,13 +41,18 @@ class AIPreviewRequest(BaseModel):
 @router.post("/ai-enhance")
 async def preview_ai_enhance(payload: AIPreviewRequest, db: AsyncSession = Depends(get_db), admin=Depends(get_current_admin)):
     runtime = await load_runtime(db)
-    enhanced = await enhance_with_ai(payload.text, payload.category, runtime=runtime)
+    should_ai, decision, reason = preview_ai_plan(payload.text, True, runtime.ai_ready)
+    enhanced = None
+    if should_ai:
+        enhanced = await enhance_with_ai(payload.text, decision.get("category") or payload.category, runtime=runtime)
     return {
         "original": payload.text,
         "enhanced": enhanced,
-        "category": payload.category,
+        "category": decision.get("category") or payload.category,
         "ai_used": enhanced is not None,
         "ai_ready": runtime.ai_ready,
+        "strategy": decision.get("strategy"),
+        "reason": reason,
     }
 
 
@@ -48,6 +67,7 @@ async def preview(payload: PreviewRequest, db: AsyncSession = Depends(get_db), a
             enabled=row.enabled,
             contexts=parse_contexts(row.contexts),
             priority=row.priority,
+            category=row.category,
         )
         for row in rows
     ]
@@ -63,8 +83,14 @@ async def preview(payload: PreviewRequest, db: AsyncSession = Depends(get_db), a
     style = await resolve_style(db, style_slug)
     source = payload.text
     ai_note = None
-    if payload.use_ai:
-        enhanced = await enhance_with_ai(payload.text, "general", runtime=runtime, limit=900 if payload.is_caption else 3600)
+    should_ai, decision, lock_reason = preview_ai_plan(payload.text, payload.use_ai, runtime.ai_ready)
+    if should_ai:
+        enhanced = await enhance_with_ai(
+            payload.text,
+            decision.get("category") or "general",
+            runtime=runtime,
+            limit=900 if payload.is_caption else 3600,
+        )
         if enhanced:
             source = enhanced
             ai_note = "ai_enhanced"
@@ -79,10 +105,16 @@ async def preview(payload: PreviewRequest, db: AsyncSession = Depends(get_db), a
         persian_normalize=runtime.persian_normalize,
         max_emoji=runtime.max_emoji_per_post,
         style_config=style,
+        footer_url=runtime.footer_url,
+        support_username=runtime.support_username,
     )
     rules = list(result.applied_rules)
     if ai_note:
         rules.append(ai_note)
+    rules.append(f"strategy:{decision.get('strategy')}")
+    warnings = list(result.warnings)
+    if lock_reason:
+        warnings.append(lock_reason)
     return PreviewResponse(
         original=payload.text,
         formatted=result.text,
@@ -91,5 +123,9 @@ async def preview(payload: PreviewRequest, db: AsyncSession = Depends(get_db), a
         category=result.category,
         style=result.style_slug,
         applied_rules=rules,
-        warnings=result.warnings,
+        warnings=warnings,
+        decision=decision,
+        ai_used=bool(ai_note),
+        strategy=decision.get("strategy"),
+        diff=line_diff(payload.text, result.text),
     )
