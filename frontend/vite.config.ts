@@ -1,7 +1,22 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+import tailwindcss from "@tailwindcss/vite";
+import { fileURLToPath, URL } from "node:url";
+
 export default defineConfig({
-  plugins: [react()],
-  server: { port: 5173, proxy: { "/api": "http://localhost:8000", "/telegram": "http://localhost:8000", "/health": "http://localhost:8000" } },
-  build: { outDir: "dist" }
+  plugins: [react(), tailwindcss()],
+  resolve: {
+    alias: {
+      "@": fileURLToPath(new URL("./src", import.meta.url)),
+    },
+  },
+  server: {
+    host: "0.0.0.0",
+    port: 5173,
+    allowedHosts: true,
+    proxy: {
+      "/api": "http://localhost:8000",
+      "/health": "http://localhost:8000",
+    },
+  },
 });
