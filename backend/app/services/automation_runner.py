@@ -127,12 +127,12 @@ def _remember_skip(db: AsyncSession, source: NewsSource, item: dict, reason: str
 PUBLISHABLE = ("preview", "scheduled", "failed", "recalled", "rejected")
 
 
-async def claim_for_publish(db: AsyncSession, draft_id: str) -> bool:
-    """One sender wins. A second click or the loop cannot send the same draft."""
+async def claim_for_publish(db: AsyncSession, draft_id: str, allowed: tuple[str, ...] | None = None) -> bool:
+    """One sender wins. The clock only claims the status it selected, so a reject cannot be published underneath the panel."""
     now = datetime.now(timezone.utc)
     result = await db.execute(
         update(DraftPost)
-        .where(DraftPost.id == draft_id, DraftPost.status.in_(PUBLISHABLE))
+        .where(DraftPost.id == draft_id, DraftPost.status.in_(allowed or PUBLISHABLE))
         .values(status="sending", updated_at=now, error=None)
     )
     return (result.rowcount or 0) == 1
@@ -617,7 +617,7 @@ async def publish_due(db: AsyncSession) -> dict:
         if not pick_balanced([draft], None, counts, cap, balance):
             await write_log(db, "publish_held", f"{draft.id} cap_or_balance")
             continue
-        if not await claim_for_publish(db, draft.id):
+        if not await claim_for_publish(db, draft.id, ("scheduled",)):
             continue
         await db.commit()
         draft.status = "sending"
@@ -675,7 +675,7 @@ async def publish_due(db: AsyncSession) -> dict:
             if draft is None:
                 await write_log(db, "slot_empty", slot.category or "any")
                 continue
-            if not await claim_for_publish(db, draft.id):
+            if not await claim_for_publish(db, draft.id, ("preview",)):
                 waiting = [item for item in waiting if item.id != draft.id]
                 continue
             await db.commit()

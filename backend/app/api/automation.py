@@ -15,7 +15,7 @@ from backend.app.content.publish import prepare_publish_payload
 from backend.app.db.base import get_db
 from backend.app.core.runtime import load_runtime
 from backend.app.formatting.diff import line_diff
-from backend.app.models.automation import AutomationLog, DraftPost, HashtagRule, NewsSource, PromptVersion, PublishSlot
+from backend.app.models.automation import AutomationJob, AutomationLog, DraftPost, HashtagRule, NewsSource, PromptVersion, PublishSlot
 from backend.app.models.channel import Channel
 from backend.app.security.deps import assert_editor, assert_publisher, get_current_admin
 from backend.app.services.audit import write_audit
@@ -902,6 +902,19 @@ async def reject_draft(draft_id: str, request: Request, db: AsyncSession = Depen
     if row.status in {"published", "sending"}:
         raise HTTPException(status_code=400, detail="پست منتشرشده یا در حال ارسال را رد نکن. اول از کانال پس بگیر")
     row.status = "rejected"
+    row.scheduled_at = None
+    row.next_retry_at = None
+    jobs = (
+        await db.execute(
+            select(AutomationJob).where(
+                AutomationJob.ref_id == row.id,
+                AutomationJob.kind == "publish",
+                AutomationJob.status.in_(["pending", "retry"]),
+            )
+        )
+    ).scalars().all()
+    for job in jobs:
+        job.status = "cancelled"
     await remember_lesson(
         db,
         kind="reject",
