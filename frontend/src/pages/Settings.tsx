@@ -32,6 +32,8 @@ export default function Settings() {
   const [aiTest, setAiTest] = useState<any>(null);
   const [testing, setTesting] = useState(false);
   const [models, setModels] = useState<any[] | null>(null);
+  const [found, setFound] = useState<Record<string, any>>({});
+  const [detecting, setDetecting] = useState("");
   const [password, setPassword] = useState({ current_password: "", new_password: "" });
   const [adminForm, setAdminForm] = useState({ username: "", password: "", role: "ADMIN" });
   const [params, setParams] = useSearchParams();
@@ -87,19 +89,94 @@ export default function Settings() {
             <CardHeader><CardTitle>هوش مصنوعی</CardTitle></CardHeader>
             <CardContent className="space-y-3">
               <SettingSwitch disabled={!canEdit} checked={data.ai_enabled} label="بازنویسی هوشمند" onChange={(v) => save({ ai_enabled: v })} />
-              <p className="text-xs text-muted-foreground">چند مدل از چند سرویس می‌توانی بگذاری. ترتیب فهرست، ترتیب فالبک است: اگر اولی قطع باشد یا جواب ندهد، دومی و بعدی صدا زده می‌شوند تا بازنویسی سکته نکند. دما، سقف توکن و حداقل کاراکتر برداشته شده تا هر مدل با ظرفیت خودش جواب بدهد. اگر مدل عدد یا نقل‌قول را بیندازد، همان متن ادمین می‌ماند.</p>
-              {(models || []).map((item, index) => (
+              <p className="text-xs text-muted-foreground">چند مدل از چند سرویس می‌توانی بگذاری. ترتیب فهرست، ترتیب فالبک است: اگر اولی قطع باشد یا جواب ندهد، دومی و بعدی صدا زده می‌شوند تا بازنویسی سکته نکند. ارائه‌دهنده را انتخاب کن تا آدرس پایه درست پر شود، بعد تشخیص مدل‌ها همان کلید را به فهرست زندهٔ سرویس می‌زند. دما، سقف توکن و حداقل کاراکتر برداشته شده. اگر مدل عدد یا نقل‌قول را بیندازد، همان متن ادمین می‌ماند.</p>
+              {(models || []).map((item, index) => {
+                const providers = data.ai_providers || [];
+                const cleaned = String(item.base_url || "").trim().replace(/\/+$/, "").replace(/\/chat\/completions$/i, "");
+                const preset = providers.find((row: any) => row.base_url === cleaned);
+                const detected = found[item.id] || null;
+                const choices = detected?.models || [];
+                const modelOptions = item.model && !choices.some((row: any) => row.id === item.model)
+                  ? [{ id: item.model, name: "همین مقدار" }, ...choices]
+                  : choices;
+                const endpoint = detected?.endpoint || preset?.endpoint || item.endpoint || "";
+                return (
                 <div key={item.id || index} className="space-y-3 rounded-xl border border-border p-3">
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <p className="text-sm font-medium">مدل {index + 1}{index === 0 ? " · اول" : " · فالبک"}</p>
                     <SettingSwitch disabled={!canEdit} checked={item.enabled !== false} label="روشن" onChange={(on) => setModels((rows) => rows?.map((row, rowIndex) => rowIndex === index ? { ...row, enabled: on } : row) || [])} />
                   </div>
+                  <Field label="ارائه‌دهنده">
+                    <Select
+                      dir="ltr"
+                      disabled={!canEdit}
+                      value={preset?.id || ""}
+                      placeholder="انتخاب کن تا آدرس درست پر شود"
+                      onChange={(e) => {
+                        const next = providers.find((row: any) => row.id === e.target.value);
+                        if (!next) return;
+                        const labelIsPreset = providers.some((row: any) => row.label === item.label);
+                        setModels((rows) => rows?.map((row, rowIndex) => rowIndex === index ? {
+                          ...row,
+                          base_url: next.base_url,
+                          label: !row.label || labelIsPreset ? next.label : row.label,
+                          provider: next.id,
+                          endpoint: next.endpoint,
+                        } : row) || []);
+                      }}
+                      options={providers.map((row: any) => ({ value: row.id, label: row.label }))}
+                    />
+                  </Field>
                   <div className="grid gap-3 md:grid-cols-2">
                     <Field label="نام"><Input disabled={!canEdit} value={item.label || ""} onChange={(e) => setModels((rows) => rows?.map((row, rowIndex) => rowIndex === index ? { ...row, label: e.target.value } : row) || [])} placeholder="NVIDIA" /></Field>
-                    <Field label="Model"><Input dir="ltr" disabled={!canEdit} value={item.model || ""} onChange={(e) => setModels((rows) => rows?.map((row, rowIndex) => rowIndex === index ? { ...row, model: e.target.value } : row) || [])} placeholder="nvidia/nemotron-3-super-120b-a12b" /></Field>
+                    <Field label="Model"><Input dir="ltr" disabled={!canEdit} value={item.model || ""} onChange={(e) => setModels((rows) => rows?.map((row, rowIndex) => rowIndex === index ? { ...row, model: e.target.value } : row) || [])} placeholder="بعد از تشخیص، یا شناسه را دستی بنویس" /></Field>
                   </div>
+                  {!!modelOptions.length && (
+                    <Field label="مدل‌های این کلید">
+                      <Select
+                        dir="ltr"
+                        disabled={!canEdit}
+                        value={item.model || ""}
+                        placeholder="یکی را انتخاب کن"
+                        onChange={(e) => setModels((rows) => rows?.map((row, rowIndex) => rowIndex === index ? { ...row, model: e.target.value } : row) || [])}
+                        options={modelOptions.map((row: any) => ({ value: row.id, label: row.name && row.name !== row.id ? `${row.id} · ${row.name}` : row.id }))}
+                      />
+                    </Field>
+                  )}
                   <Field label="Base URL"><Input dir="ltr" disabled={!canEdit} value={item.base_url || ""} onChange={(e) => setModels((rows) => rows?.map((row, rowIndex) => rowIndex === index ? { ...row, base_url: e.target.value } : row) || [])} placeholder="https://integrate.api.nvidia.com/v1" /></Field>
-                  <p className="text-xs text-muted-foreground">{item.provider || "provider بعد از ذخیره"}{item.endpoint ? ` · ${item.endpoint}` : ""}</p>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Button size="sm" variant="outline" disabled={!canEdit || !item.base_url || detecting === item.id} onClick={async () => {
+                      setDetecting(item.id);
+                      try {
+                        const { data: result } = await api.post("/api/system/ai/detect", {
+                          base_url: item.base_url,
+                          api_key: item.api_key || "",
+                          id: item.id || "",
+                        });
+                        setFound((current) => ({ ...current, [item.id]: result }));
+                        setModels((rows) => rows?.map((row, rowIndex) => rowIndex === index ? {
+                          ...row,
+                          base_url: result.base_url || row.base_url,
+                          provider: result.provider || row.provider,
+                          endpoint: result.endpoint || row.endpoint,
+                          label: row.label || result.label || "",
+                        } : row) || []);
+                        setMsg(result.ok ? `${result.models.length} مدل از ${result.label || result.provider} پیدا شد` : result.error);
+                      } catch (error: any) {
+                        setMsg(error.response?.data?.detail || "تشخیص انجام نشد");
+                      } finally {
+                        setDetecting("");
+                      }
+                    }}>{detecting === item.id ? <Spinner size="sm" label="در حال تشخیص" /> : "تشخیص مدل‌ها"}</Button>
+                    {(preset?.key_url || detected?.key_url) && (
+                      <a className="text-xs underline" href={preset?.key_url || detected?.key_url} target="_blank" rel="noreferrer">گرفتن کلید</a>
+                    )}
+                  </div>
+                  <p className="text-xs text-muted-foreground">{detected?.provider || preset?.label || item.provider || "ارائه‌دهنده بعد از انتخاب یا تشخیص"}{endpoint ? ` · ${endpoint}` : ""}</p>
+                  {(preset?.hint || detected?.hint) && <p className="text-xs text-muted-foreground">{preset?.hint || detected?.hint}</p>}
+                  {detected?.note && <p className="text-xs text-muted-foreground">{detected.note}</p>}
+                  {detected?.error && <p className="text-xs text-destructive">{detected.error}</p>}
+                  {detected?.ok && <p className="text-xs text-muted-foreground">{detected.models.length} مدل چت از همین کلید{detected.truncated ? "؛ بقیه را دستی بنویس" : ""}. اگر شناسه موردنظرت در فهرست نیست، همان را در Model بنویس.</p>}
                   <Field label={`کلید API ${item.api_key_masked || ""}`}>
                     <PasswordInput disabled={!canEdit} placeholder={item.api_key_set ? "خالی = بدون تغییر" : "کلید این سرویس"} value={item.api_key || ""} onChange={(e) => setModels((rows) => rows?.map((row, rowIndex) => rowIndex === index ? { ...row, api_key: e.target.value } : row) || [])} />
                   </Field>
@@ -119,7 +196,8 @@ export default function Settings() {
                     <Button size="sm" variant="destructive" disabled={!canEdit} onClick={() => setModels((rows) => rows?.filter((_, rowIndex) => rowIndex !== index) || [])}>حذف</Button>
                   </div>
                 </div>
-              ))}
+                );
+              })}
               <Button variant="outline" disabled={!canEdit || (models || []).length >= 8} onClick={() => setModels((rows) => [...(rows || []), { id: `m${Date.now()}`, label: "", base_url: "", model: "", api_key: "", enabled: true }])}>افزودن مدل</Button>
               <div className="flex flex-wrap gap-2">
                 <Button variant="brand" disabled={!canEdit} onClick={() => save({ ai_enabled: data.ai_enabled, ai_models: models || [] })}>ذخیره مدل‌ها</Button>

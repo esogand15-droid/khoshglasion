@@ -23,7 +23,8 @@ from backend.app.models.system import SystemSetting
 from backend.app.security.auth import create_token, hash_password, verify_password
 from backend.app.security.deps import assert_editor, get_current_admin, require_role
 from backend.app.services.ai import test_ai_connection
-from backend.app.services.ai_provider import detect_provider, resolve_chat_completions_url
+from backend.app.services.ai_models import as_models, submitted_key
+from backend.app.services.ai_provider import detect_provider, list_provider_models, resolve_chat_completions_url
 from backend.app.services.audit import write_audit
 from backend.app.telegram.bot import close_bot, get_bot
 from backend.app.telegram.session_login import (
@@ -347,11 +348,32 @@ def _safe_endpoint(base_url: str) -> str:
         return ""
 
 
+class DetectIn(BaseModel):
+    base_url: str = ""
+    api_key: str = ""
+    id: str = ""
+
+
 @router.post("/ai/test")
 async def test_ai(db: AsyncSession = Depends(get_db), admin=Depends(get_current_admin)):
     assert_editor(admin)
     runtime = await load_runtime(db, force=True)
     return await test_ai_connection(runtime)
+
+
+@router.post("/ai/detect")
+async def detect_ai_models(payload: DetectIn, db: AsyncSession = Depends(get_db), admin=Depends(get_current_admin)):
+    assert_editor(admin)
+    runtime = await load_runtime(db, force=True)
+    stored = {item.id: item.api_key for item in as_models(runtime.ai_models)}
+    saved = stored.get(payload.id, "")
+    if not saved and payload.id in {"", "legacy"}:
+        saved = runtime.ai_api_key or ""
+    key = submitted_key(payload.api_key, saved)
+    try:
+        return await list_provider_models(payload.base_url, key)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get("/ai/config")

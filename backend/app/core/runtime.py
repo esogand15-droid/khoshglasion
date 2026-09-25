@@ -127,6 +127,8 @@ class RuntimeState:
         data["ai_api_key_masked"] = (key[:4] + "…" + key[-4:]) if len(key) > 10 else ("••••" if key else "")
         data.pop("ai_api_key", None)
         data["ai_models"] = public_models(self)
+        from backend.app.services.ai_provider import provider_catalog
+        data["ai_providers"] = provider_catalog()
         data["ai_ready"] = self.ai_ready
         data["admin_ids"] = self.admin_ids
         return data

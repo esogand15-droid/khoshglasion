@@ -8,7 +8,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 
-from backend.app.services.ai_provider import detect_provider, resolve_chat_completions_url
+from backend.app.services.ai_provider import canonical_base_url, detect_provider, resolve_chat_completions_url
 
 
 @dataclass
@@ -47,6 +47,11 @@ def _mask(secret: str) -> str:
 def _keep_key(raw: str | None) -> bool:
     text = (raw or "").strip()
     return bool(text) and text != "••••" and "…" not in text and "..." not in text
+
+
+def submitted_key(raw: str | None, stored: str = "") -> str:
+    """Empty or masked input means the stored key. Never invent one."""
+    return raw.strip() if _keep_key(raw) else (stored or "")
 
 
 def parse_models(raw) -> list[dict]:
@@ -148,7 +153,7 @@ def merge_models(incoming, stored, legacy_key: str = "") -> list[dict]:
         merged.append({
             "id": mid,
             "label": str(data.get("label") or "")[:64],
-            "base_url": str(data.get("base_url") or "").strip()[:300],
+            "base_url": canonical_base_url(str(data.get("base_url") or "").strip()[:300])[:300],
             "model": str(data.get("model") or "").strip()[:160],
             "api_key": key,
             "enabled": bool(data.get("enabled", True)),
