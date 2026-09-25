@@ -50,6 +50,7 @@ from backend.app.services.finetune import (
 )
 from backend.app.services.autopost import (
     active_prompt,
+    as_utc,
     compose_prompt,
     append_hashtags,
     draft_from_source,
@@ -189,7 +190,8 @@ async def collect_sources(db: AsyncSession, *, force: bool = False) -> dict:
         return {"created": 0, "skipped": "disabled"}
     now = datetime.now(timezone.utc)
     gap = timedelta(minutes=max(5, int(getattr(config, "collect_interval_minutes", None) or 20)))
-    if not force and config.last_collect_at and config.last_collect_at > now - gap:
+    last_collect = as_utc(config.last_collect_at)
+    if not force and last_collect and last_collect > now - gap:
         return {"created": 0, "skipped": "recent"}
     from backend.app.telegram.session_login import refresh_user_credentials
 
@@ -213,13 +215,11 @@ async def collect_sources(db: AsyncSession, *, force: bool = False) -> dict:
     style_card = await load_card(db)
     errors: list[str] = []
     truncated_any = False
+    blocked = False
     for source in sources:
         interval = max(5, int(source.interval_minutes or 20))
-        if (
-            not force
-            and source.last_collect_at
-            and source.last_collect_at > now - timedelta(minutes=interval)
-        ):
+        source_seen = as_utc(source.last_collect_at)
+        if not force and source_seen and source_seen > now - timedelta(minutes=interval):
             continue
         updates: dict = {}
         posts, error, truncated = await read_channel_posts(
@@ -391,10 +391,14 @@ async def collect_sources(db: AsyncSession, *, force: bool = False) -> dict:
         else:
             source.last_collect_at = now
         if stop_before is not None:
+            blocked = True
             break
     if not truncated_any:
         config.last_collect_at = now
-    config.last_error = errors[0] if errors else config.last_error
+    if errors:
+        config.last_error = errors[0]
+    elif not blocked:
+        config.last_error = None
     if filed:
         style_card = await load_card(db)
     await write_log(db, "collect_done", f"created={created} filed={filed}")
@@ -430,6 +434,12 @@ def mark_publish_failure(draft: DraftPost, error: str, now: datetime) -> None:
     if draft.retry_count < 3:
         draft.status = "scheduled"
         draft.next_retry_at = next_retry_at(draft.retry_count, now)
+        # A slot failure used to leave scheduled_at empty, so the retry query
+        # never saw the draft again and the day's slot was already consumed.
+        planned = as_utc(draft.scheduled_at)
+        retry = as_utc(draft.next_retry_at)
+        if planned is None or (retry is not None and planned < retry):
+            draft.scheduled_at = draft.next_retry_at
     else:
         draft.status = "failed"
         draft.next_retry_at = None
@@ -455,7 +465,7 @@ async def publish_due(db: AsyncSession) -> dict:
             )
         )
     ).scalars().all()
-    due = [row for row in due if row.next_retry_at is None or row.next_retry_at <= now]
+    due = [row for row in due if (retry := as_utc(row.next_retry_at)) is None or retry <= now]
     queued = {row.category for row in due}
     for draft in due:
         if not pick_balanced([draft], None, counts, cap, balance):
@@ -508,9 +518,6 @@ async def publish_due(db: AsyncSession) -> dict:
                 await write_log(db, "slot_empty", slot.category or "any")
                 continue
             message_id, error = await deliver_draft(db, draft, int(config.target_chat_id))
-            key = slot_key(slot)
-            draft.slot_key = key
-            used.add(key)
             draft.target_chat_id = config.target_chat_id
             waiting = [item for item in waiting if item.id != draft.id]
             if error:
@@ -518,6 +525,9 @@ async def publish_due(db: AsyncSession) -> dict:
                 await write_log(db, "publish_failed", f"{draft.id} {draft.error}", "warning")
                 await alert_admin(db, f"publish:{draft.id}:{draft.retry_count}", f"انتشار پیش‌نویس ناموفق ماند: {draft.error}")
                 continue
+            key = slot_key(slot)
+            draft.slot_key = key
+            used.add(key)
             draft.status = "published"
             draft.published_at = now
             draft.message_id = message_id

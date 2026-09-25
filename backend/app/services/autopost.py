@@ -87,10 +87,17 @@ def accept_draft(source_blob: str, draft: str | None) -> tuple[str | None, str]:
     return cleaned, "ok"
 
 
+def as_utc(value: datetime | None) -> datetime | None:
+    """SQLite returns naive timestamps. Comparisons must not crash the loop."""
+    if value is None:
+        return None
+    if value.tzinfo is None or value.tzinfo.utcoffset(value) is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
 def tehran_now(now: datetime | None = None) -> datetime:
-    current = now or datetime.now(timezone.utc)
-    if current.tzinfo is None:
-        current = current.replace(tzinfo=timezone.utc)
+    current = as_utc(now) or datetime.now(timezone.utc)
     return current.astimezone(TEHRAN)
 
 

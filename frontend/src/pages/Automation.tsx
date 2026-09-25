@@ -125,7 +125,14 @@ export default function Automation() {
     }
   }
 
-  if (!data) return <Page title="پست خودکار" description="در حال خواندن تنظیم واقعی…"><p className="text-sm text-muted-foreground">صف اتوماسیون در حال بارگذاری است.</p></Page>;
+  if (!data) {
+    return (
+      <Page title="پست خودکار" description="در حال خواندن تنظیم واقعی…">
+        <p className="text-sm text-muted-foreground">{msg || "صف اتوماسیون در حال بارگذاری است."}</p>
+        {msg && <Button className="mt-3" variant="outline" onClick={() => load().catch(() => setMsg("وضعیت اتوماسیون خوانده نشد"))}>دوباره</Button>}
+      </Page>
+    );
+  }
 
   const metrics = data.metrics || {};
   const hashtags = data.hashtags || [];

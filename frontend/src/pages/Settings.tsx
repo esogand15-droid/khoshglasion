@@ -34,6 +34,7 @@ export default function Settings() {
   const [models, setModels] = useState<any[] | null>(null);
   const [found, setFound] = useState<Record<string, any>>({});
   const [detecting, setDetecting] = useState("");
+  const [loadError, setLoadError] = useState("");
   const [password, setPassword] = useState({ current_password: "", new_password: "" });
   const [adminForm, setAdminForm] = useState({ username: "", password: "", role: "ADMIN" });
   const [params, setParams] = useSearchParams();
@@ -44,11 +45,16 @@ export default function Settings() {
   const tab = ["run", "ai", "look", "session", "access", "problems"].includes(params.get("tab") || "") ? params.get("tab")! : "run";
 
   async function load() {
-    const next = (await api.get("/api/system/settings")).data;
-    setData(next);
-    setModels((current) => current ?? (next.ai_models?.length ? next.ai_models.map((item: any) => ({ ...item, api_key: "" })) : []));
+    try {
+      const next = (await api.get("/api/system/settings")).data;
+      setData(next);
+      setLoadError("");
+      setModels((current) => current ?? (next.ai_models?.length ? next.ai_models.map((item: any) => ({ ...item, api_key: "" })) : []));
+    } catch (error: any) {
+      setLoadError(error.response?.data?.detail || "تنظیم‌ها خوانده نشد");
+    }
   }
-  useEffect(() => { load().catch(() => {}); }, []);
+  useEffect(() => { load(); }, []);
 
   async function save(partial: any) {
     try {
@@ -59,7 +65,11 @@ export default function Settings() {
       load();
     }
   }
-  if (!data) return <Spinner label="در حال بارگذاری تنظیم‌ها" />;
+  if (!data) {
+    return loadError
+      ? <Page title="اتاق تنظیم"><Alert variant="destructive" title={loadError}><Button variant="outline" onClick={() => load()}>دوباره</Button></Alert></Page>
+      : <Spinner label="در حال بارگذاری تنظیم‌ها" />;
+  }
 
   return (
     <Page kicker="کنترل زنده" title="اتاق تنظیم">
