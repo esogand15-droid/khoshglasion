@@ -17,16 +17,30 @@ export interface AlertProps extends Omit<React.HTMLAttributes<HTMLDivElement>, "
   icon?: React.ComponentType<{ className?: string }>;
 }
 
+function readable(value: React.ReactNode): React.ReactNode {
+  if (value == null || typeof value === "boolean") return null;
+  if (typeof value === "string" || typeof value === "number") return value;
+  if (Array.isArray(value)) {
+    const notes = value.map((item) => (item && typeof item === "object" && "msg" in item ? String((item as { msg?: unknown }).msg || "") : ""));
+    if (notes.some(Boolean)) return notes.filter(Boolean).join(" ");
+    return value;
+  }
+  if (typeof value === "object" && !("$$typeof" in value)) return "درخواست رد شد";
+  return value;
+}
+
 /** هشدار درون‌صفحه‌ای. Icon at the inline-start; use `role="alert"` for errors that need announcing. */
 export function Alert({ variant = "info", title, icon, className, children, ...props }: AlertProps) {
   const s = styles[variant];
   const Icon = icon ?? s.icon;
+  const heading = readable(title);
+  const body = readable(children);
   return (
     <div role={variant === "destructive" ? "alert" : "status"} className={cn("flex items-start gap-3 rounded-xl border p-4 text-sm", s.box, className)} {...props}>
       <Icon className={cn("mt-0.5 size-4 shrink-0", s.iconColor)} />
       <div className="min-w-0">
-        {title && <p className={cn("font-semibold", variant !== "info" && s.iconColor)}>{title}</p>}
-        {children && <div className={cn("text-foreground/80", title && "mt-0.5")}>{children}</div>}
+        {heading && <p className={cn("font-semibold", variant !== "info" && s.iconColor)}>{heading}</p>}
+        {body && <div className={cn("text-foreground/80", heading && "mt-0.5")}>{body}</div>}
       </div>
     </div>
   );

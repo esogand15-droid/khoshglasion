@@ -182,7 +182,7 @@ export default function Automation() {
     } catch (error: any) {
       setMsg(apiDetail(error, fallback));
     } finally {
-      setPending(null);
+      setPending("");
     }
   }
 
@@ -202,6 +202,7 @@ export default function Automation() {
 
   const metrics = data.metrics || {};
   const hashtags = data.hashtags || [];
+  const actionKey = typeof pending === "string" ? pending : "";
   const grouped = CATEGORIES.filter(([value]) => value).map(([value, label]) => ({
     value,
     label,
@@ -451,7 +452,7 @@ export default function Automation() {
               {(bucket === "archive" ? data.archive : data.drafts)?.length ? (
                 <div className="space-y-4">
                   {(bucket === "archive" ? data.archive : data.drafts).map((draft: any) => (
-                    <article key={draft.id} aria-busy={pending.startsWith(`${draft.id}:`) || undefined} className={`space-y-3 rounded-2xl border p-4 transition-colors ${pending.startsWith(`${draft.id}:`) ? "border-brand/70 bg-brand/5" : "border-border"}`}>
+                    <article key={draft.id} aria-busy={actionKey.startsWith(`${draft.id}:`) || undefined} className={`space-y-3 rounded-2xl border p-4 transition-colors ${actionKey.startsWith(`${draft.id}:`) ? "border-brand/70 bg-brand/5" : "border-border"}`}>
                       <div className="flex flex-wrap items-center gap-2">
                         <Badge variant={draft.status === "failed" ? "destructive" : draft.status === "published" ? "success" : "secondary"}>{STATUS[draft.status] || draft.status}</Badge>
                         <span className="text-xs text-muted-foreground">{draft.source_label} · {draft.style_label || categoryLabel(draft.category)} · {draft.confidence || "—"} {draft.has_photo ? "· همراه عکس" : draft.has_media ? "· کپشن" : ""} {draft.rewrite === "preserve" ? "· بدون خلاصه" : draft.rewrite === "summarize" ? "· خلاصه" : ""}</span>
@@ -464,7 +465,7 @@ export default function Automation() {
                         {draft.published_at ? ` · منتشر شد: ${whenLabel(draft.published_at)}` : ""}
                       </p>
                       {(draft.has_photo || draft.image_note) && <DraftPhoto id={draft.id} />}
-                      {pending.startsWith(`${draft.id}:`) && <p className="text-xs text-brand" aria-live="polite">{pendingLabel(pending)}…</p>}
+                      {actionKey.startsWith(`${draft.id}:`) && <p className="text-xs text-brand" aria-live="polite">{pendingLabel(actionKey)}…</p>}
                       {edit?.id === draft.id ? (
                         <Textarea value={edit.body} onChange={(event) => setEdit({ ...edit, body: event.target.value })} />
                       ) : draft.body ? <p className="whitespace-pre-wrap text-sm">{draft.body}</p> : <p className="text-sm text-muted-foreground">برای این منبع هنوز متنی ساخته نشده. منبع پایین جدا از پیش‌نویس است.</p>}
