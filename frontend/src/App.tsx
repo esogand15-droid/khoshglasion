@@ -1,6 +1,7 @@
 import { Navigate, Route, Routes } from "react-router-dom";
 import Layout from "./layouts/Layout";
 import Audit from "./pages/Audit";
+import Automation from "./pages/Automation";
 import Channels from "./pages/Channels";
 import Dashboard from "./pages/Dashboard";
 import Emojis from "./pages/Emojis";
@@ -25,6 +26,7 @@ export default function App() {
       <Route path="/" element={<Protected><Layout /></Protected>}>
         <Route index element={<Dashboard />} />
         <Route path="channels" element={<Channels />} />
+        <Route path="automation" element={<Automation />} />
         <Route path="messages" element={<Messages />} />
         <Route path="emojis" element={<Emojis />} />
         <Route path="styles" element={<Styles />} />
