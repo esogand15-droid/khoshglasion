@@ -124,7 +124,7 @@ def _remember_skip(db: AsyncSession, source: NewsSource, item: dict, reason: str
     ))
 
 
-PUBLISHABLE = ("preview", "scheduled", "failed")
+PUBLISHABLE = ("preview", "scheduled", "failed", "recalled", "rejected")
 
 
 async def claim_for_publish(db: AsyncSession, draft_id: str) -> bool:

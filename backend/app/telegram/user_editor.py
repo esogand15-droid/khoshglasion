@@ -252,12 +252,21 @@ async def send_photo_via_user(chat_id: int, caption: str, entities: list[dict] |
     if client is None:
         return {"ok": False, "error": "user_session_not_configured"}
     try:
+        from io import BytesIO
+        from pathlib import Path
+
+        from backend.app.content.intake import photo_bytes_for_telegram
+
+        payload, name = photo_bytes_for_telegram(Path(photo_path))
+        blob = BytesIO(payload)
+        blob.name = name
         formatting = _entities(caption, None, entities) if entities else None
         sent = await client.send_file(
             int(chat_id),
-            photo_path,
+            blob,
             caption=(caption or "")[:1024],
             formatting_entities=formatting or None,
+            force_document=False,
         )
         return {"ok": True, "message_id": int(sent.id), "method": "user_session"}
     except Exception as exc:

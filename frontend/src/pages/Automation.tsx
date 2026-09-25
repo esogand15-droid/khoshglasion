@@ -60,6 +60,25 @@ const STAGES = [
   { name: "regenerator_rewrite", title: "چینش تازه", when: "دکمهٔ چینش تازه", detail: "جمله‌ها را جابه‌جا می‌کند. واقعیت تازه نمی‌سازد." },
 ];
 
+const RELEASABLE = new Set(["preview", "scheduled", "failed", "recalled", "rejected"]);
+
+function pendingLabel(key: string) {
+  const action = key.split(":").pop();
+  return {
+    publish: "در حال انتشار در کانال",
+    unsend: "در حال پس گرفتن از کانال",
+    reject: "در حال انتقال به بایگانی",
+    approve: "در حال زمان‌بندی",
+    test: "در حال ارسال آزمایشی",
+    restore: "در حال برگرداندن به صف",
+    preview: "در حال ساخت خروجی",
+    save: "در حال ذخیره متن",
+    fresh: "در حال ساخت شروع تازه",
+    shorter: "در حال کوتاه کردن",
+    rewrite: "در حال چینش تازه",
+  }[action || ""] || "در حال انجام";
+}
+
 function categoryLabel(value: string | null | undefined) {
   return CATEGORIES.find(([key]) => key === (value || ""))?.[1] || value || "عمومی";
 }
@@ -86,6 +105,8 @@ export default function Automation() {
   const [edit, setEdit] = useState<any>(null);
   const [statusFilter, setStatusFilter] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("");
+  const [bucket, setBucket] = useState<"queue" | "archive">("queue");
+  const [pending, setPending] = useState("");
   const [preview, setPreview] = useState<any>(null);
   const [proposal, setProposal] = useState<any>(null);
   const [tagForm, setTagForm] = useState({ tag: "", category: "general", priority: "60" });
@@ -142,6 +163,19 @@ export default function Automation() {
     }
   }
 
+  async function act(key: string, action: () => Promise<void>, fallback: string) {
+    if (pending) return;
+    setPending(key);
+    setMsg("");
+    try {
+      await action();
+    } catch (error: any) {
+      setMsg(error.response?.data?.detail || fallback);
+    } finally {
+      setPending(null);
+    }
+  }
+
   if (!data) {
     return (
       <AsyncPage
@@ -170,7 +204,7 @@ export default function Automation() {
     <Page
       kicker="اتوماسیون"
       title="پست خودکار"
-      description="آخرین پست کانال خوانده می‌شود. تبلیغ کنار می‌رود. خبر کوتاه خلاصه نمی‌شود. اگر عکس داشته باشد، همان عکس با کپشن می‌رود."
+      description="آخرین پست کانال خوانده می‌شود. تبلیغ کنار می‌رود. خبر کوتاه خلاصه نمی‌شود. اگر عکس داشته باشد، همان عکس به‌صورت تصویر، نه فایل، با کپشن می‌رود."
       actions={<Button variant="brand" disabled={!canEdit} loading={busy} onClick={async () => {
         setBusy(true);
         try {
@@ -377,21 +411,28 @@ export default function Automation() {
 
         <TabsContent value="drafts">
           <Card>
-            <CardHeader><CardTitle>پیش‌نویس‌ها</CardTitle></CardHeader>
+            <CardHeader><CardTitle>{bucket === "archive" ? "بایگانی" : "پیش‌نویس‌ها"}</CardTitle></CardHeader>
             <CardContent className="space-y-3">
+              <div className="flex flex-wrap gap-2">
+                <Button size="sm" variant={bucket === "queue" ? "brand" : "outline"} onClick={() => setBucket("queue")}>صف پیش‌نویس</Button>
+                <Button size="sm" variant={bucket === "archive" ? "brand" : "outline"} onClick={() => setBucket("archive")}>بایگانی{metrics.archive ? ` · ${fa(metrics.archive)}` : ""}</Button>
+              </div>
+              {bucket === "archive" && <p className="text-xs text-muted-foreground">ردشده‌ها اینجاست. از همین‌جا می‌شود دوباره منتشرشان کرد.</p>}
               <div className="grid gap-2 sm:grid-cols-2">
-                <Select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)} options={[{ value: "", label: "همه وضعیت‌ها" }, ...Object.entries(STATUS).map(([value, label]) => ({ value, label }))]} />
+                {bucket === "queue" && <Select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)} options={[{ value: "", label: "همه وضعیت‌ها" }, ...Object.entries(STATUS).filter(([value]) => value !== "rejected").map(([value, label]) => ({ value, label }))]} />}
                 <Select value={categoryFilter} onChange={(event) => setCategoryFilter(event.target.value)} options={CATEGORIES.map(([value, label]) => ({ value, label: value ? label : "همه دسته‌ها" }))} />
               </div>
-              {data.drafts?.length ? (
+              {(bucket === "archive" ? data.archive : data.drafts)?.length ? (
                 <div className="space-y-4">
-                  {data.drafts.map((draft: any) => (
-                    <article key={draft.id} className="space-y-3 rounded-2xl border border-border p-4">
+                  {(bucket === "archive" ? data.archive : data.drafts).map((draft: any) => (
+                    <article key={draft.id} aria-busy={pending.startsWith(`${draft.id}:`) || undefined} className={`space-y-3 rounded-2xl border p-4 transition-colors ${pending.startsWith(`${draft.id}:`) ? "border-brand/70 bg-brand/5" : "border-border"}`}>
                       <div className="flex flex-wrap items-center gap-2">
                         <Badge variant={draft.status === "failed" ? "destructive" : draft.status === "published" ? "success" : "secondary"}>{STATUS[draft.status] || draft.status}</Badge>
                         <span className="text-xs text-muted-foreground">{draft.source_label} · {draft.style_label || categoryLabel(draft.category)} · {draft.confidence || "—"} {draft.has_photo ? "· همراه عکس" : draft.has_media ? "· کپشن" : ""} {draft.rewrite === "preserve" ? "· بدون خلاصه" : draft.rewrite === "summarize" ? "· خلاصه" : ""}</span>
                         {draft.hashtags && <span className="text-xs text-muted-foreground" dir="ltr">{draft.hashtags}</span>}
                       </div>
+                      {draft.has_photo && <DraftPhoto id={draft.id} />}
+                      {pending.startsWith(`${draft.id}:`) && <p className="text-xs text-brand" aria-live="polite">{pendingLabel(pending)}…</p>}
                       {edit?.id === draft.id ? (
                         <Textarea value={edit.body} onChange={(event) => setEdit({ ...edit, body: event.target.value })} />
                       ) : draft.body ? <p className="whitespace-pre-wrap text-sm">{draft.body}</p> : <p className="text-sm text-muted-foreground">برای این منبع هنوز متنی ساخته نشده. منبع پایین جدا از پیش‌نویس است.</p>}
@@ -423,24 +464,24 @@ export default function Automation() {
                         <Input type="datetime-local" className="h-10" disabled={!canEdit} onChange={(event) => { if (!event.target.value) return; run(async () => { await api.patch(`/api/automation/drafts/${draft.id}`, { scheduled_at: new Date(event.target.value).toISOString() }); await load(); }, "زمان ذخیره نشد"); }} />
                       </div>
                       <div className="flex flex-wrap gap-2">
-                        <Button size="sm" variant="outline" disabled={!canEdit} onClick={() => setEdit(edit?.id === draft.id ? null : { ...draft })}>{edit?.id === draft.id ? "بستن" : "ویرایش"}</Button>
-                        {edit?.id === draft.id && <Button size="sm" variant="brand" onClick={() => run(async () => { await api.patch(`/api/automation/drafts/${draft.id}`, { body: edit.body }); setEdit(null); setMsg("متن ذخیره شد"); await load(); }, "متن ذخیره نشد")}>ذخیره متن</Button>}
-                        {draft.body && <Button size="sm" variant="outline" onClick={() => run(async () => { setPreview((await api.get(`/api/automation/drafts/${draft.id}/preview`)).data); }, "پیش‌نمایش نشد")}>خروجی ارسال</Button>}
-                        {canPublish && draft.body && draft.status !== "skipped" && <Button size="sm" variant="outline" onClick={() => run(async () => { await api.post(`/api/automation/drafts/${draft.id}/test-send`); setMsg("پیش‌نمایش به خودت رفت، نه کانال"); }, "ارسال آزمایشی نشد")}>بفرست به خودم</Button>}
-                        {canPublish && draft.body && draft.status !== "skipped" && <Button size="sm" variant="outline" onClick={() => run(async () => { await api.post(`/api/automation/drafts/${draft.id}/approve`); setMsg("برای ساعت بعدی زمان‌بندی شد"); await load(); }, "تأیید نشد")}>تأیید</Button>}
-                        {canPublish && draft.body && draft.status !== "skipped" && <Button size="sm" variant="brand" onClick={() => run(async () => { await api.post(`/api/automation/drafts/${draft.id}/publish`); setMsg("منتشر شد"); await load(); }, "منتشر نشد")}>انتشار الان</Button>}
-                        {canPublish && draft.published_url && <a className="self-center text-xs underline" href={draft.published_url} target="_blank" rel="noreferrer">پیام کانال</a>}
-                        {canPublish && draft.message_id && <Button size="sm" variant="destructive" onClick={() => run(async () => { await api.post(`/api/automation/drafts/${draft.id}/unsend`); setMsg("از کانال حذف شد"); await load(); }, "حذف نشد")}>پس بگیر</Button>}
-                        {canEdit && <Button size="sm" variant="outline" onClick={() => run(async () => { setProposal({ id: draft.id, mode: "fresh", ...(await api.post(`/api/automation/drafts/${draft.id}/regenerate?mode=fresh`)).data }); }, "بازنویسی نشد")}>شروع تازه</Button>}
-                        {canEdit && <Button size="sm" variant="outline" onClick={() => run(async () => { setProposal({ id: draft.id, mode: "shorter", ...(await api.post(`/api/automation/drafts/${draft.id}/regenerate?mode=shorter`)).data }); }, "کوتاه نشد")}>کوتاه‌تر</Button>}
-                        {canEdit && <Button size="sm" variant="outline" onClick={() => run(async () => { setProposal({ id: draft.id, mode: "rewrite", ...(await api.post(`/api/automation/drafts/${draft.id}/regenerate?mode=rewrite`)).data }); }, "چینش عوض نشد")}>چینش تازه</Button>}
-                        {draft.status === "skipped" && canEdit && <Button size="sm" variant="outline" onClick={() => run(async () => { await api.post(`/api/automation/drafts/${draft.id}/restore`); await load(); }, "برگردانده نشد")}>برگرداندن</Button>}
-                        {canEdit && <Button size="sm" variant="destructive" onClick={() => run(async () => { await api.post(`/api/automation/drafts/${draft.id}/reject`); await load(); }, "رد نشد")}>رد</Button>}
+                        <Button size="sm" variant="outline" disabled={!canEdit || !!pending} onClick={() => setEdit(edit?.id === draft.id ? null : { ...draft })}>{edit?.id === draft.id ? "بستن" : "ویرایش"}</Button>
+                        {edit?.id === draft.id && <Button size="sm" variant="brand" loading={pending === `${draft.id}:save`} disabled={!!pending} onClick={() => act(`${draft.id}:save`, async () => { await api.patch(`/api/automation/drafts/${draft.id}`, { body: edit.body }); setEdit(null); setMsg("متن ذخیره شد"); await load(); }, "متن ذخیره نشد")}>ذخیره متن</Button>}
+                        {draft.body && <Button size="sm" variant="outline" loading={pending === `${draft.id}:preview`} disabled={!!pending} onClick={() => act(`${draft.id}:preview`, async () => { setPreview({ draftId: draft.id, has_photo: draft.has_photo, ...(await api.get(`/api/automation/drafts/${draft.id}/preview`)).data }); }, "پیش‌نمایش نشد")}>خروجی ارسال</Button>}
+                        {canPublish && draft.body && RELEASABLE.has(draft.status) && <Button size="sm" variant="outline" loading={pending === `${draft.id}:test`} disabled={!!pending} onClick={() => act(`${draft.id}:test`, async () => { await api.post(`/api/automation/drafts/${draft.id}/test-send`); setMsg("پیش‌نمایش به خودت رفت، نه کانال"); }, "ارسال آزمایشی نشد")}>بفرست به خودم</Button>}
+                        {canPublish && draft.body && RELEASABLE.has(draft.status) && <Button size="sm" variant="outline" loading={pending === `${draft.id}:approve`} disabled={!!pending} onClick={() => act(`${draft.id}:approve`, async () => { await api.post(`/api/automation/drafts/${draft.id}/approve`); setMsg("برای ساعت بعدی زمان‌بندی شد"); setBucket("queue"); await load(); }, "تأیید نشد")}>تأیید</Button>}
+                        {canPublish && draft.body && RELEASABLE.has(draft.status) && <Button size="sm" variant="brand" loading={pending === `${draft.id}:publish`} disabled={!!pending} onClick={() => act(`${draft.id}:publish`, async () => { await api.post(`/api/automation/drafts/${draft.id}/publish`); setMsg("در کانال منتشر شد"); setBucket("queue"); await load(); }, "منتشر نشد")}>انتشار الان</Button>}
+                        {canPublish && draft.published_url && draft.message_id && <a className="self-center text-xs underline" href={draft.published_url} target="_blank" rel="noreferrer">پیام کانال</a>}
+                        {canPublish && draft.message_id && draft.status === "published" && <Button size="sm" variant="destructive" loading={pending === `${draft.id}:unsend`} disabled={!!pending} onClick={() => act(`${draft.id}:unsend`, async () => { await api.post(`/api/automation/drafts/${draft.id}/unsend`); setMsg("از کانال حذف شد. می‌توانی دوباره منتشرش کنی."); await load(); }, "حذف نشد")}>پس بگیر</Button>}
+                        {canEdit && <Button size="sm" variant="outline" loading={pending === `${draft.id}:fresh`} disabled={!!pending} onClick={() => act(`${draft.id}:fresh`, async () => { setProposal({ id: draft.id, mode: "fresh", ...(await api.post(`/api/automation/drafts/${draft.id}/regenerate?mode=fresh`)).data }); }, "بازنویسی نشد")}>شروع تازه</Button>}
+                        {canEdit && <Button size="sm" variant="outline" loading={pending === `${draft.id}:shorter`} disabled={!!pending} onClick={() => act(`${draft.id}:shorter`, async () => { setProposal({ id: draft.id, mode: "shorter", ...(await api.post(`/api/automation/drafts/${draft.id}/regenerate?mode=shorter`)).data }); }, "کوتاه نشد")}>کوتاه‌تر</Button>}
+                        {canEdit && <Button size="sm" variant="outline" loading={pending === `${draft.id}:rewrite`} disabled={!!pending} onClick={() => act(`${draft.id}:rewrite`, async () => { setProposal({ id: draft.id, mode: "rewrite", ...(await api.post(`/api/automation/drafts/${draft.id}/regenerate?mode=rewrite`)).data }); }, "چینش عوض نشد")}>چینش تازه</Button>}
+                        {(draft.status === "skipped" || draft.status === "rejected") && canEdit && <Button size="sm" variant="outline" loading={pending === `${draft.id}:restore`} disabled={!!pending} onClick={() => act(`${draft.id}:restore`, async () => { await api.post(`/api/automation/drafts/${draft.id}/restore`); setBucket("queue"); setMsg("به صف پیش‌نویس برگشت"); await load(); }, "برگردانده نشد")}>برگردان به پیش‌نویس</Button>}
+                        {canEdit && draft.status !== "rejected" && draft.status !== "published" && draft.status !== "sending" && <Button size="sm" variant="destructive" loading={pending === `${draft.id}:reject`} disabled={!!pending} onClick={() => act(`${draft.id}:reject`, async () => { await api.post(`/api/automation/drafts/${draft.id}/reject`); setBucket("archive"); setMsg("به بایگانی رفت. از همان‌جا می‌شود منتشرش کرد."); await load(); }, "رد نشد")}>رد</Button>}
                       </div>
                     </article>
                   ))}
                 </div>
-              ) : <EmptyState title="پیش‌نویسی نیست" description="بعد از جمع‌آوری، متن ساخته‌شده اینجا دیده می‌شود. تا تأیید یا رسیدن ساعت، در کانال نمی‌رود." />}
+              ) : <EmptyState title={bucket === "archive" ? "بایگانی خالی است" : "پیش‌نویسی نیست"} description={bucket === "archive" ? "ردشده‌ها اینجا می‌مانند و از همین‌جا می‌شود منتشرشان کرد." : "بعد از جمع‌آوری، متن ساخته‌شده اینجا دیده می‌شود. تا تأیید یا رسیدن ساعت، در کانال نمی‌رود."} />}
             </CardContent>
           </Card>
         </TabsContent>
@@ -559,12 +600,48 @@ export default function Automation() {
       </Tabs>
 
       <Dialog open={!!preview} onOpenChange={(open) => !open && setPreview(null)} title="خروجی قبل از کانال" size="lg">
-        {preview && <TelegramPreview html={preview.html_text} plain={preview.text} />}
+        {preview && (
+          <div className="space-y-3">
+            {preview.has_photo && preview.draftId && <DraftPhoto id={preview.draftId} />}
+            <TelegramPreview html={preview.html_text} plain={preview.text} />
+          </div>
+        )}
       </Dialog>
       <Dialog open={!!proposal} onOpenChange={(open) => !open && setProposal(null)} title="تفاوت قبل از جایگزینی" size="lg" footer={proposal?.proposed && <Button variant="brand" onClick={() => run(async () => { await api.patch(`/api/automation/drafts/${proposal.id}`, { body: proposal.proposed }); setProposal(null); setMsg("همان متن تأییدشده جایگزین شد"); await load(); }, "جایگزین نشد")}>جایگزین کن</Button>}>
         {proposal && <><p className="whitespace-pre-wrap text-sm">{proposal.proposed}</p><DiffList rows={proposal.diff} /></>}
       </Dialog>
     </Page>
+  );
+}
+
+function DraftPhoto({ id }: { id: string }) {
+  const [url, setUrl] = useState<string>("");
+  const [failed, setFailed] = useState(false);
+  const [open, setOpen] = useState(false);
+  useEffect(() => {
+    let live = true;
+    let objectUrl = "";
+    api.get(`/api/automation/drafts/${id}/photo`, { responseType: "blob" }).then((response) => {
+      if (!live) return;
+      objectUrl = URL.createObjectURL(response.data);
+      setUrl(objectUrl);
+    }).catch(() => { if (live) setFailed(true); });
+    return () => {
+      live = false;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [id]);
+  if (failed) return <p className="text-xs text-muted-foreground">عکس ذخیره شده باز نشد.</p>;
+  if (!url) return <div className="h-36 animate-pulse rounded-xl bg-muted" aria-label="در حال خواندن عکس" />;
+  return (
+    <>
+      <button type="button" className="block w-full cursor-pointer overflow-hidden rounded-xl border border-border bg-black/30" onClick={() => setOpen(true)} aria-label="بزرگ‌نمایی عکس">
+        <img src={url} alt="عکس همین پیش‌نویس" className="max-h-64 w-full object-contain" />
+      </button>
+      <Dialog open={open} onOpenChange={setOpen} title="عکس پیش‌نویس" size="lg">
+        <img src={url} alt="عکس همین پیش‌نویس" className="max-h-[70dvh] w-full object-contain" />
+      </Dialog>
+    </>
   );
 }
 

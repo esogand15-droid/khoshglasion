@@ -4,6 +4,7 @@ import logging
 import re
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import Response
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
@@ -73,6 +74,12 @@ def _versions(raw: str | None) -> list[dict]:
     ]
 
 
+def _draft_photo(row: DraftPost):
+    from backend.app.content.intake import photo_of
+
+    return photo_of(row.analysis_json)
+
+
 def _analysis_flag(raw: str | None, key: str):
     try:
         data = json.loads(raw or "")
@@ -107,7 +114,7 @@ def dump_draft(row: DraftPost, username: str | None = None) -> dict:
         "source_url": row.source_url,
         "published_url": channel_message_url(row.target_chat_id, row.message_id, username),
         "has_media": bool(_analysis_flag(row.analysis_json, "has_media")),
-        "has_photo": bool(_analysis_flag(row.analysis_json, "photo_path")),
+        "has_photo": _draft_photo(row) is not None,
         "image_note": _analysis_flag(row.analysis_json, "image_note") or "",
         "rewrite": _analysis_flag(row.analysis_json, "rewrite") or "",
         "writer_model": _analysis_flag(row.analysis_json, "writer_model") or "",
@@ -242,12 +249,15 @@ async def _read_automation_state(
     config = await get_config(db)
     sources = (await db.execute(select(NewsSource).order_by(NewsSource.created_at))).scalars().all()
     slots = (await db.execute(select(PublishSlot).order_by(PublishSlot.hour, PublishSlot.minute))).scalars().all()
-    draft_query = select(DraftPost).order_by(DraftPost.created_at.desc()).limit(80)
-    if draft_status:
+    draft_query = select(DraftPost).where(DraftPost.status != "rejected").order_by(DraftPost.created_at.desc()).limit(80)
+    archive_query = select(DraftPost).where(DraftPost.status == "rejected").order_by(DraftPost.created_at.desc()).limit(80)
+    if draft_status and draft_status != "rejected":
         draft_query = draft_query.where(DraftPost.status == draft_status)
     if draft_category:
         draft_query = draft_query.where(DraftPost.category == draft_category)
+        archive_query = archive_query.where(DraftPost.category == draft_category)
     drafts = (await db.execute(draft_query)).scalars().all()
+    archived = (await db.execute(archive_query)).scalars().all()
     channels = (await db.execute(select(Channel))).scalars().all()
     names = {int(row.chat_id): row.username for row in channels if row.chat_id and row.username}
     hashtags = (await db.execute(select(HashtagRule).order_by(HashtagRule.priority.desc()))).scalars().all()
@@ -271,6 +281,7 @@ async def _read_automation_state(
             "preview": int(counts.get("preview") or 0),
             "scheduled": int(counts.get("scheduled") or 0),
             "failed": int(counts.get("failed") or 0),
+            "archive": int(counts.get("rejected") or 0),
             "published_today": sum(today.values()),
             "daily_cap": config.daily_cap,
         },
@@ -288,6 +299,7 @@ async def _read_automation_state(
         "sources": [dump_source(row) for row in sources],
         "slots": [dump_slot(row) for row in slots],
         "drafts": [dump_draft(row, names.get(int(row.target_chat_id)) if row.target_chat_id else None) for row in drafts],
+        "archive": [dump_draft(row, names.get(int(row.target_chat_id)) if row.target_chat_id else None) for row in archived],
         "finetune": finetune,
     }
 
@@ -476,6 +488,18 @@ async def update_draft(draft_id: str, payload: DraftIn, request: Request, db: As
     return dump_draft(row)
 
 
+@router.get("/drafts/{draft_id}/photo")
+async def draft_photo(draft_id: str, db: AsyncSession = Depends(get_db), admin=Depends(get_current_admin)):
+    row = await _draft(db, draft_id)
+    path = _draft_photo(row)
+    if path is None:
+        raise HTTPException(status_code=404, detail="این پیش‌نویس عکس ندارد")
+    data = path.read_bytes()
+    from backend.app.content.intake import image_mime
+
+    return Response(content=data, media_type=image_mime(data), headers={"Cache-Control": "private, max-age=600"})
+
+
 @router.get("/drafts/{draft_id}/preview")
 async def preview_draft(draft_id: str, db: AsyncSession = Depends(get_db), admin=Depends(get_current_admin)):
     row = await _draft(db, draft_id)
@@ -549,8 +573,12 @@ async def unsend_draft(draft_id: str, request: Request, db: AsyncSession = Depen
     error = await delete_published(int(row.target_chat_id), int(row.message_id))
     if error:
         raise HTTPException(status_code=400, detail=error)
+    removed = int(row.message_id)
     row.status = "recalled"
-    await write_audit(db, admin=admin, action="unsend", resource="draft", resource_id=row.id, new_value={"message_id": row.message_id}, ip_address=request.client.host if request.client else None)
+    row.message_id = None
+    row.error = None
+    row.published_at = None
+    await write_audit(db, admin=admin, action="unsend", resource="draft", resource_id=row.id, new_value={"message_id": removed}, ip_address=request.client.host if request.client else None)
     return dump_draft(row)
 
 
@@ -558,8 +586,8 @@ async def unsend_draft(draft_id: str, request: Request, db: AsyncSession = Depen
 async def approve_draft(draft_id: str, request: Request, db: AsyncSession = Depends(get_db), admin=Depends(get_current_admin)):
     assert_publisher(admin)
     row = await _draft(db, draft_id)
-    if row.status not in {"preview", "failed", "scheduled"}:
-        raise HTTPException(status_code=400, detail="فقط پیش‌نویس بازبینی، ناموفق یا زمان‌بندی‌شده تأیید می‌شود")
+    if row.status not in {"preview", "failed", "scheduled", "recalled", "rejected"}:
+        raise HTTPException(status_code=400, detail="فقط پیش‌نویس باز، پس‌گرفته یا بایگانی‌شده تأیید می‌شود")
     if len((row.body or "").strip()) < 8:
         raise HTTPException(status_code=400, detail="اول متن پیش‌نویس را کامل کن")
     slots = (await db.execute(select(PublishSlot).where(PublishSlot.enabled == True))).scalars().all()  # noqa: E712

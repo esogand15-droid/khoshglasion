@@ -77,17 +77,21 @@ async def publish_rendered(
 
 
 async def _send_photo(chat_id: int, caption: str, html_text: str | None, photo_path: str) -> tuple[int | None, str | None]:
-    from aiogram.types import FSInputFile
+    from pathlib import Path
 
+    from aiogram.types import BufferedInputFile
+
+    from backend.app.content.intake import photo_bytes_for_telegram
     from backend.app.telegram.bot import get_bot
     from backend.app.telegram.edit import strip_custom_emoji_html
     from backend.app.telegram.user_editor import send_photo_via_user
 
+    payload, name = photo_bytes_for_telegram(Path(photo_path))
     bot = get_bot()
     plain = strip_custom_emoji_html(html_text) or caption
     if bot is not None:
         try:
-            sent = await bot.send_photo(chat_id, FSInputFile(photo_path), caption=plain[:1024])
+            sent = await bot.send_photo(chat_id, BufferedInputFile(payload, filename=name), caption=plain[:1024])
             return int(sent.message_id), None
         except Exception as exc:
             logger.info("bot photo publish failed: %s", type(exc).__name__)

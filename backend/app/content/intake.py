@@ -87,12 +87,20 @@ def media_root() -> Path:
     return root.resolve()
 
 
+def image_suffix(data: bytes) -> str:
+    if data.startswith(b"\x89PNG"):
+        return ".png"
+    if data.startswith(b"RIFF") and data[8:12] == b"WEBP":
+        return ".webp"
+    return ".jpg"
+
+
 def save_source_photo(source_key: str, data: bytes) -> str | None:
     if not data or len(data) < 32 or len(data) > 8_000_000:
         return None
     if not (data.startswith(b"\xff\xd8") or data.startswith(b"\x89PNG") or data.startswith(b"RIFF")):
         return None
-    name = hashlib.sha256((source_key or "").encode()).hexdigest()[:24] + ".img"
+    name = hashlib.sha256((source_key or "").encode()).hexdigest()[:24] + image_suffix(data)
     path = media_root() / name
     path.write_bytes(data)
     return str(path)
@@ -135,3 +143,30 @@ def image_mime(data: bytes) -> str:
     if data.startswith(b"RIFF"):
         return "image/webp"
     return "image/jpeg"
+
+
+def _webp_to_jpeg(data: bytes) -> bytes | None:
+    try:
+        from io import BytesIO
+        from PIL import Image
+    except ImportError:
+        return None
+    try:
+        image = Image.open(BytesIO(data)).convert("RGB")
+        out = BytesIO()
+        image.save(out, format="JPEG", quality=90)
+        return out.getvalue()
+    except Exception:
+        return None
+
+
+def photo_bytes_for_telegram(path: Path) -> tuple[bytes, str]:
+    """Bytes plus a .jpg/.png name. Telegram shows an unknown extension as a file."""
+    data = path.read_bytes()
+    if data.startswith(b"\x89PNG"):
+        return data, "photo.png"
+    if data.startswith(b"RIFF") and data[8:12] == b"WEBP":
+        converted = _webp_to_jpeg(data)
+        if converted:
+            return converted, "photo.jpg"
+    return data, "photo.jpg"
