@@ -86,6 +86,12 @@ async def bootstrap() -> None:
         await seed_admin(db)
         await seed_emojis(db)
         await seed_runtime_defaults(db)
+        try:
+            from backend.app.services.autopost import ensure_content_defaults
+
+            await ensure_content_defaults(db)
+        except Exception:
+            logger.exception("content defaults skipped")
         from backend.app.telegram.session_login import refresh_user_credentials
         await refresh_user_credentials(db)
         await db.commit()

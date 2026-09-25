@@ -21,8 +21,8 @@ export default function Styles() {
   const [form, setForm] = useState({ name: "", slug: "", footer: "", divider: "━━━━━━━━━━━━" });
   const [edit, setEdit] = useState<any>(null);
   const [msg, setMsg] = useState("");
-  async function load() { setItems((await api.get("/api/styles")).data); }
-  useEffect(() => { load().catch(() => {}); }, []);
+  async function load() { setItems((await api.get("/api/styles", { timeout: 12000 })).data); }
+  useEffect(() => { load().catch((error: any) => setMsg(error.response?.data?.detail || "استایل‌ها خوانده نشد")); }, []);
 
   return (
     <Page kicker="هویت بصری" title="استایل و فوتر" description="استایل سفارشی را بساز و در تنظیم کانال انتخاب کن.">

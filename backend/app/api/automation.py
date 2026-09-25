@@ -1,10 +1,11 @@
 from datetime import datetime, timezone
 import json
+import logging
 import re
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -35,6 +36,7 @@ from backend.app.services.autopost import (
 )
 
 router = APIRouter(prefix="/api/automation", tags=["automation"])
+logger = logging.getLogger(__name__)
 
 
 def dump_source(row: NewsSource) -> dict:
@@ -84,8 +86,8 @@ def dump_draft(row: DraftPost, username: str | None = None) -> dict:
         "category": row.category,
         "body": row.body,
         "source_label": row.source_label,
-        "scheduled_at": row.scheduled_at.isoformat() if row.scheduled_at else None,
-        "published_at": row.published_at.isoformat() if row.published_at else None,
+        "scheduled_at": _iso(row.scheduled_at),
+        "published_at": _iso(row.published_at),
         "target_chat_id": row.target_chat_id,
         "message_id": row.message_id,
         "error": row.error,
@@ -95,7 +97,7 @@ def dump_draft(row: DraftPost, username: str | None = None) -> dict:
         "importance": row.importance,
         "version": row.version,
         "retry_count": row.retry_count,
-        "next_retry_at": row.next_retry_at.isoformat() if row.next_retry_at else None,
+        "next_retry_at": _iso(row.next_retry_at),
         "template_id": row.template_id,
         "emoji_signature": row.emoji_signature,
         "analysis_summary": _summary(row.analysis_json),
@@ -104,7 +106,7 @@ def dump_draft(row: DraftPost, username: str | None = None) -> dict:
         "published_url": channel_message_url(row.target_chat_id, row.message_id, username),
         "has_media": bool(_analysis_flag(row.analysis_json, "has_media")),
         "versions": _versions(row.versions_json),
-        "created_at": row.created_at.isoformat() if row.created_at else None,
+        "created_at": _iso(row.created_at),
     }
 
 
@@ -181,6 +183,37 @@ class SlotPatch(BaseModel):
     category: str | None = None
 
 
+def _iso(value) -> str | None:
+    if value is None:
+        return None
+    iso = getattr(value, "isoformat", None)
+    return iso() if callable(iso) else str(value)
+
+
+async def _fail_fast(db: AsyncSession) -> None:
+    """A panel read must fail in seconds, not wait behind a collector lock."""
+    try:
+        conn = await db.connection()
+        if conn.dialect.name != "postgresql":
+            return
+        await db.execute(text("SET LOCAL lock_timeout = '3s'"))
+        await db.execute(text("SET LOCAL statement_timeout = '8s'"))
+    except Exception:
+        logger.exception("automation read timeout was not set")
+
+
+async def _finetune_snapshot(db: AsyncSession) -> dict:
+    empty = {"total": 0, "card": "", "folders": []}
+    try:
+        async with db.begin_nested():
+            from backend.app.services.finetune import snapshot
+
+            return await snapshot(db)
+    except Exception:
+        logger.exception("finetune snapshot skipped")
+        return empty
+
+
 @router.get("")
 async def automation_state(
     draft_status: str | None = None,
@@ -188,7 +221,24 @@ async def automation_state(
     db: AsyncSession = Depends(get_db),
     admin=Depends(get_current_admin),
 ):
-    await ensure_content_defaults(db)
+    try:
+        return await _read_automation_state(draft_status, draft_category, db, admin)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("automation state failed")
+        raise HTTPException(status_code=503, detail="صف اتوماسیون الان خوانده نشد. چند ثانیه بعد دوباره بزن.") from exc
+
+
+async def _read_automation_state(
+    draft_status: str | None = None,
+    draft_category: str | None = None,
+    db: AsyncSession = Depends(get_db),
+    admin=Depends(get_current_admin),
+):
+    # This view must stay a read. Writing defaults here waits behind the
+    # collector's open transaction and the page never leaves its loading line.
+    await _fail_fast(db)
     config = await get_config(db)
     sources = (await db.execute(select(NewsSource).order_by(NewsSource.created_at))).scalars().all()
     slots = (await db.execute(select(PublishSlot).order_by(PublishSlot.hour, PublishSlot.minute))).scalars().all()
@@ -207,9 +257,7 @@ async def automation_state(
         (await db.execute(select(DraftPost.status, func.count()).group_by(DraftPost.status))).all()
     )
     today = await published_today(db)
-    from backend.app.services.finetune import snapshot
-
-    finetune = await snapshot(db)
+    finetune = await _finetune_snapshot(db)
     return {
         "enabled": config.enabled,
         "auto_publish": config.auto_publish,
@@ -228,7 +276,7 @@ async def automation_state(
         },
         "hashtags": [_dump_hashtag(row) for row in hashtags],
         "logs": [
-            {"event": row.event, "level": row.level, "detail": row.detail, "created_at": row.created_at.isoformat() if row.created_at else None}
+            {"event": row.event, "level": row.level, "detail": row.detail, "created_at": _iso(row.created_at)}
             for row in logs
         ],
         "prompts": [_dump_prompt(row) for row in prompts],

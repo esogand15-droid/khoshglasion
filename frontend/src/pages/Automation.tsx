@@ -3,6 +3,7 @@ import api from "../services/api";
 import { useAuth } from "../stores/auth";
 import { Page } from "../components/page";
 import { Alert } from "@/components/ui/alert";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -71,6 +72,8 @@ function whenLabel(value: string | null | undefined) {
 export default function Automation() {
   const [data, setData] = useState<any>(null);
   const [channels, setChannels] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
   const [msg, setMsg] = useState("");
   const [source, setSource] = useState("");
   const [sourceCategory, setSourceCategory] = useState("");
@@ -92,21 +95,30 @@ export default function Automation() {
   const canPublish = !role || role === "OWNER" || role === "ADMIN";
 
   async function load(status = statusFilter, category = categoryFilter) {
-    const [state, listed] = await Promise.all([
-      api.get("/api/automation", { params: { draft_status: status || undefined, draft_category: category || undefined } }),
-      api.get("/api/channels"),
-    ]);
-    setData(state.data);
-    setChannels(listed.data || []);
-    setPromptDrafts((prev) => {
-      const next = { ...prev };
-      for (const item of state.data.prompts || []) {
-        if (next[item.name] === undefined) next[item.name] = item.body || "";
-      }
-      return next;
-    });
+    setLoading(true);
+    try {
+      const state = await api.get("/api/automation", {
+        params: { draft_status: status || undefined, draft_category: category || undefined },
+        timeout: 12000,
+      });
+      setData(state.data);
+      setLoadError("");
+      setPromptDrafts((prev) => {
+        const next = { ...prev };
+        for (const item of state.data.prompts || []) {
+          if (next[item.name] === undefined) next[item.name] = item.body || "";
+        }
+        return next;
+      });
+    } catch (error: any) {
+      const detail = error.response?.data?.detail;
+      setLoadError(error.code === "ECONNABORTED" ? "خواندن صف طول کشید. دوباره بزن." : (typeof detail === "string" ? detail : "صف اتوماسیون خوانده نشد"));
+    } finally {
+      setLoading(false);
+    }
+    api.get("/api/channels", { timeout: 12000 }).then((listed) => setChannels(listed.data || [])).catch(() => {});
   }
-  useEffect(() => { load().catch(() => setMsg("وضعیت اتوماسیون خوانده نشد")); }, [statusFilter, categoryFilter]);
+  useEffect(() => { load().catch(() => setLoadError("صف اتوماسیون خوانده نشد")); }, [statusFilter, categoryFilter]);
 
   async function saveConfig(patch: Record<string, unknown>) {
     try {
@@ -127,9 +139,13 @@ export default function Automation() {
 
   if (!data) {
     return (
-      <Page title="پست خودکار" description="در حال خواندن تنظیم واقعی…">
-        <p className="text-sm text-muted-foreground">{msg || "صف اتوماسیون در حال بارگذاری است."}</p>
-        {msg && <Button className="mt-3" variant="outline" onClick={() => load().catch(() => setMsg("وضعیت اتوماسیون خوانده نشد"))}>دوباره</Button>}
+      <Page title="پست خودکار" description={loading ? "در حال خواندن صف…" : "صف خوانده نشد"}>
+        <div className="space-y-3" aria-busy={loading}>
+          <Skeleton shimmer className="h-16 w-full rounded-2xl" />
+          <Skeleton shimmer className="h-40 w-full rounded-2xl" />
+        </div>
+        {loadError && <Alert className="mt-3" variant="warning" title={loadError} />}
+        <Button className="mt-3" variant="outline" disabled={loading} onClick={() => load().catch(() => setLoadError("صف اتوماسیون خوانده نشد"))}>{loading ? "در حال خواندن…" : "دوباره"}</Button>
       </Page>
     );
   }
@@ -164,6 +180,7 @@ export default function Automation() {
         هر جمع‌آوری پست را در پوشهٔ فاین‌تیون طبقه می‌کند. نویسنده از همان پوشه می‌فهمد خبر را کوتاه بگوید، فان را نصیحت نکند و اطلاعیه را مقاله نکند. لینک خصوصی فقط وقتی ثبت می‌شود که اکانت خبر از قبل عضو همان کانال باشد؛ جوین خودکار انجام نمی‌شود.
       </Alert>
       {data.last_error && <Alert variant="destructive" title={data.last_error} />}
+      {loadError && <Alert variant="warning" title={loadError}><Button variant="outline" onClick={() => load()}>دوباره</Button></Alert>}
       {msg && <Alert>{msg}</Alert>}
 
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">

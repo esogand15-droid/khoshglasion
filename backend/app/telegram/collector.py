@@ -8,6 +8,7 @@ ids may still remain, so the caller must not jump the cursor to the newest id.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 import time
@@ -284,6 +285,34 @@ async def _reread_joined(client, username: str, invite_hash: str | None, access_
 
 
 async def read_channel_posts(
+    username: str,
+    *,
+    min_id: int = 0,
+    limit: int = 40,
+    access_hash: int | None = None,
+    invite_hash: str | None = None,
+    updates: dict | None = None,
+    title: str | None = None,
+) -> tuple[list[dict], str | None, bool]:
+    try:
+        return await asyncio.wait_for(
+            _read_channel_posts(
+                username,
+                min_id=min_id,
+                limit=limit,
+                access_hash=access_hash,
+                invite_hash=invite_hash,
+                updates=updates,
+                title=title,
+            ),
+            timeout=25,
+        )
+    except asyncio.TimeoutError:
+        logger.warning("news read timed out for %s", username)
+        return [], "خواندن این منبع بیش از حد طول کشید", False
+
+
+async def _read_channel_posts(
     username: str,
     *,
     min_id: int = 0,

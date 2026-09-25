@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import asyncio
 import json
 import logging
 import os
@@ -222,14 +223,23 @@ async def collect_sources(db: AsyncSession, *, force: bool = False) -> dict:
         if not force and source_seen and source_seen > now - timedelta(minutes=interval):
             continue
         updates: dict = {}
-        posts, error, truncated = await read_channel_posts(
-            source.username,
-            min_id=int(source.last_message_id or 0),
-            access_hash=getattr(source, "access_hash", None),
-            invite_hash=getattr(source, "invite_hash", None),
-            updates=updates,
-            title=source.title,
-        )
+        # Commit before Telegram. An open transaction here blocks the panel's
+        # automation read for as long as the channel call takes.
+        await db.commit()
+        try:
+            posts, error, truncated = await asyncio.wait_for(
+                read_channel_posts(
+                    source.username,
+                    min_id=int(source.last_message_id or 0),
+                    access_hash=getattr(source, "access_hash", None),
+                    invite_hash=getattr(source, "invite_hash", None),
+                    updates=updates,
+                    title=source.title,
+                ),
+                timeout=30,
+            )
+        except asyncio.TimeoutError:
+            posts, error, truncated = [], "خواندن این منبع بیش از حد طول کشید", False
         if updates.get("access_hash") is not None:
             source.access_hash = int(updates["access_hash"])
         if updates.get("title"):
@@ -425,7 +435,14 @@ async def deliver_draft(db: AsyncSession, draft: DraftPost, chat_id: int) -> tup
         return None, "متن پیش‌نویس خالی است"
     maps = await load_emoji_maps(db)
     payload = prepare_publish_payload(draft.body, draft.category, draft.emoji_signature, maps)
-    return await publish_rendered(chat_id, payload["text"], payload["html_text"], payload["entities"])
+    await db.commit()
+    try:
+        return await asyncio.wait_for(
+            publish_rendered(chat_id, payload["text"], payload["html_text"], payload["entities"]),
+            timeout=25,
+        )
+    except asyncio.TimeoutError:
+        return None, "ارسال به تلگرام بیش از حد طول کشید"
 
 
 def mark_publish_failure(draft: DraftPost, error: str, now: datetime) -> None:

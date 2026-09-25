@@ -26,20 +26,28 @@ export default function Messages() {
   const [status, setStatus] = useState("");
   const [q, setQ] = useState("");
   const [selected, setSelected] = useState<any>(null);
+  const [loadError, setLoadError] = useState("");
 
   async function load(nextPage = page, nextStatus = status, nextQ = q) {
-    const { data } = await api.get("/api/messages", {
-      params: { status: nextStatus || undefined, q: nextQ || undefined, limit: LIMIT, offset: (nextPage - 1) * LIMIT },
-    });
-    setItems(data.items || []);
-    setTotal(data.total || 0);
+    try {
+      const { data } = await api.get("/api/messages", {
+        params: { status: nextStatus || undefined, q: nextQ || undefined, limit: LIMIT, offset: (nextPage - 1) * LIMIT },
+        timeout: 12000,
+      });
+      setItems(data.items || []);
+      setTotal(data.total || 0);
+      setLoadError("");
+    } catch (error: any) {
+      setLoadError(error.response?.data?.detail || "پیام‌ها خوانده نشد");
+    }
   }
-  useEffect(() => { load(1, status, q).catch(() => {}); }, [status]);
+  useEffect(() => { load(1, status, q).catch(() => setLoadError("پیام‌ها خوانده نشد")); }, [status]);
 
   const pages = Math.max(1, Math.ceil(total / LIMIT));
 
   return (
     <Page kicker="بایگانی ادیت" title="پیام‌ها" description={`${fa(total)} رکورد واقعی از پردازش‌ها.`}>
+      {loadError && <p className="text-sm text-destructive">{loadError}</p>}
       <div className="grid gap-3 md:grid-cols-[1fr_220px_auto] md:items-end">
         <SearchInput value={q} onChange={setQ} onSearch={(value) => { setPage(1); load(1, status, value); }} placeholder="جست‌وجو در متن یا خطا" />
         <Select

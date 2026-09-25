@@ -35,11 +35,11 @@ export default function Channels() {
   const [edit, setEdit] = useState<any>(null);
 
   async function load() {
-    const [channels, styleRows] = await Promise.all([api.get("/api/channels"), api.get("/api/styles")]);
+    const [channels, styleRows] = await Promise.all([api.get("/api/channels", { timeout: 12000 }), api.get("/api/styles", { timeout: 12000 })]);
     setItems(channels.data);
     setStyles(styleRows.data);
   }
-  useEffect(() => { load().catch(() => {}); }, []);
+  useEffect(() => { load().catch((error: any) => setMsg(error.response?.data?.detail || "کانال‌ها خوانده نشد")); }, []);
 
   async function add() {
     const chatId = Number(form.chat_id);

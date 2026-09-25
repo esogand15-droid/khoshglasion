@@ -30,12 +30,23 @@ export default function Emojis() {
   const [bulkCategory, setBulkCategory] = useState("");
   const [bulkPriority, setBulkPriority] = useState("70");
 
-  async function load() { setItems((await api.get("/api/emojis")).data); }
-  useEffect(() => { load().catch(() => {}); }, []);
+  async function load() { setItems((await api.get("/api/emojis", { timeout: 12000 })).data); }
+  useEffect(() => { load().catch((error: any) => setMsg(error.response?.data?.detail || "ایموجی‌ها خوانده نشد")); }, []);
   useEffect(() => {
     const ids = items.map((item) => item.custom_emoji_id).filter(Boolean);
     if (!ids.length) return;
-    prefetchEmojiMeta(ids).then((error) => { if (error) setMsg(error); }).catch(() => {});
+    let cancelled = false;
+    const chunks: string[][] = [];
+    for (let offset = 0; offset < ids.length; offset += 36) chunks.push(ids.slice(offset, offset + 36));
+    (async () => {
+      for (const chunk of chunks) {
+        if (cancelled) return;
+        const error = await prefetchEmojiMeta(chunk);
+        if (error) setMsg(error);
+        await new Promise((resolve) => window.setTimeout(resolve, 400));
+      }
+    })().catch(() => {});
+    return () => { cancelled = true; };
   }, [items]);
   const shown = items.filter((item) => !q || `${item.unicode_emoji} ${item.custom_emoji_id} ${item.category || ""}`.includes(q));
   const selectedSet = new Set(selected);
