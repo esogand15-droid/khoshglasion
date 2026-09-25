@@ -145,7 +145,10 @@ def _remember_seen(db: AsyncSession, source: NewsSource, item: dict, digest: str
     ))
 
 
-def _remember_skip(db: AsyncSession, source: NewsSource, item: dict, reason: str, config) -> None:
+def _remember_skip(db: AsyncSession, source: NewsSource, item: dict, reason: str, config, detail: str = "") -> None:
+    label = detail.strip() or SKIP_FA.get(reason) or reason
+    if reason == "ADVERTISEMENT" and not label.startswith("تبلیغ"):
+        label = f"تبلیغ: {label}"
     db.add(DraftPost(
         status="skipped",
         category=source.category_hint or "news",
@@ -154,9 +157,9 @@ def _remember_skip(db: AsyncSession, source: NewsSource, item: dict, reason: str
         source_label=source.title or source.username,
         source_key=f"{source.username}:{int(item['id'])}",
         content_hash=content_hash(item.get("text") or "") or None,
-        error=(SKIP_FA.get(reason) or reason)[:120],
+        error=label[:180],
         confidence="low",
-        analysis_json=json.dumps({"value": reason, "has_media": bool(item.get("has_media"))}, ensure_ascii=False),
+        analysis_json=json.dumps({"value": reason, "reading": detail[:180], "has_media": bool(item.get("has_media"))}, ensure_ascii=False),
         target_chat_id=config.target_chat_id,
     ))
 
@@ -223,7 +226,7 @@ async def _hashtags(db: AsyncSession, category: str, text: str) -> list[str]:
     return choose_hashtags(category, text, enabled=enabled, forbidden=forbidden, catalog=catalog)
 
 
-async def _analyze(db: AsyncSession, text: str, created_at, runtime) -> dict:
+async def _analyze(db: AsyncSession, text: str, created_at, runtime, image_note: str = "") -> dict:
     decision = analyze_post(text)
     judgment = judge_value(text, created_at=created_at)
     base = {
@@ -241,7 +244,7 @@ async def _analyze(db: AsyncSession, text: str, created_at, runtime) -> dict:
         return base
     raw = await complete_text(runtime, [
         {"role": "system", "content": await active_prompt(db, "analyzer")},
-        {"role": "user", "content": wrap_post(text[:1800])},
+        {"role": "user", "content": wrap_post(text[:1600]) + (f"\n\nتوضیح عکس:\n{image_note[:500]}" if image_note else "")},
     ])
     return merge_analysis(base, parse_analysis(raw), text)
 
@@ -382,8 +385,31 @@ async def collect_sources(db: AsyncSession, *, force: bool = False) -> dict:
                 handled.add(message_id)
                 await write_log(db, "collect_skip", f"{source.username}:{message_id} REPEAT")
                 continue
-            judgment = judge_value(item["text"], created_at=item.get("date"))
-            style = classify_style(item["text"])
+            from backend.app.content.intake import promotion_reason
+            from backend.app.content.reading import blend_style, image_ad_reason, review_ad
+
+            photo_path = item.get("photo_path") if safe_photo_path(item.get("photo_path")) else None
+            image_note = ""
+            seen: dict = {}
+            text_ad = promotion_reason(item["text"])
+            if photo_path and not text_ad and runtime is not None and runtime.ai_ready:
+                photos += 1
+                try:
+                    raw_photo = safe_photo_path(photo_path).read_bytes()
+                    seen = await describe_image(runtime, raw_photo, item["text"])
+                except Exception:
+                    logger.info("image describe skipped")
+                    seen = {"text": None, "model": "", "provider": ""}
+                image_note = (seen.get("text") or "").strip()
+            style = classify_style(item["text"], image_note)
+            ad_reason = text_ad or image_ad_reason(image_note, item["text"])
+            judgment = judge_value(item["text"], created_at=item.get("date"), style=style, image_note=image_note)
+            if ad_reason or judgment["value"] == "ADVERTISEMENT":
+                ads += 1
+                _remember_skip(db, source, item, "ADVERTISEMENT", config, ad_reason or "تبلیغ")
+                handled.add(message_id)
+                await write_log(db, "collect_skip", f"{source.username}:{message_id} AD {ad_reason or judgment['value']}")
+                continue
             if judgment["value"] != "ADVERTISEMENT":
                 filed += await remember_sample(
                     db,
@@ -391,9 +417,7 @@ async def collect_sources(db: AsyncSession, *, force: bool = False) -> dict:
                     source_label=source.title or item.get("title") or source.username,
                     text=item["text"],
                 )
-            if judgment["value"] in {"LOW_VALUE", "ADVERTISEMENT", "OUTDATED"} and not keep_fun(item["text"], judgment, style):
-                if judgment["value"] == "ADVERTISEMENT":
-                    ads += 1
+            if judgment["value"] in {"LOW_VALUE", "OUTDATED"} and not keep_fun(item["text"], judgment, style):
                 _remember_skip(db, source, item, judgment["value"], config)
                 handled.add(message_id)
                 await write_log(db, "collect_skip", f"{source.username}:{message_id} {judgment['value']}")
@@ -404,21 +428,18 @@ async def collect_sources(db: AsyncSession, *, force: bool = False) -> dict:
                 await write_log(db, "collect_not_ready", source.username, "warning")
                 await alert_admin(db, "ai-not-ready", "هوش مصنوعی آماده نیست. جمع‌آوری روی همین پیام مانده.", runtime)
                 break
-            analysis = await _analyze(db, item["text"], item.get("date"), runtime)
-            photo_path = item.get("photo_path") if safe_photo_path(item.get("photo_path")) else None
-            image_note = ""
+            analysis = await _analyze(db, item["text"], item.get("date"), runtime, image_note)
             if photo_path:
-                photos += 1
-                try:
-                    raw_photo = safe_photo_path(photo_path).read_bytes()
-                    seen = await describe_image(runtime, raw_photo, item["text"])
-                except Exception:
-                    logger.info("image describe skipped")
-                    seen = {"text": None, "model": "", "provider": ""}
-                image_note = (seen.get("text") or "").strip()
                 analysis["photo_path"] = str(safe_photo_path(photo_path))
                 analysis["vision_model"] = seen.get("model") or ""
                 analysis["vision_provider"] = seen.get("provider") or ""
+            style, model_ad, tone = blend_style(item["text"], image_note, analysis if analysis.get("ai") else None)
+            if model_ad:
+                ads += 1
+                _remember_skip(db, source, item, "ADVERTISEMENT", config, model_ad)
+                handled.add(message_id)
+                await write_log(db, "collect_skip", f"{source.username}:{message_id} AD {model_ad}")
+                continue
             analysis["has_media"] = bool(item.get("has_media") or photo_path or item.get("video_path"))
             analysis["image_note"] = image_note
             paths = [path for path in (item.get("photo_paths") or []) if path]
@@ -431,10 +452,24 @@ async def collect_sources(db: AsyncSession, *, force: bool = False) -> dict:
             if item.get("media_kind"):
                 analysis["media_kind"] = item["media_kind"]
             plan = rewrite_plan(item["text"])
+            if style == "fun" and len((item["text"] or "").strip()) <= 220:
+                plan = "preserve"
             analysis["rewrite"] = plan
             analysis["style"] = style
             analysis["style_label"] = folder_label(style)
-            category = source.category_hint or folder_category(style)
+            analysis["tone"] = tone
+            analysis["content_kind"] = style
+            analysis["reading"] = (
+                "شوخی یا میم است؛ خبر نیست و باید کوتاه و صمیمی بماند"
+                if style == "fun"
+                else "خبر یا اطلاعیه است و لحن باید جدی بماند"
+                if style in {"flash", "announce", "alert"}
+                else "از روی متن و عکس با هم خوانده شد"
+            )
+            if review_ad(analysis if analysis.get("ai") else None, None):
+                analysis["needs_review"] = True
+                analysis["reading"] = str(analysis.get("ad_reason") or "احتمال تبلیغ کم است؛ در صف می‌ماند تا خودت ببینی")
+            category = folder_category(style)
             decision = analyze_post(item["text"])
             choice = choose_template(decision, channel_style=None, recent_emoji_styles=recent_emoji)
             layout = "quiet" if choice.emoji_style_id == "quiet" else layout_for(category, style, plan)
@@ -514,7 +549,17 @@ async def collect_sources(db: AsyncSession, *, force: bool = False) -> dict:
                 handled.add(message_id)
                 await write_log(db, "collect_rejected", f"{source.username}:{message_id} {reason}")
                 continue
+            if style == "fun" and body and len((item["text"] or "").strip()) < 180 and len(body) > max(220, len(item["text"]) * 3):
+                kept = re.sub(r"#\S+", "", item["text"] or "")
+                kept = re.sub(r"https?://\S+", "", kept).strip()
+                if 12 <= len(kept) <= 320:
+                    body = kept
             tags = await _hashtags(db, category, item["text"])
+            if style == "fun":
+                tags = [tag for tag in tags if tag not in {"خبر", "اطلاعیه", "مشاوره"}]
+                if "طنز" not in tags:
+                    tags.insert(0, "طنز")
+                tags = tags[:3]
             credit = attribution_line(source.username, getattr(config, "attribution_mode", None) or "news", category)
             if credit and credit not in body:
                 body = f"{body.strip()}\n\n{credit}"
@@ -544,7 +589,7 @@ async def collect_sources(db: AsyncSession, *, force: bool = False) -> dict:
                 importance=analysis.get("importance"),
                 scheduled_at=when.astimezone(timezone.utc) if when else None,
                 target_chat_id=config.target_chat_id,
-                error=None if validated else "needs_review",
+                error=None if validated and not analysis.get("needs_review") else "needs_review",
             )
             db.add(draft)
             await db.flush()

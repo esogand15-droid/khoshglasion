@@ -147,16 +147,29 @@ def choose_hashtags(
     return [tag for tag in chosen if tag not in blocked][:3]
 
 
-def judge_value(text: str, *, created_at: datetime | None = None, now: datetime | None = None) -> dict:
+def judge_value(
+    text: str,
+    *,
+    created_at: datetime | None = None,
+    now: datetime | None = None,
+    style: str | None = None,
+    image_note: str = "",
+) -> dict:
     raw = (text or "").strip()
     reasons: list[str] = []
-    if len(raw) < 40:
-        return {"value": "LOW_VALUE", "importance": "low", "confidence": "low", "reasons": ["too_short"]}
-    from backend.app.content.intake import is_advertisement
+    from backend.app.content.intake import is_advertisement, promotion_reason
 
-    if is_advertisement(raw) or any(word in raw for word in AD_WORDS):
+    if promotion_reason(raw) or is_advertisement(raw) or any(word in raw for word in AD_WORDS):
         reasons.append("advertisement")
         return {"value": "ADVERTISEMENT", "importance": "low", "confidence": "low", "reasons": reasons}
+    if len(raw) < 40:
+        from backend.app.content.reading import image_kind
+        from backend.app.services.finetune import fun_signal
+
+        joke = fun_signal(raw) or image_kind(image_note) == "FUN"
+        if style == "fun" and joke and len(raw) >= 12:
+            return {"value": "USEFUL", "importance": "low", "confidence": "medium", "reasons": ["short_fun"]}
+        return {"value": "LOW_VALUE", "importance": "low", "confidence": "low", "reasons": ["too_short"]}
     if any(word in raw for word in LOW_VALUE):
         return {"value": "LOW_VALUE", "importance": "low", "confidence": "low", "reasons": ["low_value"]}
     current = now or datetime.now(timezone.utc)
@@ -275,6 +288,14 @@ def merge_analysis(base: dict, parsed: dict | None, source: str) -> dict:
     confidence = str(parsed.get("confidence") or "")
     if confidence in {"low", "medium", "high"}:
         merged["confidence"] = confidence
+    if "is_advertisement" in parsed:
+        merged["is_advertisement"] = bool(parsed.get("is_advertisement"))
+    ad_reason = str(parsed.get("ad_reason") or "").strip()
+    if ad_reason:
+        merged["ad_reason"] = ad_reason[:180]
+    tone = str(parsed.get("tone") or "")
+    if tone in {"serious", "friendly", "humorous"}:
+        merged["tone"] = tone
     merged["ai"] = True
     return merged
 

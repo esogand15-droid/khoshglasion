@@ -218,8 +218,11 @@ async def describe_image(runtime: RuntimeState, image: bytes, caption: str) -> d
         {
             "role": "system",
             "content": (
-                "تو فقط همین عکس را می‌بینی. حداکثر دو خط فارسی: عکس چیست و چه متنی در آن خوانا است. "
-                "عدد و اسم را فقط اگر در عکس یا کپشن هست بگو. اگر عکس تزئینی یا نامفهوم است فقط SKIP بنویس."
+                "خط اول فقط یکی از این کلمه‌ها: AD یا FUN یا NEWS یا OTHER. "
+                "AD یعنی بنر فروش، تخفیف، محصول برای سفارش، یا جذب عضو کانال دیگر. "
+                "FUN یعنی میم، شوخی یا واکنش. NEWS یعنی عکس یک اتفاق یا اطلاعیه. "
+                "خط دوم حداکثر یک جمله: عکس چیست و چه متنی در آن خوانا است. عدد و اسم را اختراع نکن. "
+                "اگر نامفهوم است خط دوم را SKIP بنویس."
             ),
         },
         {
@@ -231,9 +234,20 @@ async def describe_image(runtime: RuntimeState, image: bytes, caption: str) -> d
         },
     ])
     text = (result.get("text") or "").strip()
+    kind = ""
+    if text:
+        first, _, rest = text.partition("\n")
+        token = first.strip().upper()
+        if token in {"AD", "FUN", "NEWS", "OTHER"}:
+            kind = token
+            text = rest.strip()
     if not text or text.upper() == "SKIP" or text.upper().startswith("SKIP"):
         text = None
-    return {"text": text, "model": result.get("model") or "", "provider": result.get("provider") or ""}
+    if kind and text:
+        text = f"{kind}\n{text}"
+    elif kind:
+        text = kind
+    return {"text": text, "kind": kind, "model": result.get("model") or "", "provider": result.get("provider") or ""}
 
 
 async def complete_text(runtime: RuntimeState, messages: list[dict]) -> str | None:

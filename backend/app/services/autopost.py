@@ -76,11 +76,12 @@ def accept_draft(
     *,
     verbatim_source: str | None = None,
     plan: str = "summarize",
+    min_chars: int = 40,
 ) -> tuple[str | None, str]:
     cleaned = (draft or "").strip()
     if not cleaned or re.fullmatch(r"skip[.!?…]*", cleaned, flags=re.IGNORECASE):
         return None, "skip"
-    if len(cleaned) < 40:
+    if len(cleaned) < min_chars:
         return None, "too_short"
     if missing_long_numbers(source_blob, cleaned):
         return None, "dropped_numbers"
@@ -203,8 +204,8 @@ async def compose_prompt(db: AsyncSession, name: str) -> str:
         parts.append(FACT_LOCK)
         parts.append(STRUCTURE_LOCK)
         parts.append(
-            "SKIP فقط برای تبلیغ، جوک بی‌واقعیت یا متن خالی است. "
-            "اطلاعیه، خبر رسمی، نتایج، بودجه، ثبت‌نام و تأخیر اعلام را هرگز SKIP نکن. "
+            "SKIP فقط برای تبلیغ است. فان کوتاه را خبر نکن و طولانی نکن. "
+            "اطلاعیه، خبر رسمی، نتایج، بودجه، ثبت‌نام و تأخیر اعلام را هرگز SKIP نکن و شوخی نکن. "
             "در متن هیچ ایموجی ننویس."
         )
     return "\n\n".join(part for part in parts if part)
@@ -352,9 +353,15 @@ async def draft_from_source(
     openings = " | ".join(item for item in (avoid or []) if item) or "هیچ"
     picture = image_note.strip() if image_note else "عکسی به نویسنده داده نشده"
     learned = lesson_prompt(lessons)
+    tone_line = ""
+    if style_name == "fun":
+        tone_line = "این فان است. صمیمی و کوتاه بنویس. اگر منبع یک یا دو خط است خروجی را بلند و خبری نکن.\n"
+    elif style_name in {"flash", "announce", "alert"}:
+        tone_line = "این خبر یا اطلاعیه است. جدی و دقیق بمان. شوخی و لحن خودمانی اضافه نکن.\n"
     user = (
         f"{writer_context(style_name, style_card)}\n"
         f"{learned + chr(10) if learned else ''}"
+        f"{tone_line}"
         f"حالت: {chosen_plan}\n"
         f"زاویه: {template_hint or 'طبیعی'}\n"
         f"شروع‌های اخیر که نباید تکرار شوند: {openings}\n"
@@ -378,10 +385,34 @@ async def draft_from_source(
         trace["writer_provider"] = result.get("provider") or ""
         trace["rewrite"] = chosen_plan
     fact_source = source_text + ("\n" + image_note if image_note else "")
-    accepted, guard = accept_draft(fact_source, result.get("text"), verbatim_source=source_text, plan=chosen_plan)
-    repairable = guard in {"skip", "verbatim"} and len(source_text.strip()) >= 40 and not is_advertisement(source_text)
+    floor = 12 if style_name == "fun" and len(source_text.strip()) < 180 else 40
+    accepted, guard = accept_draft(
+        fact_source, result.get("text"), verbatim_source=source_text, plan=chosen_plan, min_chars=floor,
+    )
+    if style_name == "fun" and guard == "verbatim":
+        accepted, guard = (result.get("text") or "").strip() or None, "ok" if (result.get("text") or "").strip() else "skip"
+    repairable = (
+        guard in {"skip", "verbatim"}
+        and len(source_text.strip()) >= 40
+        and style_name != "fun"
+        and not is_advertisement(source_text)
+    )
+    if not accepted and style_name == "fun":
+        result = await ask("\n\nاین فان است، نه خبر. یک یا دو خط صمیمی بنویس. رسمی و طولانی نکن. SKIP نکن مگر تبلیغ باشد.")
+        accepted, guard = accept_draft(
+            fact_source, result.get("text"), verbatim_source=source_text, plan=chosen_plan, min_chars=floor,
+        )
+        if guard == "verbatim":
+            accepted, guard = (result.get("text") or "").strip() or None, "ok" if (result.get("text") or "").strip() else "skip"
+        if not accepted:
+            from backend.app.content.intake import promotion_reason
+
+            kept = re.sub(r"#\S+", "", source_text or "")
+            kept = re.sub(r"https?://\S+", "", kept).strip()
+            if 12 <= len(kept) <= 320 and not promotion_reason(kept):
+                accepted, guard = kept, "repaired"
     if not accepted and repairable:
-        result = await ask("\n\nاین مطلب خبر یا اطلاعیه قابل انتشار است. SKIP ممنوع و کپی ممنوع. بازنویسی کوتاه بنویس.")
+        result = await ask("\n\nاین مطلب خبر یا اطلاعیه قابل انتشار است. SKIP ممنوع و کپی ممنوع. بازنویسی کوتاه و جدی بنویس.")
         if trace is not None:
             trace["writer_model"] = result.get("model") or trace.get("writer_model") or ""
             trace["writer_provider"] = result.get("provider") or trace.get("writer_provider") or ""

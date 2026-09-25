@@ -513,7 +513,14 @@ export default function Automation() {
                       )}
                       {draft.image_note && <p className="text-xs text-muted-foreground">از روی عکس: {draft.image_note}</p>}
                       {(draft.writer_model || draft.vision_model) && <p className="text-xs text-muted-foreground">مدل نویسنده: {draft.writer_model || "—"}{draft.vision_model ? ` · مدل عکس: ${draft.vision_model}` : ""}</p>}
-                      {draft.analysis_summary && <p className="text-xs text-muted-foreground">تحلیل: {draft.analysis_summary}</p>}
+                      {(draft.reading || draft.tone || draft.analysis_summary) && (
+                        <p className="text-xs text-muted-foreground">
+                          تحلیل: {draft.style_label || categoryLabel(draft.category)}
+                          {draft.tone === "humorous" ? " · لحن شوخ" : draft.tone === "friendly" ? " · لحن صمیمی" : draft.tone === "serious" ? " · لحن جدی" : ""}
+                          {draft.reading ? ` · ${draft.reading}` : ""}
+                          {draft.analysis_summary ? ` · ${draft.analysis_summary}` : ""}
+                        </p>
+                      )}
                       {draft.versions?.length ? (
                         <details className="text-xs text-muted-foreground">
                           <summary>نسخه‌های قبلی</summary>

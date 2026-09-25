@@ -125,6 +125,8 @@ def dump_draft(row: DraftPost, username: str | None = None) -> dict:
         "emoji_signature": row.emoji_signature,
         "analysis_summary": _summary(row.analysis_json),
         "style_label": _analysis_flag(row.analysis_json, "style_label"),
+        "tone": _analysis_flag(row.analysis_json, "tone") or "",
+        "reading": _analysis_flag(row.analysis_json, "reading") or "",
         "source_url": row.source_url,
         "published_url": channel_message_url(row.target_chat_id, row.message_id, username),
         "has_media": bool(_analysis_flag(row.analysis_json, "has_media")),
@@ -271,7 +273,11 @@ async def _read_automation_state(
         DraftPost.status != "published",
         or_(DraftPost.status == "seen", DraftPost.error.in_(["تکراری است", "similar"])),
     )
-    draft_query = select(DraftPost).where(DraftPost.status != "rejected", not_(hidden_repeat)).order_by(DraftPost.created_at.desc()).limit(80)
+    hidden_ads = and_(DraftPost.status == "skipped", DraftPost.error.like("تبلیغ%"))
+    draft_query = select(DraftPost).where(DraftPost.status != "rejected", not_(hidden_repeat))
+    if not draft_status:
+        draft_query = draft_query.where(not_(hidden_ads))
+    draft_query = draft_query.order_by(DraftPost.created_at.desc()).limit(80)
     archive_query = select(DraftPost).where(DraftPost.status == "rejected").order_by(DraftPost.created_at.desc()).limit(80)
     if draft_status and draft_status != "rejected":
         draft_query = draft_query.where(DraftPost.status == draft_status)
@@ -764,7 +770,8 @@ async def regenerate_draft(draft_id: str, request: Request, mode: str = "fresh",
     from backend.app.services.finetune import angle_label, classify_style, load_card
 
     runtime = await load_runtime(db)
-    style = classify_style(source)
+    stored = _analysis_flag(row.analysis_json, "style") or ""
+    style = stored if stored in {"flash", "announce", "fun", "guide", "alert", "consult"} else classify_style(source, _analysis_flag(row.analysis_json, "image_note") or "")
     prompt = await compose_prompt(db, f"regenerator_{mode}")
     config = await get_config(db)
     trace: dict = {}
@@ -777,6 +784,8 @@ async def regenerate_draft(draft_id: str, request: Request, mode: str = "fresh",
         system_prompt=prompt,
         style=style,
         style_card=await load_card(db),
+        plan="preserve" if style == "fun" and len(source) <= 220 else None,
+        image_note=_analysis_flag(row.analysis_json, "image_note") or None,
         lessons=getattr(config, "lessons_json", None),
         trace=trace,
     )

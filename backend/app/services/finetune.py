@@ -36,7 +36,7 @@ FOLDERS: dict[str, dict[str, str]] = {
         "label": "فان",
         "category": "general",
         "angle": "فان و کوتاه، بدون نصیحت",
-        "rule": "کوتاه و شوخ بنویس. جوک را به درس اخلاق یا برنامهٔ مطالعاتی تبدیل نکن. واقعیت تازه نساز.",
+        "rule": "کوتاه، صمیمی و شوخ بنویس. جوک را خبر، نصیحت یا متن رسمی نکن. اگر منبع یک یا دو خط است همان اندازه بمان. واقعیت تازه نساز.",
         "skeleton": "[یک خط شوخ و مستقیم]\n[اگر منبع واقعیت دارد، یک خط]\n[سؤال کوتاه، اختیاری]",
     },
     "guide": {
@@ -84,7 +84,21 @@ _ANNOUNCE = (
     "مهلت",
     "حذف برخی رشته",
 )
-_FUN = ("جوک", "میم", "بخند", "شیبا", "😂", "🤣")
+_FUN = ("جوک", "میم", "بخند", "شیبا", "😂", "🤣", "😭", "💀", "😎", "pov", "وقتی می", "وقتی می‌", "یادم افتاد", "من بعد")
+_HARD_NEWS = (
+    "سازمان سنجش",
+    "سازمان هواشناسی",
+    "وزارت",
+    "آموزش و پرورش",
+    "اعلام نتایج",
+    "اعلام کرد",
+    "اعلام شد",
+    "مهلت",
+    "بخشنامه",
+    "فوری",
+    "هواشناسی",
+    "مصوبه",
+)
 _CONSULT = ("بهتر است", "برنامه مطالعاتی", "برنامهٔ مطالعاتی", "اگر شما", "اگر تو")
 _OFFICIAL = (
     "سازمان",
@@ -113,22 +127,40 @@ def _fold(text: str) -> str:
     )
 
 
-def classify_style(text: str) -> str:
+def hard_news(text: str) -> bool:
     raw = _fold(text)
-    official = any(word in raw for word in _OFFICIAL)
-    if any(word in raw for word in _ALERT):
+    return any(word in raw for word in _HARD_NEWS)
+
+
+def fun_signal(text: str) -> bool:
+    raw = _fold(text).lower()
+    return any(word in raw for word in _FUN)
+
+
+def classify_style(text: str, image_note: str = "") -> str:
+    """Folder for this post. A topic word such as کنکور is not itself news.
+
+    A meme note or a short joke stays fun even if the caption mentions کنکور.
+    A real notice still wins over a laughing emoji.
+    """
+    body = _fold(text)
+    seen = _fold(text + "\n" + (image_note or ""))
+    picture = _fold(image_note)
+    if any(word in body for word in _ALERT):
         return "alert"
-    if len(raw) >= 40 and any(word in raw for word in _GUIDE):
-        return "guide"
-    if any(word in raw for word in _ANNOUNCE):
-        return "announce"
-    if any(word in raw for word in _FUN):
+    joked = fun_signal(body) or fun_signal(picture) or any(word in picture for word in ("شوخی", "طنز", "خنده", "meme"))
+    if joked and not hard_news(body):
         return "fun"
-    if not official and any(word in raw for word in _CONSULT):
+    if len(body) >= 40 and any(word in body for word in _GUIDE) and "تخفیف" not in body:
+        return "guide"
+    if any(word in body for word in _ANNOUNCE) and not joked:
+        return "announce"
+    official = any(word in seen for word in _OFFICIAL)
+    if not hard_news(body) and any(word in body for word in _CONSULT):
         return "consult"
-    if official or "فوری" in raw or "اخبار" in raw:
+    if hard_news(body) or (len(body) >= 180 and official):
         return "flash"
-    if len(raw) < 180:
+    if len(body) < 180:
         return "fun"
     return "flash"
 

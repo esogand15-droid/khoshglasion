@@ -35,18 +35,57 @@ OFFICIAL = ("کنکور", "سازمان سنجش", "مهلت", "بخشنامه",
 SALES = ("خرید", "سفارش", "تخفیف", "پرداخت", "دایرکت", "ثبت‌نام کن", "ثبت نام کن")
 
 
-def is_advertisement(text: str) -> bool:
-    raw = text or ""
-    if any(word in raw for word in ("کد تخفیف", "اسپانسر", "همکاری تبلیغاتی", "این پست تبلیغ", "لینک خرید", "زرین‌پال", "زرین پال")):
-        return True
+_JOIN = ("عضو کانال", "عضو شو", "عضو شوید", "جوین شو", "جوین کنید", "برای عضویت", "عضو این کانال")
+_HARD_AD = ("کد تخفیف", "اسپانسر", "همکاری تبلیغاتی", "این پست تبلیغ", "لینک خرید", "زرین‌پال", "زرین پال", "لینک بیو")
+_SALE_CTA = ("دایرکت", "سفارش", "برای خرید", "ثبت سفارش", "قیمت ویژه", "تخفیف ویژه", "موجود شد")
+
+
+def _fold_ad(text: str) -> str:
+    return (text or "").replace("ي", "ی").replace("ك", "ک").replace("‌", "")
+
+
+def _without_promo_lines(raw: str) -> str:
+    kept: list[str] = []
+    for line in (raw or "").splitlines() or [raw or ""]:
+        folded = _fold_ad(line)
+        if any(phrase in folded for phrase in _JOIN):
+            continue
+        if re.search(r"@\w{4,}", line) and any(word in folded for word in ("عضو", "کانال", "جوین")):
+            continue
+        kept.append(line.strip())
+    return " ".join(item for item in kept if item).strip()
+
+
+def promotion_reason(text: str) -> str | None:
+    """Why this post is an ad, or None when it can still be a draft.
+
+    A keyword alone is not enough. An official notice that mentions a price
+    stays. A post whose point is another channel, a shop, or a discount does not.
+    """
+    raw = _fold_ad(text)
+    if not raw.strip():
+        return None
+    if any(word in raw for word in _HARD_AD):
+        return "تبلیغ مستقیم، تخفیف یا لینک فروش"
     official = any(word in raw for word in OFFICIAL)
-    if official:
-        return False
-    if any(word in raw for word in AD_CUES) and any(word in raw for word in SALES):
-        return True
-    if "تومان" in raw and any(word in raw for word in ("تخفیف", "خرید", "سفارش", "ظرفیت محدود")):
-        return True
-    return False
+    join = any(phrase in raw for phrase in _JOIN)
+    mention = bool(re.search(r"@\w{4,}", text or ""))
+    if join and (mention or "کانال" in raw):
+        leftover = _without_promo_lines(text or "")
+        if official and len(_fold_ad(leftover)) >= 40:
+            return None
+        return "معرفی یا جذب عضو برای کانال دیگر"
+    if not official and any(word in raw for word in _SALE_CTA):
+        return "دعوت به خرید یا سفارش"
+    if not official and "تومان" in raw and any(word in raw for word in ("تخفیف", "خرید", "سفارش", "ظرفیت محدود")):
+        return "فروش کالا یا خدمت"
+    if any(word in raw for word in AD_CUES) and any(word in raw for word in SALES) and not official:
+        return "تبلیغ خدمات یا کالا"
+    return None
+
+
+def is_advertisement(text: str) -> bool:
+    return promotion_reason(text) is not None
 
 
 def rewrite_plan(text: str) -> str:
