@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import api from "../services/api";
 import { useAuth } from "../stores/auth";
 import SessionLogin from "../components/SessionLogin";
@@ -38,7 +38,7 @@ export default function Settings() {
   const canEdit = !role || role !== "VIEWER";
   const canOwn = !role || role === "OWNER";
   const canConnect = !role || role === "OWNER" || role === "ADMIN";
-  const tab = ["run", "ai", "look", "session", "access"].includes(params.get("tab") || "") ? params.get("tab")! : "run";
+  const tab = ["run", "ai", "look", "session", "access", "problems"].includes(params.get("tab") || "") ? params.get("tab")! : "run";
 
   async function load() { setData((await api.get("/api/system/settings")).data); }
   useEffect(() => { load().catch(() => {}); }, []);
@@ -65,6 +65,7 @@ export default function Settings() {
           <TabsTrigger value="look">ظاهر پست</TabsTrigger>
           <TabsTrigger value="session">نشست</TabsTrigger>
           <TabsTrigger value="access">دسترسی</TabsTrigger>
+          <TabsTrigger value="problems">مشکلات</TabsTrigger>
         </TabsList>
         <TabsContent value="run">
           <div className="grid gap-2">
@@ -145,6 +146,9 @@ export default function Settings() {
           </Card>
           <p className="mt-3 text-xs text-muted-foreground">وضعیت نشست: {data.user_session_configured ? "وصل است" : "هنوز وصل نیست"}. ورود شماره و کد در تب نشست است، نه در متغیر Railway.</p>
         </TabsContent>
+        <TabsContent value="problems">
+          <ProblemsTab canEdit={canEdit} canOwn={canOwn} canConnect={canConnect} onDone={(text) => { setMsg(text); load(); }} />
+        </TabsContent>
         <TabsContent value="session">
           {canConnect ? <SessionLogin premiumMode={data.premium_mode} onChange={load} /> : <Alert>فقط مالک یا ادمین می‌تواند نشست پرمیوم را وصل کند.</Alert>}
         </TabsContent>
@@ -192,5 +196,98 @@ export default function Settings() {
         </TabsContent>
       </Tabs>
     </Page>
+  );
+}
+
+function ProblemsTab({ canEdit, canOwn, canConnect, onDone }: { canEdit: boolean; canOwn: boolean; canConnect: boolean; onDone: (text: string) => void }) {
+  const setAuth = useAuth((state) => state.setAuth);
+  const username = useAuth((state) => state.username);
+  const role = useAuth((state) => state.role);
+  const [alerts, setAlerts] = useState<any[]>([]);
+  const [token, setToken] = useState("");
+  const [webhookUrl, setWebhookUrl] = useState("");
+  const [password, setPassword] = useState({ current_password: "", new_password: "" });
+  const [busy, setBusy] = useState("");
+
+  useEffect(() => {
+    api.get("/api/system/overview").then((response) => setAlerts(response.data.alerts || [])).catch(() => {});
+  }, [busy]);
+
+  async function repair(action: string, extra: Record<string, unknown> = {}) {
+    setBusy(action);
+    try {
+      const { data } = await api.post("/api/system/repairs", { action, ...extra });
+      if (data.token && username && role) setAuth(data.token, username, role);
+      const fallback = data.username ? `ربات @${data.username} وصل شد` : "انجام شد";
+      onDone(data.message || fallback);
+      setToken("");
+    } catch (error: any) {
+      onDone(error.response?.data?.detail || "انجام نشد");
+    } finally {
+      setBusy("");
+    }
+  }
+
+  return (
+    <div className="space-y-4">
+      <Alert title="همهٔ این‌ها از داخل پنل بسته می‌شود">
+        لازم نیست برای این خطاها روی سرور دستور بزنی. هر مورد دکمهٔ خودش را دارد. فقط عوض کردن نوع دیتابیس وسط اجرا ممکن نیست، چون برنامه قبل از پنل به دیتابیس وصل می‌شود.
+      </Alert>
+      {alerts.map((item) => (
+        <Alert key={item.code} variant={item.level === "danger" ? "destructive" : item.level === "info" ? "info" : "warning"}>
+          {item.text}
+          {item.fix_path && item.fix_path !== "/settings?tab=problems" && (
+            <Link className="mt-2 block font-medium underline" to={item.fix_path}>{item.fix_label}</Link>
+          )}
+        </Alert>
+      ))}
+      <Card>
+        <CardHeader><CardTitle>توکن ربات</CardTitle></CardHeader>
+        <CardContent className="space-y-3">
+          <Field label="توکن BotFather"><PasswordInput value={token} disabled={!canOwn} onChange={(event) => setToken(event.target.value)} autoComplete="off" /></Field>
+          <Button variant="brand" disabled={!canOwn || busy === "bot_token" || token.trim().length < 20} onClick={() => repair("bot_token", { bot_token: token.trim() })}>ذخیره و آزمایش توکن</Button>
+        </CardContent>
+      </Card>
+      <Card>
+        <CardHeader><CardTitle>وبهوک</CardTitle></CardHeader>
+        <CardContent className="space-y-3">
+          <Field label="آدرس عمومی، اگر دامنه خودش پیدا نشد"><Input dir="ltr" value={webhookUrl} disabled={!canConnect} onChange={(event) => setWebhookUrl(event.target.value)} placeholder="https://example.com/telegram/webhook" /></Field>
+          <div className="flex flex-wrap gap-2">
+            <Button variant="brand" disabled={!canConnect || !!busy} onClick={() => repair("webhook", { webhook_url: webhookUrl || undefined, regenerate_secret: true })}>ساخت رمز و ثبت وبهوک</Button>
+            <Button variant="outline" disabled={!canConnect || !!busy} onClick={() => repair("webhook", { webhook_url: webhookUrl || undefined })}>ثبت با رمز فعلی</Button>
+          </div>
+        </CardContent>
+      </Card>
+      <Card>
+        <CardHeader><CardTitle>رمز پنل و کلید ورود</CardTitle></CardHeader>
+        <CardContent className="space-y-3">
+          <p className="text-sm text-muted-foreground">اگر هشدار «رمز ادمین یا JWT هنوز پیش‌فرض است» را می‌بینی، هر دو را همین‌جا عوض کن. ساخت کلید تازه این نشست را نگه می‌دارد و بقیه را خارج می‌کند.</p>
+          <div className="grid gap-3 md:grid-cols-2">
+            <Field label="رمز فعلی"><PasswordInput autoComplete="current-password" value={password.current_password} onChange={(event) => setPassword({ ...password, current_password: event.target.value })} /></Field>
+            <Field label="رمز جدید، حداقل ۸ کاراکتر"><PasswordInput strength autoComplete="new-password" value={password.new_password} onChange={(event) => setPassword({ ...password, new_password: event.target.value })} /></Field>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Button variant="brand" disabled={!!busy || password.new_password.length < 8} onClick={async () => {
+              setBusy("password");
+              try {
+                await api.post("/api/auth/password", password);
+                setPassword({ current_password: "", new_password: "" });
+                onDone("رمز پنل عوض شد");
+              } catch (error: any) {
+                onDone(error.response?.data?.detail || "رمز عوض نشد");
+              } finally {
+                setBusy("");
+              }
+            }}>عوض کردن رمز پنل</Button>
+            <Button variant="outline" disabled={!canOwn || !!busy} onClick={() => repair("rotate_jwt")}>ساخت کلید ورود</Button>
+            <Button variant="outline" disabled={!canEdit || !!busy} onClick={() => repair("clear_emoji_error")}>پاک کردن خطای ایموجی</Button>
+            <Link className="self-center text-sm underline" to="/settings?tab=run">توقف و حالت آزمایشی</Link>
+            <Link className="self-center text-sm underline" to="/settings?tab=ai">هوش مصنوعی</Link>
+            <Link className="self-center text-sm underline" to="/settings?tab=session">نشست پرمیوم</Link>
+            <Link className="self-center text-sm underline" to="/channels">کانال‌ها</Link>
+          </div>
+        </CardContent>
+      </Card>
+    </div>
   );
 }

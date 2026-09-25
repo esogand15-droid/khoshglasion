@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import { Inbox } from "lucide-react";
 import api from "../services/api";
 import { Page } from "../components/page";
@@ -61,9 +62,16 @@ export default function Dashboard() {
       actions={empty ? <Badge variant="warning">هنوز پست واقعی نرسیده</Badge> : <Badge variant="brand">میانگین {fa(data.avg_ms)} میلی‌ثانیه</Badge>}
     >
       {alerts.map((item, index) => (
-        <Alert key={index} variant={alertVariant(item.level)}>{item.text}</Alert>
+        <Alert key={item.code || index} variant={alertVariant(item.level)}>
+          <span>{item.text}</span>
+          {item.fix_path && <Link className="mt-2 block font-medium underline" to={item.fix_path}>{item.fix_label || "رفع در پنل"}</Link>}
+        </Alert>
       ))}
-      {data.queue?.last_error && <Alert variant="destructive" title={data.queue.last_error} />}
+      {data.queue?.last_error && (
+        <Alert variant="destructive" title={data.queue.last_error}>
+          <Link className="font-medium underline" to="/automation">برو به صف و از همان‌جا درستش کن</Link>
+        </Alert>
+      )}
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <Stat label="پیش‌نویس منتظر" value={fa(data.queue?.preview || 0)} />
         <Stat label="زمان‌بندی‌شده" value={fa(data.queue?.scheduled || 0)} />
@@ -192,7 +200,8 @@ export default function Dashboard() {
       {!!data.failures?.length && (
         <Card>
           <CardHeader><CardTitle>آخرین خطاهای واقعی</CardTitle></CardHeader>
-          <CardContent>
+          <CardContent className="space-y-3">
+            <Link className="text-sm font-medium underline" to="/automation">برو به صف و از همان‌جا درستش کن</Link>
             <Timeline
               items={data.failures.map((row: any) => ({
                 date: row.created_at ? new Date(row.created_at) : "—",

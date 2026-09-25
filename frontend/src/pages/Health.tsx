@@ -27,7 +27,10 @@ export default function Health() {
       actions={canReset ? <Button variant="brand" onClick={async () => { try { const r = await api.post("/api/system/webhook/reset"); setMsg(`وبهوک ثبت شد: ${r.data.url || "ok"}`); load(); } catch (e: any) { setMsg(e.response?.data?.detail || "ثبت وبهوک نشد"); } }}>ثبت دوباره وبهوک</Button> : undefined}
     >
       {(data.alerts || []).map((item: any, index: number) => (
-        <Alert key={index} variant={item.level === "danger" ? "destructive" : "warning"}>{item.text}</Alert>
+        <Alert key={item.code || index} variant={item.level === "danger" ? "destructive" : item.level === "info" ? "info" : "warning"}>
+          <span>{item.text}</span>
+          {item.fix_path && <Link className="mt-2 block font-medium underline" to={item.fix_path}>{item.fix_label || "رفع در پنل"}</Link>}
+        </Alert>
       ))}
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
         <Stat label="دیتابیس" value={data.external_database ? "Postgres" : "SQLite"} />
@@ -42,7 +45,12 @@ export default function Health() {
         <CardContent className="space-y-3">
           <p className="text-xs text-muted-foreground">آدرس مورد انتظار: {data.webhook_url || "تنظیم نشده"}</p>
           <p className="text-xs text-muted-foreground" dir="ltr">آدرس ثبت‌شده: {webhook.url || "—"}</p>
-          {webhook.last_error_message && <Alert variant="destructive">{webhook.last_error_message}</Alert>}
+          {webhook.last_error_message && (
+            <Alert variant="destructive">
+              <span>{webhook.last_error_message}</span>
+              <Link className="mt-2 block font-medium underline" to="/settings?tab=problems">ثبت دوباره وبهوک از تنظیمات</Link>
+            </Alert>
+          )}
           <div className="flex flex-wrap gap-3">
             <Badge variant={data.database === "connected" ? "success" : "destructive"}>DB</Badge>
             <Badge variant={data.bot === "connected" ? "success" : "destructive"}>Bot</Badge>
@@ -59,8 +67,8 @@ export default function Health() {
         <CardHeader><CardTitle>چک‌لیست راه‌اندازی</CardTitle></CardHeader>
         <CardContent>
           <ol className="list-decimal space-y-1 ps-5 text-sm text-muted-foreground">
-            <li>در Railway یک Postgres بساز و DATABASE_URL را به سرویس ربات وصل کن.</li>
-            <li>BOT_TOKEN، ADMIN_SECRET، JWT_SECRET و WEBHOOK_SECRET را بگذار.</li>
+            <li>دیتابیس پایدار را در میزبان با متغیر DATABASE_URL وصل کن. این یکی را پنل وسط اجرا عوض نمی‌کند.</li>
+            <li>توکن، رمز پنل، کلید ورود و رمز وبهوک را از تنظیمات، بخش مشکلات بگذار. لازم نیست روی سرور دستور بزنی.</li>
             <li>ربات را ادمین کانال کن و تیک Edit messages را روشن کن.</li>
             <li>یک پست آزمایشی بفرست. اگر حالت آزمایشی روشن است، اول از تنظیمات خاموشش کن.</li>
             <li>برای ایموجی متحرک داخل کانال، در تنظیمات تب نشست با اکانت پرمیوم وارد شو. صاحب ربات بودن کافی نیست.</li>

@@ -62,6 +62,9 @@ BACKUP_SKIP_KEYS = SECRET_SETTING_KEYS | {
     USER_ID_KEY,
     USERNAME_KEY,
     PREMIUM_KEY,
+    "bot_token",
+    "webhook_secret",
+    "jwt_secret",
 }
 PENDING_KEYS = (
     LOGIN_PHONE,

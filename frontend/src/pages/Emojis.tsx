@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog } from "@/components/ui/dialog";
 import { EmptyState } from "@/components/ui/empty-state";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Field, Input } from "@/components/ui/input";
 import { SearchInput } from "@/components/ui/search-input";
 import { prefetchEmojiMeta } from "@/lib/emojiMedia";
@@ -25,6 +26,9 @@ export default function Emojis() {
   const [zoom, setZoom] = useState<any>(null);
   const [packUrl, setPackUrl] = useState("");
   const [packBusy, setPackBusy] = useState(false);
+  const [selected, setSelected] = useState<string[]>([]);
+  const [bulkCategory, setBulkCategory] = useState("");
+  const [bulkPriority, setBulkPriority] = useState("70");
 
   async function load() { setItems((await api.get("/api/emojis")).data); }
   useEffect(() => { load().catch(() => {}); }, []);
@@ -34,6 +38,28 @@ export default function Emojis() {
     prefetchEmojiMeta(ids).then((error) => { if (error) setMsg(error); }).catch(() => {});
   }, [items]);
   const shown = items.filter((item) => !q || `${item.unicode_emoji} ${item.custom_emoji_id} ${item.category || ""}`.includes(q));
+  const selectedSet = new Set(selected);
+
+  function toggleSelected(id: string, on: boolean) {
+    setSelected((prev) => on ? [...new Set([...prev, id])] : prev.filter((item) => item !== id));
+  }
+
+  async function bulk(action: string, extra: Record<string, unknown> = {}) {
+    if (!selected.length) return;
+    if (action === "delete" && !confirm(`${selected.length} ایموجی حذف شود؟`)) return;
+    try {
+      let count = 0;
+      for (let index = 0; index < selected.length; index += 500) {
+        const { data } = await api.post("/api/emojis/bulk", { ids: selected.slice(index, index + 500), action, ...extra });
+        count += data.count ?? 0;
+      }
+      setMsg(`اعمال شد: ${fa(count)}`);
+      setSelected([]);
+      await load();
+    } catch (error: any) {
+      setMsg(error.response?.data?.detail || "کار گروهی انجام نشد");
+    }
+  }
 
   return (
     <Page
@@ -85,7 +111,22 @@ export default function Emojis() {
         <div className="w-full max-w-xs"><SearchInput value={q} onChange={setQ} placeholder="جست‌وجوی ایموجی یا ID" /></div>
         <Button variant="outline" onClick={async () => { const ids = shown.slice(0, 20).map((item) => item.custom_emoji_id); const { data } = await api.post("/api/emojis/validate", { custom_emoji_ids: ids }); setMsg(`معتبر: ${data.valid?.length || 0} / نامعتبر: ${data.invalid?.length || 0}${data.error ? " · " + data.error : ""}`); }}>اعتبارسنجی ۲۰ تای اول</Button>
         <Button variant="outline" disabled={!canEdit} onClick={async () => { await api.post("/api/emojis/cleanup-fake"); load(); }}>حذف IDهای فیک</Button>
+        {canEdit && <Button variant="outline" onClick={() => setSelected(shown.map((item) => item.id))}>انتخاب همین فهرست</Button>}
+        {canEdit && <Button variant="outline" onClick={() => setSelected(items.filter((item) => item.custom_emoji_id?.startsWith("53683241")).map((item) => item.id))}>انتخاب فیک‌ها</Button>}
+        {canEdit && selected.length > 0 && <Button variant="outline" onClick={() => setSelected([])}>لغو انتخاب</Button>}
       </div>
+      {canEdit && selected.length > 0 && (
+        <div className="sticky top-2 z-10 flex flex-wrap items-end gap-2 rounded-2xl border border-border bg-card p-3">
+          <p className="self-center text-sm">{fa(selected.length)} انتخاب شده</p>
+          <Button size="sm" variant="destructive" onClick={() => bulk("delete")}>حذف گروهی</Button>
+          <Button size="sm" variant="outline" onClick={() => bulk("disable")}>خاموش گروهی</Button>
+          <Button size="sm" variant="outline" onClick={() => bulk("enable")}>روشن گروهی</Button>
+          <Input className="h-8 w-28" value={bulkCategory} onChange={(event) => setBulkCategory(event.target.value)} placeholder="دسته" />
+          <Button size="sm" variant="outline" onClick={() => bulk("category", { category: bulkCategory })}>اعمال دسته</Button>
+          <Input className="h-8 w-20" type="number" value={bulkPriority} onChange={(event) => setBulkPriority(event.target.value)} />
+          <Button size="sm" variant="outline" onClick={() => bulk("priority", { priority: Number(bulkPriority) })}>اعمال اولویت</Button>
+        </div>
+      )}
 
       {shown.length ? (
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
@@ -94,6 +135,8 @@ export default function Emojis() {
               key={item.id}
               item={item}
               canEdit={canEdit}
+              selected={selectedSet.has(item.id)}
+              onSelect={(on) => toggleSelected(item.id, on)}
               onZoom={() => setZoom(item)}
               onEdit={() => setEdit({ ...item })}
               onToggle={async () => { await api.patch(`/api/emojis/${item.id}`, { enabled: !item.enabled }); load(); }}
@@ -145,9 +188,11 @@ export default function Emojis() {
   );
 }
 
-function EmojiCard({ item, canEdit, onZoom, onEdit, onToggle, onDelete, onAdopt }: {
+function EmojiCard({ item, canEdit, selected, onSelect, onZoom, onEdit, onToggle, onDelete, onAdopt }: {
   item: any;
   canEdit: boolean;
+  selected: boolean;
+  onSelect: (on: boolean) => void;
   onZoom: () => void;
   onEdit: () => void;
   onToggle: () => void;
@@ -170,6 +215,7 @@ function EmojiCard({ item, canEdit, onZoom, onEdit, onToggle, onDelete, onAdopt 
     <Card>
       <CardContent className="space-y-3 p-4">
         <div ref={seen} className="flex items-center gap-3">
+          {canEdit && <Checkbox checked={selected} onCheckedChange={onSelect} aria-label="انتخاب" />}
           <button type="button" onClick={onZoom} className="cursor-pointer rounded-2xl" aria-label="بزرگ‌نمایی">
             <EmojiPreview id={item.custom_emoji_id} size={76} active={visible} fallback={item.unicode_emoji} />
           </button>

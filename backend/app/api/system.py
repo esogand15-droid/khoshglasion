@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.core.config import get_settings
 from backend.app.core.runtime import RUNTIME_KEYS, load_runtime, save_runtime_values
+from backend.app.core.secrets import peek, resolved_webhook_url, save_secret
 from backend.app.db.base import get_db
 from backend.app.db.url import driver_name, is_external_database
 from backend.app.models.admin import Admin
@@ -19,12 +20,12 @@ from backend.app.models.emoji import EmojiMapping
 from backend.app.models.message_log import MessageLog
 from backend.app.models.style import StylePreset
 from backend.app.models.system import SystemSetting
-from backend.app.security.auth import hash_password
+from backend.app.security.auth import create_token, hash_password, verify_password
 from backend.app.security.deps import assert_editor, get_current_admin, require_role
 from backend.app.services.ai import test_ai_connection
 from backend.app.services.ai_provider import detect_provider, resolve_chat_completions_url
 from backend.app.services.audit import write_audit
-from backend.app.telegram.bot import get_bot
+from backend.app.telegram.bot import close_bot, get_bot
 from backend.app.telegram.session_login import (
     SessionLoginError,
     cancel_login,
@@ -84,6 +85,13 @@ class SessionPassword(BaseModel):
     password: str = Field(min_length=1, max_length=256)
 
 
+class RepairIn(BaseModel):
+    action: str
+    bot_token: str | None = None
+    webhook_url: str | None = None
+    regenerate_secret: bool = False
+
+
 class AdminCreate(BaseModel):
     username: str
     password: str
@@ -117,51 +125,76 @@ def webhook_secret_alert(secret: str | None) -> dict | None:
         return None
     return {
         "level": "warn",
-        "text": "WEBHOOK_SECRET خالی است. هر کسی که آدرس وبهوک را بداند می‌تواند آپدیت جعلی بفرستد.",
+        "code": "webhook_secret",
+        "text": "رمز وبهوک خالی است. از تنظیمات، بخش مشکلات، یک رمز بساز و وبهوک را دوباره ثبت کن.",
+        "fix_path": "/settings?tab=problems",
+        "fix_label": "ساخت رمز وبهوک",
     }
+
+
+def _alert(level: str, code: str, text: str, path: str, label: str) -> dict:
+    return {"level": level, "code": code, "text": text, "fix_path": path, "fix_label": label}
 
 
 async def _alerts(db: AsyncSession, runtime, settings) -> list[dict]:
     alerts = []
-    secret_alert = webhook_secret_alert(settings.webhook_secret)
+    secret_alert = webhook_secret_alert(peek("webhook_secret"))
     if secret_alert:
         alerts.append(secret_alert)
     external = is_external_database(settings.database_url)
     if not external:
-        alerts.append({
-            "level": "danger",
-            "text": "دیتابیس هنوز داخلی (SQLite) است. با هر دیپلوی روی Railway پاک می‌شود. پلاگین Postgres را وصل کن و DATABASE_URL را بگذار.",
-        })
-    if not settings.bot_token:
-        alerts.append({"level": "danger", "text": "BOT_TOKEN تنظیم نشده. ربات نمی‌تواند پیام را ادیت کند."})
-    if not settings.resolved_webhook_url:
-        alerts.append({"level": "warn", "text": "آدرس وبهوک پیدا نشد. WEBHOOK_URL یا دامنه Railway را تنظیم کن."})
-    if settings.jwt_secret.startswith("change-me") or settings.admin_secret in {"admin", "changeme"}:
-        alerts.append({"level": "warn", "text": "رمز ادمین یا JWT هنوز پیش‌فرض است. قبل از استفاده واقعی عوضش کن."})
+        alerts.append(_alert(
+            "danger",
+            "database",
+            "دیتابیس هنوز داخلی است و با دیپلوی تازه پاک می‌شود. این یکی را پنل وسط اجرا عوض نمی‌کند، چون برنامه قبل از باز شدن پنل به دیتابیس وصل می‌شود. در میزبان متغیر DATABASE_URL را بگذار؛ دستور شل لازم نیست.",
+            "/settings?tab=problems",
+            "توضیح در پنل",
+        ))
+    if not peek("bot_token"):
+        alerts.append(_alert("danger", "bot_token", "توکن ربات در پنل نیست. بدون آن پیام ادیت نمی‌شود.", "/settings?tab=problems", "گذاشتن توکن"))
+    if not resolved_webhook_url():
+        alerts.append(_alert("warn", "webhook_url", "آدرس وبهوک در پنل نیست. همان‌جا بنویس و ثبتش کن.", "/settings?tab=problems", "ثبت آدرس"))
+    admins = (await db.execute(select(Admin))).scalars().all()
+    password_default = any(verify_password(sample, row.password_hash) for row in admins for sample in ("admin", "changeme"))
+    jwt_default = peek("jwt_secret").startswith("change-me")
+    if password_default or jwt_default:
+        alerts.append(_alert(
+            "warn",
+            "default_secret",
+            "رمز ادمین یا JWT هنوز پیش‌فرض است. قبل از استفاده واقعی عوضش کن.",
+            "/settings?tab=problems",
+            "رفع در تنظیمات",
+        ))
     if runtime.kill_switch:
-        alerts.append({"level": "warn", "text": "توقف اضطراری روشن است. هیچ پستی پردازش نمی‌شود."})
+        alerts.append(_alert("warn", "kill_switch", "توقف اضطراری روشن است. هیچ پستی پردازش نمی‌شود.", "/settings?tab=run", "خاموش کردن توقف"))
     if runtime.dry_run:
-        alerts.append({"level": "info", "text": "حالت آزمایشی روشن است. متن ساخته می‌شود ولی در تلگرام ادیت نمی‌شود."})
+        alerts.append(_alert("info", "dry_run", "حالت آزمایشی روشن است. متن ساخته می‌شود ولی در تلگرام ادیت نمی‌شود.", "/settings?tab=run", "خاموش کردن آزمایش"))
     channels = (await db.execute(select(func.count()).select_from(Channel))).scalar() or 0
     if channels == 0:
-        alerts.append({"level": "info", "text": "هنوز کانالی ثبت نشده. ربات را ادمین کانال کن تا خودکار ثبت شود."})
+        alerts.append(_alert("info", "no_channels", "هنوز کانالی ثبت نشده. ربات را ادمین کانال کن یا از صفحه کانال‌ها اضافه‌اش کن.", "/channels", "رفتن به کانال‌ها"))
     if runtime.ai_enabled and not runtime.ai_ready:
-        alerts.append({"level": "warn", "text": "هوش مصنوعی روشن است ولی آدرس، مدل یا کلید کامل نیست."})
+        alerts.append(_alert("warn", "ai_incomplete", "هوش مصنوعی روشن است ولی آدرس، مدل یا کلید کامل نیست.", "/settings?tab=ai", "تکمیل هوش مصنوعی"))
     last_emoji = (await db.execute(select(SystemSetting).where(SystemSetting.key == "last_emoji_error"))).scalar_one_or_none()
     if last_emoji and last_emoji.value:
-        alerts.append({"level": "warn", "text": f"آخرین رد شدن ایموجی پرمیوم: {last_emoji.value[:180]}"})
+        alerts.append(_alert("warn", "emoji_error", f"آخرین رد شدن ایموجی پرمیوم: {last_emoji.value[:180]}", "/settings?tab=problems", "پاک کردن خطا"))
     if runtime.premium_mode in {"auto", "user"}:
         session = await session_public_status(db)
         if not session["configured"]:
-            alerts.append({
-                "level": "warn",
-                "text": "نشست پرمیوم داخل پنل وصل نیست. از تنظیمات، تب نشست، با شماره و کد تلگرام وصلش کن. بدون آن ایموجی متحرک داخل کانال ساده می‌ماند.",
-            })
+            alerts.append(_alert(
+                "warn",
+                "premium_session",
+                "نشست پرمیوم داخل پنل وصل نیست. بدون آن ادیت پرمیوم کانال انجام نمی‌شود.",
+                "/settings?tab=session",
+                "وصل کردن نشست",
+            ))
         elif session.get("premium") is False:
-            alerts.append({
-                "level": "warn",
-                "text": "نشست وصل است ولی این اکانت تلگرام پرمیوم نیست. خط طلایی داخل کانال با اکانت بدون پرمیوم ساخته نمی‌شود.",
-            })
+            alerts.append(_alert(
+                "warn",
+                "premium_account",
+                "نشست وصل است ولی این اکانت تلگرام پرمیوم نیست. با یک اکانت پرمیوم دوباره وارد شو.",
+                "/settings?tab=session",
+                "عوض کردن نشست",
+            ))
     return alerts
 
 
@@ -204,8 +237,8 @@ async def system_health(db: AsyncSession = Depends(get_db), admin=Depends(get_cu
         "external_database": is_external_database(settings.database_url),
         "bot": "connected" if me and "id" in me else "not_configured",
         "bot_info": me,
-        "webhook": webhook or {"url": settings.resolved_webhook_url or "not_set"},
-        "webhook_url": settings.resolved_webhook_url,
+        "webhook": webhook or {"url": resolved_webhook_url() or "not_set"},
+        "webhook_url": resolved_webhook_url(),
         "dry_run": runtime.dry_run,
         "safe_mode": runtime.safe_mode,
         "kill_switch": runtime.kill_switch,
@@ -240,13 +273,13 @@ async def get_settings_api(db: AsyncSession = Depends(get_db), admin=Depends(get
     await refresh_user_credentials(db)
     data = runtime.public_dict()
     data.update({
-        "webhook_url": settings.resolved_webhook_url,
+        "webhook_url": resolved_webhook_url(),
         "app_env": settings.app_env,
         "version": settings.app_version,
         "driver": driver_name(settings.database_url),
         "external_database": is_external_database(settings.database_url),
         "user_session_configured": session_configured(),
-        "bot_configured": bool(settings.bot_token),
+        "bot_configured": bool(peek("bot_token")),
     })
     return _annotate_ai(data, runtime.ai_base_url)
 
@@ -308,12 +341,11 @@ async def update_ai_config(payload: RuntimePatch, request: Request, db: AsyncSes
 
 @router.post("/webhook/reset")
 async def reset_webhook(db: AsyncSession = Depends(get_db), admin=Depends(require_role("OWNER", "ADMIN"))):
-    settings = get_settings()
     bot = get_bot()
-    url = settings.resolved_webhook_url
+    url = resolved_webhook_url()
     if not bot or not url:
         raise HTTPException(status_code=400, detail="توکن یا آدرس عمومی وبهوک موجود نیست")
-    secret = settings.webhook_secret or None
+    secret = peek("webhook_secret") or None
     if secret and not SECRET_TOKEN_RE.match(secret):
         raise HTTPException(status_code=400, detail="WEBHOOK_SECRET فقط حروف، عدد، _ و - می‌پذیرد")
     await bot.set_webhook(
@@ -324,6 +356,71 @@ async def reset_webhook(db: AsyncSession = Depends(get_db), admin=Depends(requir
     )
     info = await bot.get_webhook_info()
     return {"ok": True, "url": info.url, "pending": info.pending_update_count, "last_error": info.last_error_message}
+
+
+def _https_webhook(url: str) -> str:
+    cleaned = (url or "").strip()
+    if not cleaned.startswith("https://") or " " in cleaned or len(cleaned) > 300:
+        raise HTTPException(status_code=400, detail="آدرس وبهوک باید با https:// شروع شود")
+    return cleaned
+
+
+@router.post("/repairs")
+async def repair_problem(payload: RepairIn, request: Request, db: AsyncSession = Depends(get_db), admin=Depends(get_current_admin)):
+    """Fix a panel alert without a server shell. Secrets are stored, not logged."""
+    action = (payload.action or "").strip()
+    ip = request.client.host if request.client else None
+    if action == "bot_token":
+        if admin.role != "OWNER":
+            raise HTTPException(status_code=403, detail="فقط مالک می‌تواند توکن ربات را بگذارد")
+        token = (payload.bot_token or "").strip()
+        if not re.fullmatch(r"\d{6,12}:[A-Za-z0-9_-]{20,}", token):
+            raise HTTPException(status_code=400, detail="شکل توکن ربات درست نیست")
+        await save_secret(db, "bot_token", token)
+        await close_bot()
+        bot = get_bot()
+        try:
+            me = await bot.get_me() if bot else None
+        except Exception as exc:
+            await save_secret(db, "bot_token", "")
+            await close_bot()
+            logger_name = type(exc).__name__
+            from logging import getLogger
+            getLogger(__name__).warning("bot token rejected: %s", logger_name)
+            raise HTTPException(status_code=400, detail="تلگرام این توکن را نپذیرفت")
+        if me is None:
+            raise HTTPException(status_code=400, detail="توکن ذخیره نشد")
+        await write_audit(db, admin=admin, action="set_bot_token", resource="secret", ip_address=ip)
+        return {"ok": True, "username": me.username}
+    if action == "rotate_jwt":
+        if admin.role != "OWNER":
+            raise HTTPException(status_code=403, detail="فقط مالک می‌تواند کلید ورود را عوض کند")
+        import secrets as pysecrets
+        fresh = pysecrets.token_urlsafe(32)
+        await save_secret(db, "jwt_secret", fresh)
+        token = create_token({"sub": admin.username, "role": admin.role})
+        await write_audit(db, admin=admin, action="rotate_jwt", resource="secret", ip_address=ip)
+        return {"ok": True, "token": token, "message": "کلید تازه شد. این نشست می‌ماند و بقیه خارج می‌شوند."}
+    if action == "webhook":
+        if admin.role not in {"OWNER", "ADMIN"}:
+            raise HTTPException(status_code=403, detail="فقط مالک یا ادمین می‌تواند وبهوک را ثبت کند")
+        if payload.webhook_url:
+            await save_secret(db, "webhook_url", _https_webhook(payload.webhook_url))
+        if payload.regenerate_secret or not peek("webhook_secret"):
+            import secrets as pysecrets
+            await save_secret(db, "webhook_secret", pysecrets.token_urlsafe(24))
+        await write_audit(db, admin=admin, action="repair_webhook", resource="secret", ip_address=ip)
+        if not get_bot() or not resolved_webhook_url():
+            return {"ok": True, "registered": False, "message": "ذخیره شد. برای ثبت، توکن و آدرس هر دو لازم است."}
+        registered = await reset_webhook(db, admin)
+        return {"ok": True, "registered": True, "url": registered.get("url"), "message": "وبهوک با رمز پنل ثبت شد."}
+    if action == "clear_emoji_error":
+        assert_editor(admin)
+        row = (await db.execute(select(SystemSetting).where(SystemSetting.key == "last_emoji_error"))).scalar_one_or_none()
+        if row:
+            await db.delete(row)
+        return {"ok": True}
+    raise HTTPException(status_code=400, detail="این تعمیر شناخته نشد")
 
 
 def _session_http(exc: SessionLoginError) -> HTTPException:

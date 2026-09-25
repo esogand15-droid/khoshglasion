@@ -4,7 +4,7 @@ from aiogram import Bot
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 
-from backend.app.core.config import get_settings
+from backend.app.core.secrets import peek
 
 logger = logging.getLogger(__name__)
 
@@ -14,8 +14,7 @@ _token: str = ""
 
 def get_bot() -> Bot | None:
     global _bot, _token
-    settings = get_settings()
-    token = (settings.bot_token or "").strip()
+    token = peek("bot_token")
     if not token:
         return None
     if _bot is None or _token != token:

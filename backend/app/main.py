@@ -19,6 +19,7 @@ from backend.app.api.preview import router as preview_router
 from backend.app.api.styles import router as styles_router
 from backend.app.api.system import router as system_router
 from backend.app.core.config import get_settings
+from backend.app.core.secrets import peek, refresh_secrets, resolved_webhook_url
 from backend.app.db.bootstrap import bootstrap
 from backend.app.logging_config.setup import setup_logging
 from backend.app.telegram.bot import close_bot, get_bot
@@ -41,11 +42,11 @@ ALLOWED_UPDATES = [
 
 async def setup_webhook() -> None:
     bot = get_bot()
-    url = settings.resolved_webhook_url
+    url = resolved_webhook_url()
     if not bot or not url:
         logger.warning("Webhook skipped: bot token or public URL is missing")
         return
-    secret = settings.webhook_secret or None
+    secret = peek("webhook_secret") or None
     try:
         await bot.set_webhook(
             url=url,
@@ -64,6 +65,13 @@ async def lifespan(_app: FastAPI):
         await bootstrap()
     except Exception:
         logger.exception("Startup bootstrap failed")
+    try:
+        from backend.app.db.base import get_session_factory
+
+        async with get_session_factory()() as session:
+            await refresh_secrets(session)
+    except Exception:
+        logger.exception("Panel secret load failed")
     await setup_webhook()
     stop_automation = asyncio.Event()
     from backend.app.services.automation_runner import automation_loop
@@ -123,7 +131,7 @@ async def ready():
 
 @app.post("/telegram/webhook")
 async def telegram_webhook(request: Request):
-    expected = settings.webhook_secret or ""
+    expected = peek("webhook_secret")
     if expected:
         provided = request.headers.get("X-Telegram-Bot-Api-Secret-Token") or ""
         if not hmac.compare_digest(provided, expected):

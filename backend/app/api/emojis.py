@@ -171,6 +171,47 @@ async def apply_telegram_fallback(emoji_id: str, request: Request, db: AsyncSess
     return dump_emoji(row)
 
 
+@router.post("/bulk")
+async def bulk_emojis(payload: dict, db: AsyncSession = Depends(get_db), admin=Depends(get_current_admin)):
+    assert_editor(admin)
+    ids = []
+    for raw in payload.get("ids") or []:
+        item = str(raw or "").strip()
+        if item and item not in ids:
+            ids.append(item)
+        if len(ids) >= 500:
+            break
+    if not ids:
+        raise HTTPException(status_code=400, detail="چیزی انتخاب نشده")
+    action = str(payload.get("action") or "").strip()
+    rows = (await db.execute(select(EmojiMapping).where(EmojiMapping.id.in_(ids)))).scalars().all()
+    if action == "delete":
+        for row in rows:
+            await db.delete(row)
+    elif action == "enable":
+        for row in rows:
+            row.enabled = True
+    elif action == "disable":
+        for row in rows:
+            row.enabled = False
+    elif action == "category":
+        category = str(payload.get("category") or "").strip()[:64] or None
+        for row in rows:
+            row.category = category
+    elif action == "priority":
+        try:
+            priority = int(payload.get("priority"))
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="اولویت عدد نیست")
+        if not 0 <= priority <= 1000:
+            raise HTTPException(status_code=400, detail="اولویت باید بین ۰ و ۱۰۰۰ باشد")
+        for row in rows:
+            row.priority = priority
+    else:
+        raise HTTPException(status_code=400, detail="این کار گروهی شناخته نشد")
+    return {"ok": True, "count": len(rows)}
+
+
 @router.post("/validate")
 async def validate_emojis(payload: dict, admin=Depends(get_current_admin)):
     ids = [str(item).strip() for item in (payload.get("custom_emoji_ids") or payload.get("ids") or [])]
