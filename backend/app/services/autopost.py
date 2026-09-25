@@ -13,7 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.content.pipeline import extra_long_numbers, extract_facts, invented_quotes
-from backend.app.content.prompts import FACT_LOCK, LEGACY_PROMPTS, MODE_PROMPT, PROMPTS, WRITER_STAGES
+from backend.app.content.prompts import FACT_LOCK, LEGACY_PROMPTS, MODE_PROMPT, PROMPTS, RETIRED_PROMPTS, STYLE_LOCK, WRITER_STAGES
 from backend.app.formatting.editor import analyze_post
 from backend.app.formatting.textutil import missing_long_numbers
 from backend.app.models.automation import AutomationConfig, DraftPost, HashtagRule, NewsSource, PromptVersion, PublishSlot
@@ -35,6 +35,27 @@ def normalize_source(raw: str) -> str | None:
         return None
     text = text.split("/")[0].lstrip("@")
     return text if SOURCE_RE.fullmatch(text) else None
+
+
+_INVITE_TG = re.compile(r"tg://join\?invite=([A-Za-z0-9_-]{12,80})", re.IGNORECASE)
+_INVITE_WEB = re.compile(
+    r"(?:https?://)?(?:t\.me|telegram\.me)/(?:\+|joinchat/)([A-Za-z0-9_-]{12,80})",
+    re.IGNORECASE,
+)
+_INVITE_BARE = re.compile(r"^\+([A-Za-z0-9_-]{12,80})$")
+
+
+def parse_invite_hash(raw: str) -> str | None:
+    """Hash from a private invite link. Does not join the chat."""
+    text = (raw or "").strip()
+    if not text:
+        return None
+    for pattern in (_INVITE_TG, _INVITE_WEB):
+        found = pattern.search(text)
+        if found:
+            return found.group(1)
+    bare = _INVITE_BARE.fullmatch(text)
+    return bare.group(1) if bare else None
 
 
 def too_verbatim(source: str, draft: str) -> bool:
@@ -145,6 +166,7 @@ async def compose_prompt(db: AsyncSession, name: str) -> str:
         extras = await extra_prompts(db)
         if extras:
             parts.append("دستورهای اضافهٔ پنل:\n" + "\n".join(f"- {item}" for item in extras))
+        parts.append(STYLE_LOCK)
         parts.append(FACT_LOCK)
     return "\n\n".join(part for part in parts if part)
 
@@ -164,9 +186,12 @@ async def ensure_content_defaults(db: AsyncSession) -> None:
         versions = by_name.get(name) or []
         active = next((row for row in versions if row.active and row.body), None)
         legacy = (LEGACY_PROMPTS.get(name) or "").strip()
+        retired = {legacy} if legacy else set()
+        retired.update(item.strip() for item in (RETIRED_PROMPTS.get(name) or ()) if item and item.strip())
+        retired.discard(body.strip())
         if active is None:
             db.add(PromptVersion(name=name, version=1, body=body, active=True))
-        elif legacy and active.body.strip() == legacy and active.body.strip() != body.strip():
+        elif active.body.strip() in retired:
             active.active = False
             nxt = max(int(row.version or 1) for row in versions) + 1
             db.add(PromptVersion(name=name, version=nxt, body=body, active=True))
@@ -182,10 +207,16 @@ async def draft_from_source(
     avoid: list[str] | None = None,
     template_hint: str | None = None,
     system_prompt: str | None = None,
+    style: str | None = None,
+    style_card: str | None = None,
 ) -> tuple[str | None, str, str]:
+    from backend.app.services.finetune import classify_style, folder_category, writer_context
+
     decision = analyze_post(source_text)
+    style_name = style or classify_style(source_text)
+    category = folder_category(style_name)
     if runtime is None or not runtime.ai_ready:
-        return None, decision.category, "not_ready"
+        return None, category or decision.category, "not_ready"
     prompt_name = MODE_PROMPT.get(mode, "generator")
     facts = extract_facts(source_text)
     openings = " | ".join(item for item in (avoid or []) if item) or "هیچ"
@@ -194,6 +225,7 @@ async def draft_from_source(
         {
             "role": "user",
             "content": (
+                f"{writer_context(style_name, style_card)}\n"
                 f"زاویه: {template_hint or 'طبیعی'}\n"
                 f"شروع‌های اخیر که نباید تکرار شوند: {openings}\n"
                 f"عددهای مجاز: {', '.join(facts['numbers']) or 'هیچ'}\n"
@@ -203,7 +235,7 @@ async def draft_from_source(
         },
     ])
     accepted, guard = accept_draft(source_text, raw)
-    return (accepted, decision.category, "ok") if accepted else (None, decision.category, guard)
+    return (accepted, category, "ok") if accepted else (None, category, guard)
 
 
 def append_hashtags(body: str, tags: list[str]) -> str:

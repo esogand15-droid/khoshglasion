@@ -18,7 +18,7 @@ from backend.app.models.channel import Channel
 from backend.app.security.deps import assert_editor, assert_publisher, get_current_admin
 from backend.app.services.audit import write_audit
 from backend.app.services.automation_runner import collect_sources, deliver_draft, publish_due, published_today
-from backend.app.telegram.collector import probe_channel
+from backend.app.telegram.collector import probe_channel, register_joined_invite
 from backend.app.telegram.pipeline import load_emoji_maps
 from backend.app.telegram.publisher import delete_published, publish_rendered
 from backend.app.content.pipeline import normalize_hashtag
@@ -30,6 +30,7 @@ from backend.app.services.autopost import (
     get_config,
     next_slot_time,
     normalize_source,
+    parse_invite_hash,
     remember_version,
 )
 
@@ -98,6 +99,7 @@ def dump_draft(row: DraftPost, username: str | None = None) -> dict:
         "template_id": row.template_id,
         "emoji_signature": row.emoji_signature,
         "analysis_summary": _summary(row.analysis_json),
+        "style_label": _analysis_flag(row.analysis_json, "style_label"),
         "source_url": row.source_url,
         "published_url": channel_message_url(row.target_chat_id, row.message_id, username),
         "has_media": bool(_analysis_flag(row.analysis_json, "has_media")),
@@ -205,6 +207,9 @@ async def automation_state(
         (await db.execute(select(DraftPost.status, func.count()).group_by(DraftPost.status))).all()
     )
     today = await published_today(db)
+    from backend.app.services.finetune import snapshot
+
+    finetune = await snapshot(db)
     return {
         "enabled": config.enabled,
         "auto_publish": config.auto_publish,
@@ -235,6 +240,7 @@ async def automation_state(
         "sources": [dump_source(row) for row in sources],
         "slots": [dump_slot(row) for row in slots],
         "drafts": [dump_draft(row, names.get(int(row.target_chat_id)) if row.target_chat_id else None) for row in drafts],
+        "finetune": finetune,
     }
 
 
@@ -259,9 +265,20 @@ async def add_source(payload: SourceIn, db: AsyncSession = Depends(get_db), admi
     from backend.app.telegram.session_login import refresh_user_credentials
 
     await refresh_user_credentials(db)
+    if parse_invite_hash(payload.username):
+        result = await register_joined_invite(
+            db,
+            payload.username,
+            category_hint=payload.category_hint,
+            priority=payload.priority,
+            interval_minutes=payload.interval_minutes,
+        )
+        if isinstance(result, str):
+            raise HTTPException(status_code=400, detail=result)
+        return dump_source(result)
     username = normalize_source(payload.username)
     if not username:
-        raise HTTPException(status_code=400, detail="فقط یوزرنیم عمومی یا آیدی عددی کانال. لینک دعوت خصوصی قبول نیست")
+        raise HTTPException(status_code=400, detail="یوزرنیم عمومی، آیدی عددی، یا لینک دعوت کانالی که اکانت خبری از قبل عضو آن است")
     existing = (await db.execute(select(NewsSource).where(NewsSource.username == username))).scalar_one_or_none()
     if existing:
         existing.enabled = True
@@ -308,8 +325,16 @@ async def probe_source(source_id: str, catch_up: bool = False, db: AsyncSession 
     from backend.app.telegram.session_login import refresh_user_credentials
 
     await refresh_user_credentials(db)
-    info, error = await probe_channel(row.username)
-    row.title = info.get("title") or row.title
+    updates: dict = {}
+    info, error = await probe_channel(
+        row.username,
+        access_hash=row.access_hash,
+        invite_hash=row.invite_hash,
+        updates=updates,
+    )
+    if updates.get("access_hash") is not None:
+        row.access_hash = int(updates["access_hash"])
+    row.title = updates.get("title") or info.get("title") or row.title
     row.last_error = error
     if catch_up and info.get("latest_id"):
         row.last_message_id = int(info["latest_id"])
@@ -490,15 +515,20 @@ async def regenerate_draft(draft_id: str, request: Request, mode: str = "fresh",
         raise HTTPException(status_code=400, detail="متن منبع برای بازنویسی ذخیره نشده")
     if mode not in {"fresh", "shorter", "rewrite"}:
         raise HTTPException(status_code=400, detail="حالت بازنویسی معتبر نیست")
+    from backend.app.services.finetune import angle_label, classify_style, load_card
+
     runtime = await load_runtime(db)
+    style = classify_style(source)
     prompt = await compose_prompt(db, f"regenerator_{mode}")
     body, category, reason = await draft_from_source(
         source,
         row.source_label or "",
         runtime,
         mode=mode,
-        template_hint=row.template_id,
+        template_hint=angle_label(style),
         system_prompt=prompt,
+        style=style,
+        style_card=await load_card(db),
     )
     if not body:
         raise HTTPException(status_code=400, detail=reason or "بازنویسی رد شد")

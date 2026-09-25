@@ -20,7 +20,6 @@ from backend.app.content.pipeline import (
     merge_analysis,
     opening_signature,
     parse_analysis,
-    pick_angle,
     should_auto_schedule,
     source_url,
     too_similar,
@@ -40,6 +39,15 @@ from backend.app.models.automation import (
     PublishSlot,
 )
 from backend.app.services.ai import complete_text
+from backend.app.services.finetune import (
+    angle_label,
+    classify_style,
+    folder_category,
+    folder_label,
+    keep_fun,
+    load_card,
+    remember_sample,
+)
 from backend.app.services.autopost import (
     active_prompt,
     compose_prompt,
@@ -93,7 +101,7 @@ def _remember_skip(db: AsyncSession, source: NewsSource, item: dict, reason: str
         category=source.category_hint or "news",
         body="",
         source_content=item.get("text") or "",
-        source_label=source.username,
+        source_label=source.title or source.username,
         source_key=f"{source.username}:{int(item['id'])}",
         content_hash=content_hash(item.get("text") or "") or None,
         error=reason[:120],
@@ -200,8 +208,9 @@ async def collect_sources(db: AsyncSession, *, force: bool = False) -> dict:
     ).scalars().all()
     recent = [row.body for row in recent_rows if row.body]
     recent_emoji = [row.emoji_signature for row in recent_rows if row.emoji_signature]
-    recent_angles = [row.template_id.rsplit(".", 1)[-1] for row in recent_rows if row.template_id]
     created = 0
+    filed = 0
+    style_card = await load_card(db)
     errors: list[str] = []
     truncated_any = False
     for source in sources:
@@ -212,7 +221,19 @@ async def collect_sources(db: AsyncSession, *, force: bool = False) -> dict:
             and source.last_collect_at > now - timedelta(minutes=interval)
         ):
             continue
-        posts, error, truncated = await read_channel_posts(source.username, min_id=int(source.last_message_id or 0))
+        updates: dict = {}
+        posts, error, truncated = await read_channel_posts(
+            source.username,
+            min_id=int(source.last_message_id or 0),
+            access_hash=getattr(source, "access_hash", None),
+            invite_hash=getattr(source, "invite_hash", None),
+            updates=updates,
+            title=source.title,
+        )
+        if updates.get("access_hash") is not None:
+            source.access_hash = int(updates["access_hash"])
+        if updates.get("title"):
+            source.title = updates["title"]
         if error:
             source.last_error = error[:300]
             errors.append(error)
@@ -242,7 +263,15 @@ async def collect_sources(db: AsyncSession, *, force: bool = False) -> dict:
                 await write_log(db, "collect_skip", f"{source.username}:{message_id} DUPLICATE")
                 continue
             judgment = judge_value(item["text"], created_at=item.get("date"))
-            if judgment["value"] in {"LOW_VALUE", "ADVERTISEMENT", "OUTDATED"}:
+            style = classify_style(item["text"])
+            if judgment["value"] != "ADVERTISEMENT":
+                filed += await remember_sample(
+                    db,
+                    source_key=key,
+                    source_label=source.title or item.get("title") or source.username,
+                    text=item["text"],
+                )
+            if judgment["value"] in {"LOW_VALUE", "ADVERTISEMENT", "OUTDATED"} and not keep_fun(item["text"], judgment, style):
                 _remember_skip(db, source, item, judgment["value"], config)
                 handled.add(message_id)
                 await write_log(db, "collect_skip", f"{source.username}:{message_id} {judgment['value']}")
@@ -255,11 +284,13 @@ async def collect_sources(db: AsyncSession, *, force: bool = False) -> dict:
                 break
             analysis = await _analyze(db, item["text"], item.get("date"), runtime)
             analysis["has_media"] = bool(item.get("has_media"))
-            category = source.category_hint or analysis.get("category") or "news"
+            analysis["style"] = style
+            analysis["style_label"] = folder_label(style)
+            category = source.category_hint or folder_category(style)
             decision = analyze_post(item["text"])
             choice = choose_template(decision, channel_style=None, recent_emoji_styles=recent_emoji)
-            angle_key, angle_label = pick_angle(recent_angles)
             openings = [opening_signature(body) for body in recent[-6:]]
+            style_card = await load_card(db)
             prompt = await compose_prompt(db, "generator")
             body, _category, reason = await draft_from_source(
                 item["text"],
@@ -267,8 +298,10 @@ async def collect_sources(db: AsyncSession, *, force: bool = False) -> dict:
                 runtime,
                 mode="generate",
                 avoid=openings,
-                template_hint=angle_label,
+                template_hint=angle_label(style),
                 system_prompt=prompt,
+                style=style,
+                style_card=style_card,
             )
             similar = False
             if body and too_similar(body, recent):
@@ -279,8 +312,10 @@ async def collect_sources(db: AsyncSession, *, force: bool = False) -> dict:
                     runtime,
                     mode="fresh",
                     avoid=openings,
-                    template_hint=angle_label,
+                    template_hint=angle_label(style),
                     system_prompt=fresh_prompt,
+                    style=style,
+                    style_card=style_card,
                 )
                 if alt and not too_similar(alt, recent):
                     body = alt
@@ -293,7 +328,7 @@ async def collect_sources(db: AsyncSession, *, force: bool = False) -> dict:
                     category=category,
                     body="",
                     source_content=item["text"],
-                    source_label=source.username,
+                    source_label=source.title or source.username,
                     source_key=key,
                     source_url=source_url(source.username, message_id),
                     content_hash=digest,
@@ -322,13 +357,13 @@ async def collect_sources(db: AsyncSession, *, force: bool = False) -> dict:
                 category=category,
                 body=body,
                 source_content=item["text"],
-                source_label=source.username,
+                source_label=source.title or source.username,
                 source_key=key,
                 source_url=source_url(source.username, message_id),
                 content_hash=digest,
                 analysis_json=json.dumps(analysis, ensure_ascii=False),
                 hashtags=" ".join(f"#{tag}" for tag in tags),
-                template_id=f"{choice.template_id}.{angle_key}",
+                template_id=f"{choice.template_id}.{style}",
                 style_id=choice.style_id,
                 emoji_signature=choice.emoji_style_id,
                 confidence=analysis.get("confidence"),
@@ -348,7 +383,6 @@ async def collect_sources(db: AsyncSession, *, force: bool = False) -> dict:
                 ))
             recent.append(body)
             recent_emoji.append(choice.emoji_style_id)
-            recent_angles.append(angle_key)
             handled.add(message_id)
             created += 1
         source.last_message_id = cursor_after(int(source.last_message_id or 0), posts, handled, stop_before)
@@ -361,9 +395,11 @@ async def collect_sources(db: AsyncSession, *, force: bool = False) -> dict:
     if not truncated_any:
         config.last_collect_at = now
     config.last_error = errors[0] if errors else config.last_error
-    await write_log(db, "collect_done", f"created={created}")
+    if filed:
+        style_card = await load_card(db)
+    await write_log(db, "collect_done", f"created={created} filed={filed}")
     await db.flush()
-    return {"created": created, "errors": errors, "truncated": truncated_any}
+    return {"created": created, "errors": errors, "truncated": truncated_any, "filed": filed}
 
 
 async def published_today(db: AsyncSession, now: datetime | None = None) -> dict[str, int]:

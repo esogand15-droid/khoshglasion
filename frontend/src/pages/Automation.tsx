@@ -50,7 +50,7 @@ const CATEGORIES: [string, string][] = [
 
 const STAGES = [
   { name: "analyzer", title: "تحلیل‌گر", when: "قبل از نوشتن", detail: "فقط می‌گوید این متن چیست. خروجی‌اش JSON است: موضوع، اهمیت و اطمینان. اگر عدد تازه بسازد، کد آن را دور می‌ریزد." },
-  { name: "generator", title: "نویسنده", when: "ساخت پیش‌نویس", detail: "از منبع یک پست مستقل می‌سازد. هشتگ، فوتر و ایموجی را خودش نمی‌نویسد؛ سیستم بعداً اضافه می‌کند." },
+  { name: "generator", title: "نویسنده", when: "ساخت پیش‌نویس", detail: "سبک را از پوشه فاین‌تیون می‌گیرد: خبر کوتاه، اطلاعیه، فان یا راهنما. مقالهٔ مشاوره نمی‌سازد و جملهٔ منبع را کپی نمی‌کند." },
   { name: "validator", title: "بازبین", when: "بعد از نوشتن", detail: "اگر ادعای تازه‌ای ببیند فقط REVIEW می‌گوید. عدد و نقل‌قول را کد، جدا از این متن، هم رد می‌کند." },
   { name: "regenerator_fresh", title: "شروع تازه", when: "اگر شروع تکراری شد", detail: "همان واقعیت را با شروع و ریتم دیگر می‌نویسد تا پست‌ها شبیه هم نشوند." },
   { name: "regenerator_shorter", title: "کوتاه‌تر", when: "دکمهٔ کوتاه‌تر", detail: "همان واقعیت را کوتاه می‌کند و عدد و اسم منبع را نگه می‌دارد." },
@@ -86,6 +86,7 @@ export default function Automation() {
   const [tagForm, setTagForm] = useState({ tag: "", category: "general", priority: "60" });
   const [extraForm, setExtraForm] = useState({ name: "", body: "" });
   const [promptDrafts, setPromptDrafts] = useState<Record<string, string>>({});
+  const [styleFolder, setStyleFolder] = useState("flash");
   const role = useAuth((state) => state.role);
   const canEdit = !role || role !== "VIEWER";
   const canPublish = !role || role === "OWNER" || role === "ADMIN";
@@ -140,19 +141,20 @@ export default function Automation() {
     <Page
       kicker="اتوماسیون"
       title="پست خودکار"
-      description="منبع خوانده می‌شود، تکراری حذف می‌شود، پست مستقل ساخته می‌شود و تا تأیید یا رسیدن ساعت در صف می‌ماند."
+      description="منبع خوانده می‌شود، در پوشهٔ سبک طبقه می‌شود، و پست با لحن کانال‌های کنکور ساخته می‌شود."
       actions={<Button variant="brand" disabled={busy || !canEdit} onClick={async () => {
         setBusy(true);
         try {
           const { data: result } = await api.post("/api/automation/collect");
-          setMsg(result.error || (result.skipped === "disabled" ? "اتوماسیون خاموش است" : result.skipped === "paused" ? "صف متوقف است" : `پیش‌نویس تازه: ${fa(result.created ?? 0)}`));
+          const filed = Number(result.filed || 0);
+          setMsg(result.error || (result.skipped === "disabled" ? "اتوماسیون خاموش است" : result.skipped === "paused" ? "صف متوقف است" : `پیش‌نویس تازه: ${fa(result.created ?? 0)}${filed ? ` · پوشه فاین‌تیون: ${fa(filed)}` : ""}`));
           await load();
         } catch (error: any) { setMsg(error.response?.data?.detail || "جمع‌آوری انجام نشد"); }
         finally { setBusy(false); }
       }}>{busy ? "در حال جمع‌آوری" : "جمع‌آوری الان"}</Button>}
     >
       <Alert title="مسیر یک پست">
-        منبع عمومی خوانده می‌شود، تحلیل‌گر موضوع را جدا می‌کند، نویسنده متن مستقل می‌سازد، بازبین واقعیت را چک می‌کند و هشتگ از همین فهرست اضافه می‌شود. لینک دعوت خصوصی قبول نیست. ایموجی پرمیوم هنگام ارسال از کتابخانهٔ پنل می‌آید، نه از این پرامپت‌ها.
+        هر جمع‌آوری پست را در پوشهٔ فاین‌تیون طبقه می‌کند. نویسنده از همان پوشه می‌فهمد خبر را کوتاه بگوید، فان را نصیحت نکند و اطلاعیه را مقاله نکند. لینک خصوصی فقط وقتی ثبت می‌شود که اکانت خبر از قبل عضو همان کانال باشد؛ جوین خودکار انجام نمی‌شود.
       </Alert>
       {data.last_error && <Alert variant="destructive" title={data.last_error} />}
       {msg && <Alert>{msg}</Alert>}
@@ -171,6 +173,7 @@ export default function Automation() {
           <TabsTrigger value="slots">زمان‌بندی</TabsTrigger>
           <TabsTrigger value="tags">هشتگ</TabsTrigger>
           <TabsTrigger value="drafts">پیش‌نویس</TabsTrigger>
+          <TabsTrigger value="finetune">فاین‌تیون</TabsTrigger>
           <TabsTrigger value="prompts">پرامپت</TabsTrigger>
           <TabsTrigger value="logs">گزارش</TabsTrigger>
         </TabsList>
@@ -219,7 +222,7 @@ export default function Automation() {
             <CardHeader><CardTitle>کانال‌های منبع</CardTitle></CardHeader>
             <CardContent className="space-y-3">
               <div className="grid gap-2 md:grid-cols-[1fr_180px_auto]">
-                <Input dir="ltr" value={source} onChange={(event) => setSource(event.target.value)} placeholder="@channel یا https://t.me/channel" />
+                <Input dir="ltr" value={source} onChange={(event) => setSource(event.target.value)} placeholder="@channel یا https://t.me/+invite" />
                 <Select value={sourceCategory} onChange={(event) => setSourceCategory(event.target.value)} options={CATEGORIES.map(([value, label]) => ({ value, label }))} />
                 <Button variant="outline" disabled={!canEdit || !source.trim()} onClick={() => run(async () => {
                   await api.post("/api/automation/sources", { username: source, category_hint: sourceCategory || null });
@@ -228,6 +231,7 @@ export default function Automation() {
                   await load();
                 }, "منبع ثبت نشد")}>افزودن منبع</Button>
               </div>
+              <p className="text-xs text-muted-foreground">لینک خصوصی مثل t.me/+... فقط اگر اکانت خبر از قبل عضو همان کانال باشد ذخیره می‌شود. پنل خودش جوین نمی‌کند.</p>
               {data.sources?.length ? (
                 <Table>
                   <TableHeader><TableRow><TableHead>منبع</TableHead><TableHead>اولویت و فاصله</TableHead><TableHead>وضعیت</TableHead><TableHead /></TableRow></TableHeader>
@@ -235,7 +239,14 @@ export default function Automation() {
                     {data.sources.map((item: any) => (
                       <TableRow key={item.id}>
                         <TableCell>
-                          <div dir="ltr">{item.username}</div>
+                          {item.title ? (
+                            <>
+                              <div>{item.title}</div>
+                              <div dir="ltr" className="text-xs text-muted-foreground">{item.username}</div>
+                            </>
+                          ) : (
+                            <div dir="ltr">{item.username}</div>
+                          )}
                           <div className="text-xs text-muted-foreground">{categoryLabel(item.category_hint)}</div>
                         </TableCell>
                         <TableCell>
@@ -345,7 +356,7 @@ export default function Automation() {
                     <article key={draft.id} className="space-y-3 rounded-2xl border border-border p-4">
                       <div className="flex flex-wrap items-center gap-2">
                         <Badge variant={draft.status === "failed" ? "destructive" : draft.status === "published" ? "success" : "secondary"}>{STATUS[draft.status] || draft.status}</Badge>
-                        <span className="text-xs text-muted-foreground">{draft.source_label} · {categoryLabel(draft.category)} · {draft.confidence || "—"} {draft.has_media ? "· کپشن" : ""}</span>
+                        <span className="text-xs text-muted-foreground">{draft.source_label} · {draft.style_label || categoryLabel(draft.category)} · {draft.confidence || "—"} {draft.has_media ? "· کپشن" : ""}</span>
                         {draft.hashtags && <span className="text-xs text-muted-foreground" dir="ltr">{draft.hashtags}</span>}
                       </div>
                       {edit?.id === draft.id ? (
@@ -434,7 +445,7 @@ export default function Automation() {
             <Card>
               <CardHeader><CardTitle>دستور اضافه</CardTitle></CardHeader>
               <CardContent className="space-y-3">
-                <p className="text-sm text-muted-foreground">مثلاً «لحن صمیمی‌تر» یا «پاراگراف آخر را با یک سؤال تمام کن». این متن جای تحلیل‌گر و بازبین را نمی‌گیرد.</p>
+                <p className="text-sm text-muted-foreground">مثلاً «تیتر را کوتاه‌تر کن» یا «فان را نصیحت نکن». این متن جای پوشهٔ فاین‌تیون و بازبین واقعیت را نمی‌گیرد.</p>
                 <div className="grid gap-2 md:grid-cols-[220px_1fr]">
                   <Field label="نام"><Input value={extraForm.name} disabled={!canEdit} onChange={(event) => setExtraForm({ ...extraForm, name: event.target.value })} placeholder="لحن صمیمی" /></Field>
                   <Field label="دستور"><Textarea value={extraForm.body} disabled={!canEdit} onChange={(event) => setExtraForm({ ...extraForm, body: event.target.value })} /></Field>
@@ -457,6 +468,44 @@ export default function Automation() {
               </CardContent>
             </Card>
           </div>
+        </TabsContent>
+
+        <TabsContent value="finetune">
+          <Card>
+            <CardHeader><CardTitle>پوشهٔ سبک کانال‌های کنکور</CardTitle></CardHeader>
+            <CardContent className="space-y-4">
+              <p className="text-sm text-muted-foreground">هر بار که جمع‌آوری می‌زنی، یا صف خودکار منبع را می‌خواند، متن در یکی از این پوشه‌ها ذخیره می‌شود. نویسنده دفعهٔ بعد کارت همین پوشه را می‌خواند تا خبر، اطلاعیه، فان و راهنما را با سیاق کانال بنویسد، نه به‌صورت مقالهٔ مشاوره. جملهٔ نمونه‌ها کپی نمی‌شود و وزن مدل آموزش داده نمی‌شود؛ اگر مدل عوض شود همین پوشه می‌ماند.</p>
+              <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                {(data.finetune?.folders || []).map((folder: any) => (
+                  <Stat key={folder.id} size="sm" label={folder.label} value={fa(folder.count || 0)} />
+                ))}
+              </div>
+              <p className="whitespace-pre-wrap rounded-xl border border-border p-3 text-xs leading-6 text-muted-foreground">{data.finetune?.card || "کارت سبک هنوز ساخته نشده."}</p>
+              <div className="flex flex-wrap gap-2">
+                {(data.finetune?.folders || []).map((folder: any) => (
+                  <Button key={folder.id} size="sm" variant={styleFolder === folder.id ? "brand" : "outline"} onClick={() => setStyleFolder(folder.id)}>{folder.label}</Button>
+                ))}
+              </div>
+              {(() => {
+                const folder = (data.finetune?.folders || []).find((item: any) => item.id === styleFolder) || (data.finetune?.folders || [])[0];
+                const samples = folder?.samples || [];
+                if (!samples.length) return <p className="text-xs text-muted-foreground">این پوشه هنوز خالی است. یک جمع‌آوری کافی است تا نمونهٔ همین سبک اینجا بیاید.</p>;
+                return (
+                  <Table>
+                    <TableHeader><TableRow><TableHead>منبع</TableHead><TableHead>نمونه</TableHead></TableRow></TableHeader>
+                    <TableBody>
+                      {samples.map((sample: any, index: number) => (
+                        <TableRow key={`${sample.label}-${index}`}>
+                          <TableCell className="align-top text-xs">{sample.label || "منبع"}</TableCell>
+                          <TableCell className="whitespace-pre-wrap text-xs">{sample.excerpt}</TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                );
+              })()}
+            </CardContent>
+          </Card>
         </TabsContent>
 
         <TabsContent value="logs">

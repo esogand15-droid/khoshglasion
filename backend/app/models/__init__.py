@@ -17,6 +17,7 @@ from backend.app.models.automation import (
     NewsSource,
     PromptVersion,
     PublishSlot,
+    StyleSample,
 )
 
 __all__ = ["Channel","MessageLog","EmojiMapping","StylePreset","FormattingRule","Admin","AuditLog","SystemSetting","WebhookEvent"]

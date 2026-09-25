@@ -36,6 +36,8 @@ class NewsSource(Base):
     priority: Mapped[str] = mapped_column(String(16), default="normal")
     interval_minutes: Mapped[int] = mapped_column(Integer, default=20)
     source_type: Mapped[str] = mapped_column(String(32), default="channel")
+    access_hash: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    invite_hash: Mapped[str | None] = mapped_column(String(128), nullable=True)
     last_message_id: Mapped[int] = mapped_column(BigInteger, default=0)
     last_collect_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -122,6 +124,18 @@ class AutomationJob(Base):
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+class StyleSample(Base):
+    __tablename__ = "style_samples"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    folder: Mapped[str] = mapped_column(String(32), index=True)
+    source_key: Mapped[str] = mapped_column(String(160), unique=True)
+    source_label: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    excerpt: Mapped[str] = mapped_column(Text)
+    chars: Mapped[int] = mapped_column(Integer, default=0)
+    lines: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
 class HashtagRule(Base):
