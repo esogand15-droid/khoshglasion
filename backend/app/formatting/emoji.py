@@ -116,9 +116,15 @@ def should_replace(category: str, mapping: EmojiMapping) -> bool:
         return False
     if not str(mapping.custom_emoji_id).isdigit():
         return False
+    from backend.app.formatting.spectrum import spectrum_of
+
+    wanted = spectrum_of(category)
+    mapped = (mapping.category or "").strip()
+    if mapped and mapped not in {"divider", "membership", "support"}:
+        return spectrum_of(mapped) == wanted
     if not mapping.contexts:
         return True
-    return category in mapping.contexts
+    return category in mapping.contexts or wanted in mapping.contexts
 
 
 def _overlaps(start: int, end: int, occupied: list[tuple[int, int]]) -> bool:

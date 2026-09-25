@@ -2,7 +2,7 @@ import json
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import Response
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.db.base import get_db
@@ -10,11 +10,65 @@ from backend.app.models.emoji import EmojiMapping
 from backend.app.schemas.emoji import EmojiCreate, EmojiUpdate
 from backend.app.security.deps import assert_editor, get_current_admin
 from backend.app.services.audit import write_audit
+from backend.app.formatting.spectrum import SPECTRA, guess_spectrum, parse_ai_spectra, spectrum_of
+from backend.app.services.ai import complete_text
+from backend.app.core.runtime import load_runtime
 from backend.app.telegram.bot import get_bot
 from backend.app.telegram.emoji_media import clean_ids, describe_custom_emojis, load_custom_emoji_file
 from backend.app.telegram.emoji_pack import fetch_sticker_set, import_pack_names, is_safe_fallback, parse_pack_names
 
 router = APIRouter(prefix="/api/emojis", tags=["emojis"])
+
+
+def _stamp_spectrum(row: EmojiMapping, spectrum: str, source: str) -> None:
+    row.category = spectrum
+    row.contexts = json.dumps([spectrum], ensure_ascii=False)
+    row.source = source
+
+
+async def _classify_rows(db: AsyncSession, rows: list[EmojiMapping], *, force: bool) -> dict:
+    pending = [row for row in rows if force or row.source != "manual"]
+    pending.sort(key=lambda row: (0 if not row.category else 1, row.id or ""))
+    skipped = len(rows) - len(pending)
+    if not pending:
+        return {"changed": 0, "skipped_manual": skipped, "by": "none"}
+    batch = pending[:40]
+    assigned: dict[int, str] = {}
+    runtime = await load_runtime(db)
+    prompt_lines = [f"{index} {row.unicode_emoji or row.label or row.custom_emoji_id}" for index, row in enumerate(batch, 1)]
+    answer = await complete_text(
+        runtime,
+        [
+            {
+                "role": "system",
+                "content": (
+                    "هر خط را دقیقاً این‌طور برگردان: شماره=کلید. "
+                    "کلید فقط یکی از news announcement fun guide alert consulting general است. توضیح ننویس."
+                ),
+            },
+            {"role": "user", "content": "\n".join(prompt_lines)},
+        ],
+    )
+    parsed = parse_ai_spectra(answer or "")
+    by = "ai" if parsed else "guess"
+    for index, row in enumerate(batch, 1):
+        key = parsed.get(str(index))
+        if key in SPECTRA:
+            assigned[index] = key
+            continue
+        guessed = guess_spectrum(row.unicode_emoji or "")
+        if guessed:
+            assigned[index] = guessed
+            if not parsed:
+                by = "guess"
+    changed = 0
+    for index, row in enumerate(batch, 1):
+        key = assigned.get(index)
+        if not key:
+            continue
+        _stamp_spectrum(row, key, "ai" if parsed.get(str(index)) else "guess")
+        changed += 1
+    return {"changed": changed, "skipped_manual": skipped, "by": by, "left": max(0, len(pending) - 40)}
 
 
 def dump_emoji(row: EmojiMapping) -> dict:
@@ -198,8 +252,13 @@ async def bulk_emojis(payload: dict, db: AsyncSession = Depends(get_db), admin=D
             row.enabled = False
     elif action == "category":
         category = str(payload.get("category") or "").strip()[:64] or None
+        spectrum = spectrum_of(category) if category else None
         for row in rows:
-            row.category = category
+            if spectrum:
+                _stamp_spectrum(row, spectrum, "manual")
+            else:
+                row.category = None
+                row.source = "manual"
     elif action == "priority":
         try:
             priority = int(payload.get("priority"))
@@ -212,6 +271,21 @@ async def bulk_emojis(payload: dict, db: AsyncSession = Depends(get_db), admin=D
     else:
         raise HTTPException(status_code=400, detail="این کار گروهی شناخته نشد")
     return {"ok": True, "count": len(rows)}
+
+
+@router.post("/classify")
+async def classify_emojis(payload: dict, db: AsyncSession = Depends(get_db), admin=Depends(get_current_admin)):
+    assert_editor(admin)
+    ids = [str(item).strip() for item in (payload.get("ids") or []) if str(item).strip()][:80]
+    force = bool(payload.get("force"))
+    query = select(EmojiMapping)
+    if ids:
+        query = query.where(EmojiMapping.id.in_(ids))
+    else:
+        query = query.where(or_(EmojiMapping.source.is_(None), EmojiMapping.source != "manual"))
+    rows = (await db.execute(query)).scalars().all()
+    result = await _classify_rows(db, list(rows), force=force)
+    return {"ok": True, **result}
 
 
 @router.post("/validate")
@@ -257,10 +331,10 @@ async def create_emoji(payload: EmojiCreate, request: Request, db: AsyncSession 
         unicode_emoji=payload.unicode_emoji,
         custom_emoji_id=payload.custom_emoji_id.strip(),
         enabled=payload.enabled,
-        category=payload.category,
-        contexts=json.dumps(payload.contexts, ensure_ascii=False) if payload.contexts else None,
+        category=spectrum_of(payload.category) if payload.category else None,
+        contexts=json.dumps([spectrum_of(payload.category)], ensure_ascii=False) if payload.category else (json.dumps(payload.contexts, ensure_ascii=False) if payload.contexts else None),
         priority=payload.priority,
-        source="panel",
+        source="manual" if payload.category else "panel",
     )
     db.add(row)
     await db.flush()
@@ -279,7 +353,17 @@ async def update_emoji(emoji_id: str, payload: EmojiUpdate, db: AsyncSession = D
         priority = data["priority"]
         if priority is None or not isinstance(priority, int) or not 0 <= priority <= 1000:
             raise HTTPException(status_code=400, detail="اولویت باید بین ۰ و ۱۰۰۰ باشد")
-    if "contexts" in data and data["contexts"] is not None:
+    if "category" in data:
+        chosen = data.pop("category")
+        if chosen:
+            _stamp_spectrum(row, spectrum_of(str(chosen)), "manual")
+        else:
+            row.category = None
+            row.contexts = None
+            row.source = "manual"
+        data.pop("contexts", None)
+        data.pop("source", None)
+    elif "contexts" in data and data["contexts"] is not None:
         data["contexts"] = json.dumps(data["contexts"], ensure_ascii=False)
     for key, value in data.items():
         setattr(row, key, value)

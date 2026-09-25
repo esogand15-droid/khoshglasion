@@ -14,8 +14,23 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Field, Input } from "@/components/ui/input";
 import { SearchInput } from "@/components/ui/search-input";
+import { Select } from "@/components/ui/select";
 import { prefetchEmojiMeta } from "@/lib/emojiMedia";
 import { en, fa } from "@/lib/utils";
+
+const SPECTRA = [
+  ["news", "خبر"],
+  ["announcement", "اطلاعیه"],
+  ["fun", "فان"],
+  ["guide", "راهنما"],
+  ["alert", "هشدار"],
+  ["consulting", "مشاوره"],
+  ["general", "عمومی"],
+] as const;
+
+function spectrumLabel(value: string | null | undefined) {
+  return SPECTRA.find(([key]) => key === value)?.[1] || "بدون طیف";
+}
 
 function readPriority(value: unknown): number | null {
   const parsed = Number(en(String(value ?? "").trim()));
@@ -35,6 +50,8 @@ export default function Emojis() {
   const [packUrl, setPackUrl] = useState("");
   const [packBusy, setPackBusy] = useState(false);
   const [selected, setSelected] = useState<string[]>([]);
+  const [spectrum, setSpectrum] = useState("");
+  const [classifyBusy, setClassifyBusy] = useState(false);
   const [bulkCategory, setBulkCategory] = useState("");
   const [bulkPriority, setBulkPriority] = useState("70");
   const [ready, setReady] = useState(false);
@@ -68,11 +85,25 @@ export default function Emojis() {
     })().catch(() => {});
     return () => { cancelled = true; };
   }, [items]);
-  const shown = items.filter((item) => !q || `${item.unicode_emoji} ${item.custom_emoji_id} ${item.category || ""}`.includes(q));
+  const shown = items.filter((item) => (!spectrum || item.category === spectrum) && (!q || `${item.unicode_emoji} ${item.custom_emoji_id} ${item.category || ""}`.includes(q)));
   const selectedSet = new Set(selected);
 
   function toggleSelected(id: string, on: boolean) {
     setSelected((prev) => on ? [...new Set([...prev, id])] : prev.filter((item) => item !== id));
+  }
+
+  async function classify(force = false) {
+    setClassifyBusy(true);
+    try {
+      const { data } = await api.post("/api/emojis/classify", { ids: selected.length ? selected : undefined, force }, { timeout: 70000 });
+      const how = data.by === "ai" ? "هوش مصنوعی" : data.by === "guess" ? "حدس از شکل، چون مدل آماده نبود" : "بدون تغییر";
+      setMsg(`طبقه‌بندی: ${fa(data.changed || 0)} · ${how}${data.skipped_manual ? ` · ${fa(data.skipped_manual)} اصلاح دستی ماند` : ""}`);
+      await load();
+    } catch (error: any) {
+      setMsg(error.response?.data?.detail || "طبقه‌بندی انجام نشد");
+    } finally {
+      setClassifyBusy(false);
+    }
   }
 
   async function bulk(action: string, extra: Record<string, unknown> = {}) {
@@ -107,7 +138,7 @@ export default function Emojis() {
     <Page
       kicker="کتابخانه متحرک"
       title="ایموجی پرمیوم"
-      description="نگاشت ایموجی متحرک از همین کتابخانه خوانده می‌شود."
+      description="هوش مصنوعی طیف را می‌گذارد. اگر اشتباه بود، خودت عوضش کن؛ اصلاح دستی تا وقتی دوباره نخواهی پاک نمی‌شود."
       actions={<Button variant="outline" onClick={async () => { const { data } = await api.get("/api/emojis/export"); const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" }); const url = URL.createObjectURL(blob); const a = document.createElement("a"); a.href = url; a.download = "khoshgelasion-emojis.json"; a.click(); }}>خروجی</Button>}
     >
       {dialog}
@@ -137,7 +168,7 @@ export default function Emojis() {
           <div className="grid gap-3 md:grid-cols-4">
             <Field label="ایموجی"><Input value={form.unicode_emoji} onChange={(e) => setForm({ ...form, unicode_emoji: e.target.value })} /></Field>
             <Field label="custom_emoji_id"><Input dir="ltr" value={form.custom_emoji_id} onChange={(e) => setForm({ ...form, custom_emoji_id: e.target.value })} /></Field>
-            <Field label="دسته"><Input value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })} /></Field>
+            <Field label="طیف"><Select value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })} options={[{ value: "", label: "بدون طیف" }, ...SPECTRA.map(([value, label]) => ({ value, label }))]} /></Field>
             <Field label="اولویت"><Input value={form.priority} onChange={(e) => setForm({ ...form, priority: e.target.value })} /></Field>
           </div>
           <Button variant="brand" disabled={!canEdit} onClick={async () => {
@@ -156,6 +187,9 @@ export default function Emojis() {
 
       <div className="flex flex-wrap items-center gap-2">
         <div className="w-full max-w-xs"><SearchInput value={q} onChange={setQ} placeholder="جست‌وجوی ایموجی یا ID" /></div>
+        <Select className="h-9 w-36" value={spectrum} onChange={(event) => setSpectrum(event.target.value)} options={[{ value: "", label: "همه طیف‌ها" }, ...SPECTRA.map(([value, label]) => ({ value, label }))]} />
+        <Button variant="brand" disabled={!canEdit || classifyBusy} onClick={() => classify(false)}>{classifyBusy ? "در حال طبقه‌بندی…" : "طبقه‌بندی با هوش مصنوعی"}</Button>
+        {canEdit && selected.length > 0 && <Button variant="outline" disabled={classifyBusy} onClick={() => classify(true)}>دوباره، حتی اصلاح دستی</Button>}
         <Button variant="outline" onClick={async () => { const ids = shown.slice(0, 20).map((item) => item.custom_emoji_id); const { data } = await api.post("/api/emojis/validate", { custom_emoji_ids: ids }); setMsg(`معتبر: ${data.valid?.length || 0} / نامعتبر: ${data.invalid?.length || 0}${data.error ? " · " + data.error : ""}`); }}>اعتبارسنجی ۲۰ تای اول</Button>
         <Button variant="outline" disabled={!canEdit} onClick={async () => { await api.post("/api/emojis/cleanup-fake"); load(); }}>حذف IDهای فیک</Button>
         {canEdit && <Button variant="outline" onClick={() => setSelected(shown.map((item) => item.id))}>انتخاب همین فهرست</Button>}
@@ -168,8 +202,8 @@ export default function Emojis() {
           <Button size="sm" variant="destructive" onClick={() => bulk("delete")}>حذف گروهی</Button>
           <Button size="sm" variant="outline" onClick={() => bulk("disable")}>خاموش گروهی</Button>
           <Button size="sm" variant="outline" onClick={() => bulk("enable")}>روشن گروهی</Button>
-          <Input className="h-8 w-28" value={bulkCategory} onChange={(event) => setBulkCategory(event.target.value)} placeholder="دسته" />
-          <Button size="sm" variant="outline" onClick={() => bulk("category", { category: bulkCategory })}>اعمال دسته</Button>
+          <Select className="h-8 w-32" value={bulkCategory} onChange={(event) => setBulkCategory(event.target.value)} options={[{ value: "", label: "طیف دستی" }, ...SPECTRA.map(([value, label]) => ({ value, label }))]} />
+          <Button size="sm" variant="outline" onClick={() => bulk("category", { category: bulkCategory })}>اعمال طیف دستی</Button>
           <Input className="h-8 w-20" type="number" value={bulkPriority} onChange={(event) => setBulkPriority(event.target.value)} />
           <Button size="sm" variant="outline" onClick={() => { const priority = readPriority(bulkPriority); if (priority === null) { setMsg("اولویت باید عدد ۰ تا ۱۰۰۰ باشد"); return; } bulk("priority", { priority }); }}>اعمال اولویت</Button>
         </div>
@@ -188,6 +222,7 @@ export default function Emojis() {
               onEdit={() => setEdit({ ...item, priority: String(item.priority ?? 50) })}
               onToggle={async () => { await api.patch(`/api/emojis/${item.id}`, { enabled: !item.enabled }); load(); }}
               onDelete={() => ask("این نگاشت حذف شود؟", async () => { await api.delete(`/api/emojis/${item.id}`); load(); })}
+              onSpectrum={async (value) => { await api.patch(`/api/emojis/${item.id}`, { category: value || null }); load(); }}
               onAdopt={async () => {
                 try {
                   await api.post(`/api/emojis/${item.id}/telegram-fallback`);
@@ -209,7 +244,7 @@ export default function Emojis() {
             </div>
             <Field label="ایموجی"><Input value={edit.unicode_emoji} onChange={(e) => setEdit({ ...edit, unicode_emoji: e.target.value })} /></Field>
             <Field label="custom_emoji_id"><Input dir="ltr" value={edit.custom_emoji_id} onChange={(e) => setEdit({ ...edit, custom_emoji_id: e.target.value })} /></Field>
-            <Field label="دسته"><Input value={edit.category || ""} onChange={(e) => setEdit({ ...edit, category: e.target.value })} /></Field>
+            <Field label="طیف"><Select value={edit.category || ""} onChange={(e) => setEdit({ ...edit, category: e.target.value })} options={[{ value: "", label: "بدون طیف" }, ...SPECTRA.map(([value, label]) => ({ value, label }))]} /></Field>
             <Field label="اولویت"><Input inputMode="numeric" value={edit.priority} onChange={(e) => setEdit({ ...edit, priority: e.target.value })} /></Field>
             <Button variant="brand" disabled={!canEdit} onClick={async () => {
               const priority = readPriority(edit.priority);
@@ -237,7 +272,7 @@ export default function Emojis() {
   );
 }
 
-function EmojiCard({ item, canEdit, selected, onSelect, onZoom, onEdit, onToggle, onDelete, onAdopt }: {
+function EmojiCard({ item, canEdit, selected, onSelect, onZoom, onEdit, onToggle, onDelete, onAdopt, onSpectrum }: {
   item: any;
   canEdit: boolean;
   selected: boolean;
@@ -247,6 +282,7 @@ function EmojiCard({ item, canEdit, selected, onSelect, onZoom, onEdit, onToggle
   onToggle: () => void;
   onDelete: () => void;
   onAdopt: () => void;
+  onSpectrum: (value: string) => void;
 }) {
   const meta = useEmojiMeta(item.custom_emoji_id);
   const seen = useRef<HTMLDivElement>(null);
@@ -283,8 +319,10 @@ function EmojiCard({ item, canEdit, selected, onSelect, onZoom, onEdit, onToggle
         <div className="flex flex-wrap items-center gap-2">
           <Badge variant={item.enabled ? "success" : "secondary"}>{item.enabled ? "فعال" : "خاموش"}</Badge>
           {item.custom_emoji_id?.startsWith("53683241") && <Badge variant="warning">فیک</Badge>}
-          <span className="text-xs text-muted-foreground">{item.category || "بدون دسته"} · اولویت {fa(item.priority ?? 50)} · استفاده {fa(item.usage_count || 0)}</span>
+          <Badge variant="secondary">{spectrumLabel(item.category)}{item.source === "manual" ? " · دستی" : item.source === "ai" ? " · هوش مصنوعی" : ""}</Badge>
+          <span className="text-xs text-muted-foreground">اولویت {fa(item.priority ?? 50)} · استفاده {fa(item.usage_count || 0)}</span>
         </div>
+        {canEdit && <Select className="h-8" value={item.category || ""} onChange={(event) => onSpectrum(event.target.value)} options={[{ value: "", label: "بدون طیف" }, ...SPECTRA.map(([value, label]) => ({ value, label }))]} />}
         <div className="flex flex-wrap gap-2">
           <Button size="sm" variant="outline" disabled={!canEdit} onClick={onEdit}>ویرایش</Button>
           <Button size="sm" variant="outline" disabled={!canEdit} onClick={onToggle}>{item.enabled ? "خاموش" : "روشن"}</Button>

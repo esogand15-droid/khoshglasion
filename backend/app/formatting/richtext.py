@@ -728,8 +728,6 @@ def add_library_emoji(
         return marks
     usable = [item for item in mappings if (item.category or "") != "divider"]
     spans = find_emoji_spans(text, usable, category, max_emoji=max_emoji, force=False, avoid_ids=avoid_ids)
-    if not spans:
-        spans = find_emoji_spans(text, usable, category, max_emoji=max_emoji, force=True, avoid_ids=avoid_ids)
     occupied = [(mark.start, mark.end) for mark in marks]
     protected = _protected_ranges(text, marks)
     extra = list(marks)
@@ -892,19 +890,24 @@ def _line_starts_with_emoji(line: str) -> bool:
 
 
 def accent_pool(mappings: list[EmojiMapping] | None, category: str, avoid_ids: set[str] | None) -> list[EmojiMapping]:
+    from backend.app.formatting.spectrum import spectrum_of
+
     avoided = {str(item) for item in (avoid_ids or set())}
+    wanted = spectrum_of(category)
     usable: list[EmojiMapping] = []
     for mapping in mappings or []:
         if not mapping.enabled or not str(mapping.custom_emoji_id).isdigit() or not _insertable(mapping.unicode_emoji or ""):
             continue
         if (mapping.category or "") in {"divider", "membership", "support"}:
             continue
+        if not (mapping.category or "").strip() or spectrum_of(mapping.category) != wanted:
+            continue
         usable.append(mapping)
-    preferred = ACCENT_CHOICES.get(category) or ACCENT_CHOICES["general"]
-    preferred_rows = [item for item in usable if item.unicode_emoji in preferred]
-    if not preferred_rows:
+    if not usable:
         return []
-    pool = preferred_rows
+    preferred = ACCENT_CHOICES.get(wanted) or ACCENT_CHOICES.get(category) or ()
+    preferred_rows = [item for item in usable if item.unicode_emoji in preferred]
+    pool = preferred_rows or usable
     pool.sort(key=lambda item: (str(item.custom_emoji_id) in avoided, -(item.priority or 0)))
     unique: list[EmojiMapping] = []
     seen: set[str] = set()
@@ -1024,11 +1027,17 @@ def _exact_custom_cover(start: int, end: int, marks: list[Mark]) -> bool:
     )
 
 
-def _library_match(grapheme: str, mappings: list[EmojiMapping] | None) -> tuple[str, str] | None:
+def _library_match(grapheme: str, mappings: list[EmojiMapping] | None, category: str | None = None) -> tuple[str, str] | None:
+    from backend.app.formatting.spectrum import spectrum_of
+
     norm = grapheme.replace("\ufe0f", "").replace("\ufe0e", "")
+    wanted = spectrum_of(category) if category else None
     best: tuple[int, bool, str, str] | None = None
     for mapping in mappings or []:
         if not mapping.enabled or not str(mapping.custom_emoji_id).isdigit():
+            continue
+        mapped = (mapping.category or "").strip()
+        if wanted and mapped and mapped not in {"divider", "membership", "support"} and spectrum_of(mapped) != wanted:
             continue
         glyph = first_emoji_grapheme(mapping.unicode_emoji or "")
         if not glyph:
@@ -1047,19 +1056,12 @@ def _library_match(grapheme: str, mappings: list[EmojiMapping] | None) -> tuple[
 def _substitution_pool(
     mappings: list[EmojiMapping] | None,
     avoid_ids: set[str] | None,
+    category: str | None = None,
 ) -> list[tuple[str, str]]:
     rows: list[tuple[str, str]] = []
-    for item in accent_pool(mappings, "general", avoid_ids):
+    for item in accent_pool(mappings, category or "general", avoid_ids):
         glyph = first_emoji_grapheme(item.unicode_emoji or "")
         if glyph and str(item.custom_emoji_id).isdigit():
-            rows.append((glyph, str(item.custom_emoji_id)))
-    if rows:
-        return rows
-    for item in mappings or []:
-        if not item.enabled or not str(item.custom_emoji_id).isdigit():
-            continue
-        glyph = first_emoji_grapheme(item.unicode_emoji or "")
-        if glyph:
             rows.append((glyph, str(item.custom_emoji_id)))
     return rows
 
@@ -1107,6 +1109,7 @@ def premiumize_existing_emoji(
     marks: list[Mark],
     mappings: list[EmojiMapping] | None,
     avoid_ids: set[str] | None = None,
+    category: str | None = None,
 ) -> tuple[str, list[Mark], list[str]]:
     """Replace every unprotected unicode emoji with a saved premium id.
 
@@ -1115,7 +1118,7 @@ def premiumize_existing_emoji(
     """
     if not text:
         return text, marks, []
-    pool = _substitution_pool(mappings, avoid_ids)
+    pool = _substitution_pool(mappings, avoid_ids, category)
     spans = emoji_graphemes(text)
     if not spans:
         return text, marks, []
@@ -1130,7 +1133,7 @@ def premiumize_existing_emoji(
             continue
         if _inside_url(updated, start) or _span_protected(updated, start, end, current):
             continue
-        match = _library_match(grapheme, mappings)
+        match = _library_match(grapheme, mappings, category)
         glyph, custom_id = "", None
         if match and custom_count < MAX_CUSTOM_EMOJI:
             glyph, custom_id = match
@@ -1207,7 +1210,7 @@ def prepare_post(
         if after > before:
             applied.append(f"emoji_replacement:{after - before}")
         updated, marks, premium_rules = premiumize_existing_emoji(
-            updated, marks, mappings, avoid_emoji_ids,
+            updated, marks, mappings, avoid_emoji_ids, category,
         )
         applied.extend(premium_rules)
     html_text = render_html(updated, marks)

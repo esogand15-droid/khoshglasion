@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 import logging
@@ -188,6 +188,50 @@ async def _touch_emoji_usage(db: AsyncSession, spans: list[tuple[int, int, str]]
         row.usage_count = (row.usage_count or 0) + 1
 
 
+async def _published_by_automation(db: AsyncSession, chat_id: int, message_id: int, text: str) -> bool:
+    """Automation already styled this post. Do not let the channel editor restyle it."""
+    from backend.app.models.automation import DraftPost
+
+    if message_id:
+        owned = (
+            await db.execute(
+                select(DraftPost.id).where(
+                    DraftPost.target_chat_id == int(chat_id),
+                    DraftPost.message_id == int(message_id),
+                )
+            )
+        ).first()
+        if owned:
+            return True
+    compact = "".join((text or "").split())
+    if len(compact) < 40:
+        return False
+    cutoff = datetime.now(timezone.utc) - timedelta(minutes=3)
+    recent = (
+        await db.execute(
+            select(DraftPost)
+            .where(DraftPost.status.in_(["sending", "published"]))
+            .order_by(DraftPost.updated_at.desc())
+            .limit(8)
+        )
+    ).scalars().all()
+    for row in recent:
+        if row.message_id:
+            continue
+        stamp = row.updated_at
+        if stamp is not None:
+            if stamp.tzinfo is None:
+                stamp = stamp.replace(tzinfo=timezone.utc)
+            if stamp < cutoff:
+                continue
+        if row.target_chat_id and int(row.target_chat_id) != int(chat_id):
+            continue
+        body = "".join((row.body or "").split())
+        if len(body) >= 40 and body in compact and len(compact) - len(body) < 200:
+            return True
+    return False
+
+
 async def process_channel_post(
     db: AsyncSession,
     chat_id: int,
@@ -214,6 +258,8 @@ async def process_channel_post(
         return {"status": "skipped", "reason": f"non_editable_{media_type}"}
     if not effective:
         return {"status": "skipped", "reason": "no_editable_content"}
+    if await _published_by_automation(db, chat_id, message_id, effective):
+        return {"status": "skipped", "reason": "automation_draft"}
 
     channel = (await db.execute(select(Channel).where(Channel.chat_id == chat_id))).scalar_one_or_none()
     if channel is None and runtime.auto_register_channels and not is_edit_event:

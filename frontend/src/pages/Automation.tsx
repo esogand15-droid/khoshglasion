@@ -460,7 +460,6 @@ export default function Automation() {
                       </div>
                       <p className="text-xs text-muted-foreground">
                         دریافت از کانال: {whenLabel(draft.source_at || draft.created_at)}
-                        {!draft.source_at ? " · زمان دقیق منبع ذخیره نشده، این زمان ثبت در پنل است" : ""}
                         {draft.scheduled_at ? ` · انتشار برنامه‌شده: ${whenLabel(draft.scheduled_at)}` : ""}
                         {draft.published_at ? ` · منتشر شد: ${whenLabel(draft.published_at)}` : ""}
                       </p>
@@ -468,7 +467,7 @@ export default function Automation() {
                       {actionKey.startsWith(`${draft.id}:`) && <p className="text-xs text-brand" aria-live="polite">{pendingLabel(actionKey)}…</p>}
                       {edit?.id === draft.id ? (
                         <Textarea value={edit.body} onChange={(event) => setEdit({ ...edit, body: event.target.value })} />
-                      ) : draft.body ? <p className="whitespace-pre-wrap text-sm">{draft.body}</p> : <p className="text-sm text-muted-foreground">برای این منبع هنوز متنی ساخته نشده. منبع پایین جدا از پیش‌نویس است.</p>}
+                      ) : draft.body ? <DraftFace id={draft.id} body={draft.body} /> : <p className="text-sm text-muted-foreground">برای این منبع هنوز متنی ساخته نشده. منبع پایین جدا از پیش‌نویس است.</p>}
                       {draft.source_content && (
                         <details className="text-xs text-muted-foreground">
                           <summary>متن منبع، جدا از پیش‌نویس</summary>
@@ -677,6 +676,29 @@ export default function Automation() {
         {proposal && <><p className="whitespace-pre-wrap text-sm">{proposal.proposed}</p><DiffList rows={proposal.diff} /></>}
       </Dialog>
     </Page>
+  );
+}
+
+function DraftFace({ id, body }: { id: string; body: string }) {
+  const [html, setHtml] = useState("");
+  const [label, setLabel] = useState("");
+  useEffect(() => {
+    let live = true;
+    api.get(`/api/automation/drafts/${id}/preview`, { timeout: 12000 }).then((response) => {
+      if (!live) return;
+      setHtml(response.data.html_text || "");
+      setLabel(response.data.spectrum_label || "");
+    }).catch(() => {
+      if (live) setHtml("");
+    });
+    return () => { live = false; };
+  }, [id, body]);
+  return (
+    <div className="space-y-1">
+      {label && <p className="text-xs text-muted-foreground">ایموجی متحرک طیف {label}، قبل از ارسال</p>}
+      {html ? <TelegramPreview html={html} plain={body} /> : <p className="whitespace-pre-wrap text-sm">{body}</p>}
+      {html && !html.includes("tg-emoji") && <p className="text-xs text-muted-foreground">برای این طیف هنوز ایموجی طبقه‌بندی‌شده‌ای نیست. از کتابخانه طیف را بگذار.</p>}
+    </div>
   );
 }
 

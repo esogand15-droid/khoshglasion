@@ -579,12 +579,14 @@ async def preview_draft(draft_id: str, db: AsyncSession = Depends(get_db), admin
     if len((row.body or "").strip()) < 8:
         raise HTTPException(status_code=400, detail="متن پیش‌نویس برای پیش‌نمایش کافی نیست")
     from backend.app.content.intake import photo_of
+    from backend.app.formatting.spectrum import spectrum_label, spectrum_of
 
     maps = await load_emoji_maps(db)
     photo = photo_of(row.analysis_json)
-    payload = prepare_publish_payload(row.body, row.category, row.emoji_signature, maps, is_caption=photo is not None)
+    spectrum = spectrum_of(_analysis_flag(row.analysis_json, "style") or row.category)
+    payload = prepare_publish_payload(row.body, spectrum, row.emoji_signature, maps, is_caption=photo is not None)
     expects_photo = photo is not None or bool(_analysis_flag(row.analysis_json, "photo_path")) or bool(_analysis_flag(row.analysis_json, "image_note"))
-    return {"text": payload["text"], "html_text": payload["html_text"], "emoji_ids": payload["emoji_ids"], "has_photo": expects_photo}
+    return {"text": payload["text"], "html_text": payload["html_text"], "emoji_ids": payload["emoji_ids"], "has_photo": expects_photo, "spectrum": spectrum, "spectrum_label": spectrum_label(spectrum)}
 
 
 @router.post("/drafts/{draft_id}/test-send")
@@ -634,8 +636,10 @@ async def publish_draft(draft_id: str, request: Request, db: AsyncSession = Depe
     row.message_id = message_id
     row.target_chat_id = int(chat_id)
     row.error = None
+    dumped = dump_draft(row)
+    await db.commit()
     await write_audit(db, admin=admin, action="publish", resource="draft", resource_id=row.id, new_value={"message_id": message_id}, ip_address=request.client.host if request.client else None)
-    return dump_draft(row)
+    return dumped
 
 
 @router.post("/drafts/{draft_id}/unsend")

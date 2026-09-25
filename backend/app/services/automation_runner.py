@@ -541,11 +541,18 @@ async def published_today(db: AsyncSession, now: datetime | None = None) -> dict
 async def deliver_draft(db: AsyncSession, draft: DraftPost, chat_id: int) -> tuple[int | None, str | None]:
     if not (draft.body or "").strip():
         return None, "متن پیش‌نویس خالی است"
+    from backend.app.formatting.spectrum import spectrum_of
+
+    style = ""
+    try:
+        style = str((json.loads(draft.analysis_json or "{}") or {}).get("style") or "")
+    except json.JSONDecodeError:
+        style = ""
     maps = await load_emoji_maps(db)
     photo = safe_photo_path(photo_of(draft.analysis_json))
     payload = prepare_publish_payload(
         draft.body,
-        draft.category,
+        spectrum_of(style or draft.category),
         draft.emoji_signature,
         maps,
         is_caption=photo is not None,
