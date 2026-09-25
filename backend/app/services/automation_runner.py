@@ -108,6 +108,33 @@ SKIP_FA = {
 }
 
 
+def repeat_source(text: str, known: list[str], digest: str, hashes: set[str]) -> bool:
+    """A second scan must not open a draft for the same or a near-copy of a seen post."""
+    if digest and digest in hashes:
+        return True
+    folded = re.sub(r"\s+", "", text or "")
+    if len(folded) < 24:
+        return False
+    return too_similar(text, known)
+
+
+def _remember_seen(db: AsyncSession, source: NewsSource, item: dict, digest: str, config) -> None:
+    """Remember a repeat so the next scan is cheap. This row is not a draft."""
+    db.add(DraftPost(
+        status="seen",
+        category=source.category_hint or "news",
+        body="",
+        source_content=(item.get("text") or "")[:4000],
+        source_label=source.title or source.username,
+        source_key=f"{source.username}:{int(item['id'])}",
+        content_hash=digest or None,
+        error="تکراری است",
+        confidence="low",
+        analysis_json=json.dumps({"value": "DUPLICATE"}, ensure_ascii=False),
+        target_chat_id=config.target_chat_id,
+    ))
+
+
 def _remember_skip(db: AsyncSession, source: NewsSource, item: dict, reason: str, config) -> None:
     db.add(DraftPost(
         status="skipped",
@@ -249,6 +276,15 @@ async def collect_sources(db: AsyncSession, *, force: bool = False) -> dict:
     ).scalars().all()
     recent = [row.body for row in recent_rows if row.body]
     recent_emoji = [row.emoji_signature for row in recent_rows if row.emoji_signature]
+    seen_rows = (
+        await db.execute(
+            select(DraftPost.source_content, DraftPost.body, DraftPost.content_hash)
+            .order_by(DraftPost.created_at.desc())
+            .limit(300)
+        )
+    ).all()
+    known_texts = [text for row in seen_rows for text in (row[0], row[1]) if text and len(text) >= 24]
+    known_hashes = {row[2] for row in seen_rows if row[2]}
     created = 0
     filed = 0
     photos = 0
@@ -322,14 +358,20 @@ async def collect_sources(db: AsyncSession, *, force: bool = False) -> dict:
             key = f"{source.username}:{message_id}"
             exists = (await db.execute(select(DraftPost.id).where(DraftPost.source_key == key))).first()
             digest = content_hash(item["text"])
-            duplicate = (await db.execute(select(DraftPost.id).where(DraftPost.content_hash == digest))).first()
+            if digest and digest not in known_hashes:
+                duplicate = (await db.execute(select(DraftPost.id).where(DraftPost.content_hash == digest))).first()
+                if duplicate:
+                    known_hashes.add(digest)
             if exists:
                 handled.add(message_id)
                 continue
-            if duplicate:
-                _remember_skip(db, source, item, "DUPLICATE", config)
+            if repeat_source(item["text"], known_texts, digest, known_hashes):
+                _remember_seen(db, source, item, digest, config)
+                known_hashes.add(digest)
+                if item.get("text"):
+                    known_texts.append(item["text"])
                 handled.add(message_id)
-                await write_log(db, "collect_skip", f"{source.username}:{message_id} DUPLICATE")
+                await write_log(db, "collect_skip", f"{source.username}:{message_id} REPEAT")
                 continue
             judgment = judge_value(item["text"], created_at=item.get("date"))
             style = classify_style(item["text"])
@@ -410,7 +452,6 @@ async def collect_sources(db: AsyncSession, *, force: bool = False) -> dict:
                     category=category,
                     note=f"خبر دسته {category} را SKIP نکن؛ قابل بازنویسی است",
                 )
-            similar = False
             if body and too_similar(body, recent):
                 fresh_prompt = await compose_prompt(db, "regenerator_fresh")
                 alt, _alt_category, alt_reason = await draft_from_source(
@@ -431,7 +472,12 @@ async def collect_sources(db: AsyncSession, *, force: bool = False) -> dict:
                     body = alt
                     reason = alt_reason
                 else:
-                    similar = True
+                    _remember_seen(db, source, item, digest, config)
+                    known_hashes.add(digest)
+                    known_texts.append(item["text"])
+                    handled.add(message_id)
+                    await write_log(db, "collect_skip", f"{source.username}:{message_id} SIMILAR")
+                    continue
             if not body:
                 db.add(DraftPost(
                     status="skipped",
@@ -459,7 +505,7 @@ async def collect_sources(db: AsyncSession, *, force: bool = False) -> dict:
             auto = (
                 bool(config.auto_publish)
                 and not getattr(config, "paused", False)
-                and should_auto_schedule(analysis, validated and not similar, similar)
+                and should_auto_schedule(analysis, validated, False)
             )
             when = next_slot_time(list(slots), category=category) if auto else None
             draft = DraftPost(
@@ -480,7 +526,7 @@ async def collect_sources(db: AsyncSession, *, force: bool = False) -> dict:
                 importance=analysis.get("importance"),
                 scheduled_at=when.astimezone(timezone.utc) if when else None,
                 target_chat_id=config.target_chat_id,
-                error="similar" if similar else (None if validated else "needs_review"),
+                error=None if validated else "needs_review",
             )
             db.add(draft)
             await db.flush()
@@ -492,6 +538,8 @@ async def collect_sources(db: AsyncSession, *, force: bool = False) -> dict:
                     next_run_at=draft.scheduled_at,
                 ))
             recent.append(body)
+            known_texts.append(item["text"])
+            known_hashes.add(digest)
             recent_emoji.append(choice.emoji_style_id)
             handled.add(message_id)
             created += 1

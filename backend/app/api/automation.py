@@ -6,7 +6,7 @@ import re
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, not_, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -256,7 +256,11 @@ async def _read_automation_state(
     config = await get_config(db)
     sources = (await db.execute(select(NewsSource).order_by(NewsSource.created_at))).scalars().all()
     slots = (await db.execute(select(PublishSlot).order_by(PublishSlot.hour, PublishSlot.minute))).scalars().all()
-    draft_query = select(DraftPost).where(DraftPost.status != "rejected").order_by(DraftPost.created_at.desc()).limit(80)
+    hidden_repeat = and_(
+        DraftPost.status != "published",
+        or_(DraftPost.status == "seen", DraftPost.error.in_(["تکراری است", "similar"])),
+    )
+    draft_query = select(DraftPost).where(DraftPost.status != "rejected", not_(hidden_repeat)).order_by(DraftPost.created_at.desc()).limit(80)
     archive_query = select(DraftPost).where(DraftPost.status == "rejected").order_by(DraftPost.created_at.desc()).limit(80)
     if draft_status and draft_status != "rejected":
         draft_query = draft_query.where(DraftPost.status == draft_status)
