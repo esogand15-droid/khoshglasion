@@ -228,8 +228,24 @@ async def _open_source(client, username: str, *, access_hash: int | None = None,
     return await _entity(client, username)
 
 
+def _is_image_message(message) -> bool:
+    if getattr(message, "photo", None):
+        return True
+    document = getattr(message, "document", None)
+    if document is None:
+        return False
+    mime = (getattr(document, "mime_type", None) or "").lower()
+    if mime.startswith("image/") and "svg" not in mime:
+        return True
+    for attr in getattr(document, "attributes", None) or []:
+        name = (getattr(attr, "file_name", None) or "").lower()
+        if name.endswith((".jpg", ".jpeg", ".png", ".webp")):
+            return True
+    return False
+
+
 async def _save_photo(client, message, username: str) -> str | None:
-    if not getattr(message, "photo", None):
+    if not _is_image_message(message):
         return None
     try:
         raw = await asyncio.wait_for(client.download_media(message, bytes), timeout=8)
@@ -241,6 +257,86 @@ async def _save_photo(client, message, username: str) -> str | None:
     from backend.app.content.intake import save_source_photo
 
     return save_source_photo(f"{username}:{int(message.id)}", bytes(raw))
+
+
+async def _download_message_photo(client, entity, message_id: int, key: str) -> str | None:
+    try:
+        message = await asyncio.wait_for(client.get_messages(entity, ids=int(message_id)), timeout=12)
+    except Exception as exc:
+        logger.info("photo refetch skipped: %s", type(exc).__name__)
+        return None
+    if message is None:
+        return None
+    saved = await _save_photo(client, message, key)
+    if saved:
+        return saved
+    grouped = getattr(message, "grouped_id", None)
+    if not grouped:
+        return None
+    try:
+        nearby = await asyncio.wait_for(
+            client.get_messages(entity, limit=8, max_id=int(message_id) + 4, min_id=max(0, int(message_id) - 5)),
+            timeout=12,
+        )
+    except Exception as exc:
+        logger.info("album refetch skipped: %s", type(exc).__name__)
+        return None
+    for item in nearby or []:
+        if getattr(item, "grouped_id", None) != grouped:
+            continue
+        saved = await _save_photo(client, item, key)
+        if saved:
+            return saved
+    return None
+
+
+async def _open_known(client, username: str, access_hash: int | None, invite_hash: str | None):
+    """Open a source the account can already read. Never joins a channel."""
+    peer = _stored_peer(username, access_hash)
+    if peer is not None:
+        return peer
+    if invite_hash and not _public_name(username):
+        resolved, error = await resolve_joined_invite(client, invite_hash)
+        if error or not resolved:
+            return None
+        return resolved["chat"]
+    try:
+        return await client.get_entity(username)
+    except Exception as exc:
+        logger.info("known source open skipped: %s", type(exc).__name__)
+        return None
+
+
+async def refetch_source_photo(
+    username: str,
+    message_id: int,
+    *,
+    access_hash: int | None = None,
+    invite_hash: str | None = None,
+) -> str | None:
+    client = await _news_client()
+    if client is None:
+        return None
+    entity = await _open_known(client, username, access_hash, invite_hash)
+    if entity is None:
+        return None
+    return await _download_message_photo(client, entity, message_id, username)
+
+
+async def refetch_published_photo(chat_id: int, message_id: int, key: str) -> str | None:
+    from backend.app.telegram.user_editor import get_news_client, get_user_client
+
+    for opener in (get_user_client, get_news_client):
+        try:
+            client = await opener()
+        except Exception:
+            client = None
+        if client is None:
+            continue
+        saved = await _download_message_photo(client, int(chat_id), message_id, key)
+        if saved:
+            return saved
+    return None
 
 
 async def _messages(client, entity, username: str, *, min_id: int, limit: int, title: str | None = None, recent: bool = False):
@@ -260,15 +356,15 @@ async def _messages(client, entity, username: str, *, min_id: int, limit: int, t
         async for message in client.iter_messages(entity, **kwargs):
             scanned += 1
             text = (getattr(message, "message", None) or getattr(message, "text", None) or "").strip()
-            photo = bool(getattr(message, "photo", None))
+            image = _is_image_message(message)
             has_media = bool(
-                photo
+                image
                 or getattr(message, "video", None)
                 or getattr(message, "document", None)
                 or getattr(message, "grouped_id", None)
             )
             photo_path = None
-            if photo and saved < 3:
+            if image and saved < 8:
                 photo_path = await _save_photo(client, message, username)
                 if photo_path:
                     saved += 1

@@ -120,7 +120,7 @@ def dump_draft(row: DraftPost, username: str | None = None) -> dict:
         "source_url": row.source_url,
         "published_url": channel_message_url(row.target_chat_id, row.message_id, username),
         "has_media": bool(_analysis_flag(row.analysis_json, "has_media")),
-        "has_photo": _draft_photo(row) is not None,
+        "has_photo": _draft_photo(row) is not None or bool(_analysis_flag(row.analysis_json, "photo_path")) or bool(_analysis_flag(row.analysis_json, "image_note")),
         "image_note": _analysis_flag(row.analysis_json, "image_note") or "",
         "rewrite": _analysis_flag(row.analysis_json, "rewrite") or "",
         "writer_model": _analysis_flag(row.analysis_json, "writer_model") or "",
@@ -500,16 +500,77 @@ async def update_draft(draft_id: str, payload: DraftIn, request: Request, db: As
     return dump_draft(row)
 
 
+_photo_miss: dict[str, float] = {}
+
+
+def _remember_photo(row: DraftPost, path: str) -> None:
+    try:
+        data = json.loads(row.analysis_json or "")
+    except json.JSONDecodeError:
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
+    data["photo_path"] = path
+    data["has_media"] = True
+    row.analysis_json = json.dumps(data, ensure_ascii=False)
+
+
+async def _recover_photo(db: AsyncSession, row: DraftPost) -> str | None:
+    import asyncio
+    import time
+
+    from backend.app.telegram.collector import refetch_published_photo, refetch_source_photo
+
+    missed = _photo_miss.get(row.id)
+    if missed and time.monotonic() - missed < 90:
+        return None
+    raw = (row.source_key or "").strip()
+    username, _, tail = raw.rpartition(":")
+    saved = None
+    if row.target_chat_id and row.message_id:
+        try:
+            saved = await asyncio.wait_for(
+                refetch_published_photo(int(row.target_chat_id), int(row.message_id), username or "published"),
+                timeout=12,
+            )
+        except Exception:
+            logger.info("published photo recovery skipped")
+            saved = None
+    if saved is None and username and tail.isdigit():
+        source = (await db.execute(select(NewsSource).where(NewsSource.username == username))).scalar_one_or_none()
+        try:
+            saved = await asyncio.wait_for(
+                refetch_source_photo(
+                    username,
+                    int(tail),
+                    access_hash=None if source is None else source.access_hash,
+                    invite_hash=None if source is None else source.invite_hash,
+                ),
+                timeout=12,
+            )
+        except Exception:
+            logger.info("source photo recovery skipped")
+            saved = None
+    if saved:
+        _photo_miss.pop(row.id, None)
+        _remember_photo(row, saved)
+    else:
+        _photo_miss[row.id] = time.monotonic()
+    return saved
+
+
 @router.get("/drafts/{draft_id}/photo")
 async def draft_photo(draft_id: str, db: AsyncSession = Depends(get_db), admin=Depends(get_current_admin)):
     row = await _draft(db, draft_id)
-    path = _draft_photo(row)
+    path = _draft_photo(row) or await _recover_photo(db, row)
     if path is None:
-        raise HTTPException(status_code=404, detail="این پیش‌نویس عکس ندارد")
-    data = path.read_bytes()
+        raise HTTPException(status_code=404, detail="عکس این پست پیدا نشد")
+    from pathlib import Path
+
     from backend.app.content.intake import image_mime
 
-    return Response(content=data, media_type=image_mime(data), headers={"Cache-Control": "private, max-age=600"})
+    data = Path(path).read_bytes()
+    return Response(content=data, media_type=image_mime(data), headers={"Cache-Control": "private, max-age=60"})
 
 
 @router.get("/drafts/{draft_id}/preview")
@@ -522,7 +583,8 @@ async def preview_draft(draft_id: str, db: AsyncSession = Depends(get_db), admin
     maps = await load_emoji_maps(db)
     photo = photo_of(row.analysis_json)
     payload = prepare_publish_payload(row.body, row.category, row.emoji_signature, maps, is_caption=photo is not None)
-    return {"text": payload["text"], "html_text": payload["html_text"], "emoji_ids": payload["emoji_ids"], "has_photo": photo is not None}
+    expects_photo = photo is not None or bool(_analysis_flag(row.analysis_json, "photo_path")) or bool(_analysis_flag(row.analysis_json, "image_note"))
+    return {"text": payload["text"], "html_text": payload["html_text"], "emoji_ids": payload["emoji_ids"], "has_photo": expects_photo}
 
 
 @router.post("/drafts/{draft_id}/test-send")

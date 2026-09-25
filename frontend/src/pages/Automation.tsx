@@ -463,7 +463,7 @@ export default function Automation() {
                         {draft.scheduled_at ? ` · انتشار برنامه‌شده: ${whenLabel(draft.scheduled_at)}` : ""}
                         {draft.published_at ? ` · منتشر شد: ${whenLabel(draft.published_at)}` : ""}
                       </p>
-                      {draft.has_photo && <DraftPhoto id={draft.id} />}
+                      {(draft.has_photo || draft.image_note) && <DraftPhoto id={draft.id} />}
                       {pending.startsWith(`${draft.id}:`) && <p className="text-xs text-brand" aria-live="polite">{pendingLabel(pending)}…</p>}
                       {edit?.id === draft.id ? (
                         <Textarea value={edit.body} onChange={(event) => setEdit({ ...edit, body: event.target.value })} />
@@ -686,9 +686,14 @@ function DraftPhoto({ id }: { id: string }) {
   useEffect(() => {
     let live = true;
     let objectUrl = "";
-    api.get(`/api/automation/drafts/${id}/photo`, { responseType: "blob" }).then((response) => {
+    api.get(`/api/automation/drafts/${id}/photo`, { responseType: "blob", timeout: 25000 }).then((response) => {
       if (!live) return;
-      objectUrl = URL.createObjectURL(response.data);
+      const blob = response.data as Blob;
+      if (!blob || blob.size < 32 || (blob.type && !blob.type.startsWith("image/") && blob.type !== "application/octet-stream")) {
+        setFailed(true);
+        return;
+      }
+      objectUrl = URL.createObjectURL(blob.type ? blob : new Blob([blob], { type: "image/jpeg" }));
       setUrl(objectUrl);
     }).catch(() => { if (live) setFailed(true); });
     return () => {
@@ -696,15 +701,16 @@ function DraftPhoto({ id }: { id: string }) {
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
   }, [id]);
-  if (failed) return <p className="text-xs text-muted-foreground">عکس ذخیره شده باز نشد.</p>;
-  if (!url) return <div className="h-36 animate-pulse rounded-xl bg-muted" aria-label="در حال خواندن عکس" />;
+  if (failed) return <p className="rounded-xl border border-destructive/40 px-3 py-2 text-xs text-destructive">عکس این پست باز نشد. صفحه را یک بار تازه کن؛ اگر باز نشد، فایل عکس روی سرور نمانده.</p>;
+  if (!url) return <div className="flex h-48 items-center justify-center rounded-xl border border-border bg-muted text-xs text-muted-foreground" aria-label="در حال خواندن عکس">در حال آوردن عکس پست…</div>;
   return (
     <>
-      <button type="button" className="block w-full cursor-pointer overflow-hidden rounded-xl border border-border bg-black/30" onClick={() => setOpen(true)} aria-label="بزرگ‌نمایی عکس">
-        <img src={url} alt="عکس همین پیش‌نویس" className="max-h-64 w-full object-contain" />
+      <button type="button" className="block w-full cursor-pointer overflow-hidden rounded-xl border border-border bg-white/5 p-2" onClick={() => setOpen(true)} aria-label="بزرگ‌نمایی عکس">
+        <img src={url} alt="عکس همین پست" className="mx-auto max-h-96 w-full rounded-lg object-contain" onError={() => setFailed(true)} />
+        <span className="mt-2 block text-center text-xs text-muted-foreground">عکس پست · برای بزرگ‌نمایی بزن</span>
       </button>
-      <Dialog open={open} onOpenChange={setOpen} title="عکس پیش‌نویس" size="lg">
-        <img src={url} alt="عکس همین پیش‌نویس" className="max-h-[70dvh] w-full object-contain" />
+      <Dialog open={open} onOpenChange={setOpen} title="عکس پست" size="lg">
+        <img src={url} alt="عکس همین پست" className="max-h-[75dvh] w-full object-contain" />
       </Dialog>
     </>
   );

@@ -120,21 +120,39 @@ def photo_of(raw: str | None) -> str | None:
     return str(found) if found else None
 
 
+_PHOTO_NAME = re.compile(r"^[A-Za-z0-9_-]{8,80}\.(?:jpg|jpeg|png|webp|img)$")
+
+
 def safe_photo_path(stored: str | None) -> Path | None:
+    """Find a saved source photo. A moved working directory must not hide it."""
     if not stored:
         return None
-    root = media_root()
     name = Path(stored).name
-    if not name or name in {".", ".."} or "/" in name or "\\" in name:
+    if not _PHOTO_NAME.fullmatch(name):
         return None
-    path = (root / name).resolve()
+    root = media_root()
+    current = (root / name).resolve()
     try:
-        path.relative_to(root)
+        current.relative_to(root)
     except ValueError:
         return None
-    if not path.is_file():
+    if current.is_file():
+        return current
+    raw = Path(stored)
+    if not raw.is_absolute():
         return None
-    return path
+    try:
+        previous = raw.resolve()
+    except OSError:
+        return None
+    owned = previous.parent == root or previous.parent.name in {root.name, "autopost-media"}
+    if not previous.is_file() or previous.name != name or not owned:
+        return None
+    try:
+        current.write_bytes(previous.read_bytes())
+    except OSError:
+        return previous
+    return current if current.is_file() else previous
 
 
 def image_mime(data: bytes) -> str:
