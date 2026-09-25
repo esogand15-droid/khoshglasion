@@ -175,7 +175,8 @@ export default function Channels() {
             </div>
             <div className="grid gap-2 sm:grid-cols-2">
               <Flag disabled={!canEdit} label="فعال" checked={!!edit.enabled} onChange={(v) => setEdit({ ...edit, enabled: v })} />
-              <Flag disabled={!canEdit} label="خوشگل‌سازی" checked={!!edit.auto_beautify} onChange={(v) => setEdit({ ...edit, auto_beautify: v })} />
+              <Flag disabled={!canEdit} label="خوشگل‌سازی پیام خود ادمین" checked={!!edit.auto_beautify} onChange={(v) => setEdit({ ...edit, auto_beautify: v })} />
+              <p className="text-xs text-muted-foreground">این گزینه پستی را ادیت می‌کند که خودت در کانال می‌نویسی. پستی که صف خودکار منتشر کرده دوباره ادیت نمی‌شود.</p>
               <Flag disabled={!canEdit} label="ایموجی" checked={!!edit.emoji_replacement} onChange={(v) => setEdit({ ...edit, emoji_replacement: v })} />
               <Flag disabled={!canEdit} label="حفظ دکمه‌ها" checked={!!edit.preserve_buttons} onChange={(v) => setEdit({ ...edit, preserve_buttons: v })} />
             </div>

@@ -282,7 +282,7 @@ export default function Automation() {
             <CardContent className="grid gap-3 lg:grid-cols-2">
               <ToggleRow disabled={!canEdit} checked={!!data.enabled} label="جمع‌آوری خودکار" hint="در فاصلهٔ تعیین‌شده منبع‌های روشن خوانده می‌شوند." onChange={(value) => saveConfig({ enabled: value })} />
               <ToggleRow disabled={!canEdit || !canPublish} checked={!!data.auto_publish} label="انتشار بدون تأیید دستی" hint="فقط مالک و ادمین. پستِ تأییدشده در ساعت مشخص می‌رود." onChange={(value) => saveConfig({ auto_publish: value })} />
-              <ToggleRow disabled={!canEdit} checked={!!data.paused} label="توقف اضطراری صف" hint="جمع‌آوری و انتشار خودکار هر دو می‌ایستند." onChange={(value) => saveConfig({ paused: value })} />
+              <ToggleRow disabled={!canEdit} checked={!!data.paused} label="توقف اضطراری صف" hint="جمع‌آوری و انتشار خودکار می‌ایستند. پیام خود ادمین همچنان ادیت می‌شود، مگر توقف ادیت در تنظیمات روشن باشد." onChange={(value) => saveConfig({ paused: value })} />
               <ToggleRow disabled={!canEdit} checked={data.balance_categories !== false} label="تعادل دسته در سقف روزانه" hint="یک دسته تمام سهم روز را نمی‌گیرد." onChange={(value) => saveConfig({ balance_categories: value })} />
               <Field label="سقف انتشار روزانه">
                 <Input type="number" min={1} max={48} defaultValue={data.daily_cap || 6} disabled={!canEdit} onBlur={(event) => {
@@ -491,15 +491,16 @@ export default function Automation() {
                       <div className="flex flex-wrap items-center gap-2">
                         {canEdit && <span onClick={(event) => event.stopPropagation()}><Checkbox checked={picked.includes(draft.id)} onCheckedChange={(on) => setPicked((prev) => on ? [...new Set([...prev, draft.id])] : prev.filter((item) => item !== draft.id))} aria-label="انتخاب پیش‌نویس" /></span>}
                         <Badge variant={draft.status === "failed" ? "destructive" : draft.status === "published" ? "success" : "secondary"}>{STATUS[draft.status] || draft.status}</Badge>
-                        <span className="text-xs text-muted-foreground">{draft.source_label} · {draft.style_label || categoryLabel(draft.category)} · {draft.confidence || "—"} {draft.has_photo ? "· همراه عکس" : draft.has_media ? "· کپشن" : ""} {draft.rewrite === "preserve" ? "· بدون خلاصه" : draft.rewrite === "summarize" ? "· خلاصه" : ""}</span>
+                        <span className="text-xs text-muted-foreground">{draft.source_label} · {draft.style_label || categoryLabel(draft.category)} · {draft.confidence || "—"} {draft.media_kind === "video" || draft.has_video ? "· همراه ویدیو" : draft.media_kind === "album" ? "· آلبوم" : draft.media_kind === "poll" ? "· نظرسنجی" : draft.has_photo ? "· همراه عکس" : draft.has_media ? "· رسانه بدون فایل" : ""} {draft.rewrite === "preserve" ? "· بدون خلاصه" : draft.rewrite === "summarize" ? "· خلاصه" : ""}</span>
                         {draft.hashtags && <span className="text-xs text-muted-foreground" dir="ltr">{draft.hashtags}</span>}
                       </div>
                       <p className="text-xs text-muted-foreground">
-                        دریافت از کانال: {whenLabel(draft.source_at || draft.created_at)}
+                        {draft.source_at ? `دریافت از کانال: ${whenLabel(draft.source_at)}` : ""}
                         {draft.scheduled_at ? ` · انتشار برنامه‌شده: ${whenLabel(draft.scheduled_at)}` : ""}
                         {draft.published_at ? ` · منتشر شد: ${whenLabel(draft.published_at)}` : ""}
                       </p>
-                      {(draft.has_photo || draft.image_note) && <DraftPhoto id={draft.id} />}
+                      {(draft.has_video || draft.media_kind === "video") && <DraftVideo id={draft.id} />}
+                      {Number(draft.photo_count || 0) > 0 && <DraftAlbum id={draft.id} count={Number(draft.photo_count)} />}
                       {actionKey.startsWith(`${draft.id}:`) && <p className="text-xs text-brand" aria-live="polite">{pendingLabel(actionKey)}…</p>}
                       {edit?.id === draft.id ? (
                         <Textarea value={edit.body} onChange={(event) => setEdit({ ...edit, body: event.target.value })} />
@@ -703,7 +704,7 @@ export default function Automation() {
       <Dialog open={!!preview} onOpenChange={(open) => !open && setPreview(null)} title="خروجی قبل از کانال" size="lg">
         {preview && (
           <div className="space-y-3">
-            {preview.has_photo && preview.draftId && <DraftPhoto id={preview.draftId} />}
+            {preview.has_photo && preview.draftId && <DraftAlbum id={preview.draftId} count={1} />}
             <TelegramPreview html={preview.html_text} plain={preview.text} />
           </div>
         )}
@@ -738,14 +739,49 @@ function DraftFace({ id, body }: { id: string; body: string }) {
   );
 }
 
-function DraftPhoto({ id }: { id: string }) {
+function DraftAlbum({ id, count }: { id: string; count: number }) {
+  const total = Math.max(1, Math.min(count || 1, 10));
+  return (
+    <div className="grid gap-2 sm:grid-cols-2">
+      {Array.from({ length: total }, (_, index) => <DraftPhoto key={`${id}-${index}`} id={id} index={index} />)}
+    </div>
+  );
+}
+
+function DraftVideo({ id }: { id: string }) {
+  const [url, setUrl] = useState("");
+  const [failed, setFailed] = useState(false);
+  useEffect(() => {
+    let live = true;
+    let objectUrl = "";
+    api.get(`/api/automation/drafts/${id}/video`, { responseType: "blob", timeout: 40000 }).then((response) => {
+      if (!live) return;
+      const blob = response.data as Blob;
+      if (!blob || blob.size < 32) {
+        setFailed(true);
+        return;
+      }
+      objectUrl = URL.createObjectURL(blob);
+      setUrl(objectUrl);
+    }).catch(() => { if (live) setFailed(true); });
+    return () => {
+      live = false;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [id]);
+  if (failed) return <p className="rounded-xl border border-destructive/40 px-3 py-2 text-xs text-destructive">ویدیو این پست باز نشد.</p>;
+  if (!url) return <div className="flex h-48 items-center justify-center rounded-xl border border-border bg-muted text-xs text-muted-foreground">در حال آوردن ویدیو…</div>;
+  return <video src={url} controls className="max-h-96 w-full rounded-xl border border-border bg-black" />;
+}
+
+function DraftPhoto({ id, index = 0 }: { id: string; index?: number }) {
   const [url, setUrl] = useState<string>("");
   const [failed, setFailed] = useState(false);
   const [open, setOpen] = useState(false);
   useEffect(() => {
     let live = true;
     let objectUrl = "";
-    api.get(`/api/automation/drafts/${id}/photo`, { responseType: "blob", timeout: 25000 }).then((response) => {
+    api.get(`/api/automation/drafts/${id}/photo`, { params: { index }, responseType: "blob", timeout: 25000 }).then((response) => {
       if (!live) return;
       const blob = response.data as Blob;
       if (!blob || blob.size < 32 || (blob.type && !blob.type.startsWith("image/") && blob.type !== "application/octet-stream")) {
@@ -759,7 +795,7 @@ function DraftPhoto({ id }: { id: string }) {
       live = false;
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
-  }, [id]);
+  }, [id, index]);
   if (failed) return <p className="rounded-xl border border-destructive/40 px-3 py-2 text-xs text-destructive">عکس این پست باز نشد. صفحه را یک بار تازه کن؛ اگر باز نشد، فایل عکس روی سرور نمانده.</p>;
   if (!url) return <div className="flex h-48 items-center justify-center rounded-xl border border-border bg-muted text-xs text-muted-foreground" aria-label="در حال خواندن عکس">در حال آوردن عکس پست…</div>;
   return (

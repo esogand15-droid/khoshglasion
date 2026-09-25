@@ -20,7 +20,7 @@ class TelegramAccount(Base):
     premium: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     roles: Mapped[str] = mapped_column(String(32), default="emoji,news")
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
-    join_public: Mapped[bool] = mapped_column(Boolean, default=True)
+    join_public: Mapped[bool] = mapped_column(Boolean, default=False)
     api_id: Mapped[str] = mapped_column(String(16), default="")
     api_hash: Mapped[str] = mapped_column(Text, default="")
     session_string: Mapped[str] = mapped_column(Text, default="")

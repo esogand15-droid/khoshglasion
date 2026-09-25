@@ -61,7 +61,8 @@ async def _classify_batch(runtime, batch: list[EmojiMapping]) -> tuple[dict[int,
 
 
 async def _classify_rows(db: AsyncSession, rows: list[EmojiMapping], *, force: bool, after_id: str = "") -> dict:
-    pending = list(rows) if force else [row for row in rows if _needs_spectrum(row)]
+    # A manual spectrum stays. Force only retries rows the operator has not classified.
+    pending = [row for row in rows if (row.source or "") != "manual" and (force or _needs_spectrum(row))]
     skipped = len(rows) - len(pending)
     if after_id and not force:
         pending = [row for row in pending if (row.id or "") > after_id]

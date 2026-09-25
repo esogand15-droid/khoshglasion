@@ -205,7 +205,7 @@ export default function Emojis() {
         <div className="w-full max-w-xs"><SearchInput value={q} onChange={setQ} placeholder="جست‌وجوی ایموجی یا ID" /></div>
         <Select className="h-9 w-36" value={spectrum} onChange={(event) => setSpectrum(event.target.value)} options={[{ value: "", label: "همه طیف‌ها" }, ...SPECTRA.map(([value, label]) => ({ value, label }))]} />
         <Button variant="brand" disabled={!canEdit || classifyBusy} onClick={() => classify(false)}>{classifyBusy ? "در حال اسکن کتابخانه…" : "طبقه‌بندی با هوش مصنوعی"}</Button>
-        {canEdit && selected.length > 0 && <Button variant="outline" disabled={classifyBusy} onClick={() => classify(true)}>دوباره، حتی اصلاح دستی</Button>}
+
         {canEdit && <Button variant="outline" onClick={() => setSelected(shown.map((item) => item.id))}>انتخاب همین فهرست</Button>}
         {canEdit && selected.length > 0 && <Button variant="outline" onClick={() => setSelected([])}>لغو انتخاب</Button>}
       </div>

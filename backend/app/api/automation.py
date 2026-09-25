@@ -86,6 +86,14 @@ def _draft_photo(row: DraftPost):
     return photo_of(row.analysis_json)
 
 
+def _photo_count(row: DraftPost) -> int:
+    stored = _analysis_flag(row.analysis_json, "photo_paths")
+    count = len(stored) if isinstance(stored, list) else 0
+    if count:
+        return count
+    return 1 if _draft_photo(row) else 0
+
+
 def _analysis_flag(raw: str | None, key: str):
     try:
         data = json.loads(raw or "")
@@ -121,6 +129,9 @@ def dump_draft(row: DraftPost, username: str | None = None) -> dict:
         "published_url": channel_message_url(row.target_chat_id, row.message_id, username),
         "has_media": bool(_analysis_flag(row.analysis_json, "has_media")),
         "has_photo": _draft_photo(row) is not None or bool(_analysis_flag(row.analysis_json, "photo_path")) or bool(_analysis_flag(row.analysis_json, "image_note")),
+        "has_video": bool(_analysis_flag(row.analysis_json, "video_path")),
+        "media_kind": _analysis_flag(row.analysis_json, "media_kind") or "",
+        "photo_count": _photo_count(row),
         "image_note": _analysis_flag(row.analysis_json, "image_note") or "",
         "rewrite": _analysis_flag(row.analysis_json, "rewrite") or "",
         "writer_model": _analysis_flag(row.analysis_json, "writer_model") or "",
@@ -563,10 +574,19 @@ async def _recover_photo(db: AsyncSession, row: DraftPost) -> str | None:
     return saved
 
 
+def _draft_media_paths(row: DraftPost) -> list[str]:
+    from backend.app.content.intake import photo_paths_of
+
+    return photo_paths_of(row.analysis_json)
+
+
 @router.get("/drafts/{draft_id}/photo")
-async def draft_photo(draft_id: str, db: AsyncSession = Depends(get_db), admin=Depends(get_current_admin)):
+async def draft_photo(draft_id: str, index: int = 0, db: AsyncSession = Depends(get_db), admin=Depends(get_current_admin)):
     row = await _draft(db, draft_id)
-    path = _draft_photo(row) or await _recover_photo(db, row)
+    paths = _draft_media_paths(row)
+    path = paths[index] if 0 <= index < len(paths) else None
+    if path is None and index == 0:
+        path = _draft_photo(row) or await _recover_photo(db, row)
     if path is None:
         raise HTTPException(status_code=404, detail="عکس این پست پیدا نشد")
     from pathlib import Path
@@ -577,6 +597,21 @@ async def draft_photo(draft_id: str, db: AsyncSession = Depends(get_db), admin=D
     return Response(content=data, media_type=image_mime(data), headers={"Cache-Control": "private, max-age=60"})
 
 
+@router.get("/drafts/{draft_id}/video")
+async def draft_video(draft_id: str, db: AsyncSession = Depends(get_db), admin=Depends(get_current_admin)):
+    from pathlib import Path
+
+    from backend.app.content.intake import video_of
+
+    row = await _draft(db, draft_id)
+    path = video_of(row.analysis_json)
+    if path is None:
+        raise HTTPException(status_code=404, detail="ویدیو این پست پیدا نشد")
+    file = Path(path)
+    kind = "video/webm" if file.suffix == ".webm" else "video/mp4"
+    return Response(content=file.read_bytes(), media_type=kind, headers={"Cache-Control": "private, max-age=60"})
+
+
 @router.get("/drafts/{draft_id}/preview")
 async def preview_draft(draft_id: str, db: AsyncSession = Depends(get_db), admin=Depends(get_current_admin)):
     row = await _draft(db, draft_id)
@@ -585,10 +620,19 @@ async def preview_draft(draft_id: str, db: AsyncSession = Depends(get_db), admin
     from backend.app.content.intake import photo_of
     from backend.app.formatting.spectrum import spectrum_label, spectrum_of
 
+    from backend.app.services.automation_runner import recent_emoji_ids
+
     maps = await load_emoji_maps(db)
     photo = photo_of(row.analysis_json)
     spectrum = spectrum_of(_analysis_flag(row.analysis_json, "style") or row.category)
-    payload = prepare_publish_payload(row.body, spectrum, row.emoji_signature, maps, is_caption=photo is not None)
+    payload = prepare_publish_payload(
+        row.body,
+        spectrum,
+        "quiet" if row.emoji_signature == "quiet" else row.emoji_signature,
+        maps,
+        is_caption=photo is not None or bool(_analysis_flag(row.analysis_json, "video_path")),
+        avoid_emoji_ids=await recent_emoji_ids(db, row.id),
+    )
     expects_photo = photo is not None or bool(_analysis_flag(row.analysis_json, "photo_path")) or bool(_analysis_flag(row.analysis_json, "image_note"))
     return {"text": payload["text"], "html_text": payload["html_text"], "emoji_ids": payload["emoji_ids"], "has_photo": expects_photo, "spectrum": spectrum, "spectrum_label": spectrum_label(spectrum)}
 
@@ -601,15 +645,34 @@ async def test_send_draft(draft_id: str, request: Request, db: AsyncSession = De
     chat_id = runtime.notify_id or admin.telegram_id
     if not chat_id:
         raise HTTPException(status_code=400, detail="اول چت اعلان یا آیدی تلگرام ادمین را در تنظیمات بگذار")
-    from backend.app.content.intake import photo_of
+    from backend.app.content.intake import photo_paths_of, video_of
+    from backend.app.formatting.spectrum import spectrum_of
+    from backend.app.services.automation_runner import recent_emoji_ids
 
     maps = await load_emoji_maps(db)
-    photo = photo_of(row.analysis_json)
-    payload = prepare_publish_payload(row.body, row.category, row.emoji_signature, maps, is_caption=photo is not None)
+    photos = photo_paths_of(row.analysis_json)
+    video = video_of(row.analysis_json)
+    spectrum = spectrum_of(_analysis_flag(row.analysis_json, "style") or row.category)
+    payload = prepare_publish_payload(
+        row.body,
+        spectrum,
+        "quiet" if row.emoji_signature == "quiet" else row.emoji_signature,
+        maps,
+        is_caption=bool(photos or video),
+        avoid_emoji_ids=await recent_emoji_ids(db, row.id),
+    )
     note_id, note_error = await publish_rendered(int(chat_id), "پیش‌نمایش آزمایشی. این پیام در کانال عمومی نرفت.")
     if note_error:
         raise HTTPException(status_code=400, detail=note_error)
-    message_id, error = await publish_rendered(int(chat_id), payload["text"], payload["html_text"], payload["entities"], photo)
+    message_id, error = await publish_rendered(
+        int(chat_id),
+        payload["text"],
+        payload["html_text"],
+        payload["entities"],
+        photos[0] if photos else None,
+        photos,
+        video,
+    )
     if error:
         raise HTTPException(status_code=400, detail=error)
     await write_audit(db, admin=admin, action="test_send", resource="draft", resource_id=row.id, ip_address=request.client.host if request.client else None)

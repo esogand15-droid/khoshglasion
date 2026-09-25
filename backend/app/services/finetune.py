@@ -247,7 +247,28 @@ async def load_rows(db: AsyncSession) -> list:
     return list((await db.execute(select(StyleSample).order_by(StyleSample.created_at.desc()))).scalars().all())
 
 
+async def backfill_from_drafts(db: AsyncSession) -> int:
+    """Teach empty folders from posts already collected. Disk test files are not read."""
+    from backend.app.models.automation import DraftPost, StyleSample
+
+    if (await db.execute(select(StyleSample.id).limit(1))).first():
+        return 0
+    rows = (
+        await db.execute(
+            select(DraftPost.source_key, DraftPost.source_label, DraftPost.source_content)
+            .where(DraftPost.source_content.is_not(None))
+            .order_by(DraftPost.created_at.desc())
+            .limit(240)
+        )
+    ).all()
+    filed = 0
+    for key, label, text in rows:
+        filed += await remember_sample(db, source_key=key or "", source_label=label, text=text or "")
+    return filed
+
+
 async def load_card(db: AsyncSession) -> str:
+    await backfill_from_drafts(db)
     card = render_card(await load_rows(db))
     _write_card(card)
     return card

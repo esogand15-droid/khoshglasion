@@ -17,6 +17,13 @@ from backend.app.security.deps import get_current_admin
 router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
 
 
+def _tehran_midnight(now: datetime | None = None) -> datetime:
+    from backend.app.services.autopost import tehran_now
+
+    local = tehran_now(now).replace(hour=0, minute=0, second=0, microsecond=0)
+    return local.astimezone(timezone.utc)
+
+
 def template_usage(rules_list: list[str | None]) -> list[dict]:
     counts: dict[str, int] = {}
     for raw in rules_list:
@@ -40,7 +47,7 @@ async def _automation_queue(db: AsyncSession) -> dict:
     counts = dict((await db.execute(select(DraftPost.status, func.count()).group_by(DraftPost.status))).all())
     slots = (await db.execute(select(PublishSlot).where(PublishSlot.enabled == True))).scalars().all()  # noqa: E712
     nxt = next_slot_time(list(slots))
-    today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    today = _tehran_midnight()
     failed_today = (
         await db.execute(
             select(func.count()).select_from(DraftPost).where(DraftPost.status == "failed", DraftPost.updated_at >= today)
@@ -78,7 +85,7 @@ async def dashboard(db: AsyncSession = Depends(get_db), admin=Depends(get_curren
     dry = status_counts.get("dry_run", 0)
     ai_used = await count(MessageLog.ai_used == True)  # noqa: E712
 
-    today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    today_start = _tehran_midnight()
     week_start = today_start - timedelta(days=7)
     today_count = await count(MessageLog.created_at >= today_start)
     week_count = await count(MessageLog.created_at >= week_start)
@@ -91,7 +98,8 @@ async def dashboard(db: AsyncSession = Depends(get_db), admin=Depends(get_curren
         day = today_start - timedelta(days=i)
         nxt = day + timedelta(days=1)
         per_day.append({
-            "date": day.strftime("%m/%d"),
+            "date": day.astimezone(timezone.utc).isoformat(),
+            "start": day.astimezone(timezone.utc).isoformat(),
             "count": await count(MessageLog.created_at >= day, MessageLog.created_at < nxt),
             "edited": await count(MessageLog.status == "edited", MessageLog.created_at >= day, MessageLog.created_at < nxt),
         })

@@ -13,7 +13,7 @@ import { AsyncPage } from "@/components/ui/page-state";
 import { Stat } from "@/components/ui/stat";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Timeline } from "@/components/ui/timeline";
-import { formatJalali } from "@/lib/jalali";
+import { formatJalali, shamsiParts } from "@/lib/jalali";
 import { when } from "@/lib/format";
 import { STATUS, statusVariant } from "@/lib/status";
 import { fa, faNumber } from "@/lib/utils";
@@ -22,6 +22,18 @@ function alertVariant(level: string): "destructive" | "warning" | "info" {
   if (level === "danger" || level === "error") return "destructive";
   if (level === "warn" || level === "warning") return "warning";
   return "info";
+}
+
+function tehranClock(value: string) {
+  const parts = shamsiParts(value);
+  if (!parts) return "—";
+  return fa(`${String(parts.hour).padStart(2, "0")}:${String(parts.minute).padStart(2, "0")}`);
+}
+
+function tehranDay(value: string) {
+  const parts = shamsiParts(value);
+  if (!parts) return "—";
+  return fa(`${parts.jy}/${String(parts.jm).padStart(2, "0")}/${String(parts.jd).padStart(2, "0")}`);
 }
 
 export default function Dashboard() {
@@ -61,7 +73,7 @@ export default function Dashboard() {
   const today = days.at(-1);
   const yesterday = days.at(-2);
   const delta = yesterday?.count ? ((today.count - yesterday.count) / yesterday.count) * 100 : undefined;
-  const chart = days.map((row: any) => ({ label: fa(row.date), value: row.edited }));
+  const chart = days.map((row: any) => ({ label: tehranDay(row.start || row.date), value: row.edited }));
   const spark = days.map((row: any) => row.edited);
 
   return (
@@ -86,7 +98,7 @@ export default function Dashboard() {
         <Stat label="پیش‌نویس منتظر" value={fa(data.queue?.preview || 0)} />
         <Stat label="زمان‌بندی‌شده" value={fa(data.queue?.scheduled || 0)} />
         <Stat label="شکست امروز" value={fa(data.queue?.failed_today || 0)} />
-        <Stat label="ساعت بعدی" value={data.queue?.next_slot ? new Date(data.queue.next_slot).toLocaleTimeString("fa-IR", { hour: "2-digit", minute: "2-digit" }) : "—"} />
+        <Stat label="ساعت بعدی" value={data.queue?.next_slot ? tehranClock(data.queue.next_slot) : "—"} />
       </div>
 
       <div className="grid gap-4 lg:grid-cols-3">
@@ -144,7 +156,7 @@ export default function Dashboard() {
                 <TableBody>
                   {days.map((row: any) => (
                     <TableRow key={row.date}>
-                      <TableCell dir="ltr">{fa(row.date)}</TableCell>
+                      <TableCell>{tehranDay(row.start || row.date)}</TableCell>
                       <TableCell numeric>{fa(row.edited)}</TableCell>
                       <TableCell numeric>{fa(row.count)}</TableCell>
                     </TableRow>

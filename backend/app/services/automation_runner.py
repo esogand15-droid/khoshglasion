@@ -108,6 +108,16 @@ SKIP_FA = {
 }
 
 
+def source_stamp(value) -> str | None:
+    """Telegram receive time, stored as UTC. Never invent a clock."""
+    if isinstance(value, datetime):
+        stamped = as_utc(value)
+        return stamped.isoformat() if stamped else None
+    if isinstance(value, (int, float)) and value > 1_000_000_000:
+        return datetime.fromtimestamp(float(value), timezone.utc).isoformat()
+    return None
+
+
 def repeat_source(text: str, known: list[str], digest: str, hashes: set[str]) -> bool:
     """A second scan must not open a draft for the same or a near-copy of a seen post."""
     if digest and digest in hashes:
@@ -278,13 +288,12 @@ async def collect_sources(db: AsyncSession, *, force: bool = False) -> dict:
     recent_emoji = [row.emoji_signature for row in recent_rows if row.emoji_signature]
     seen_rows = (
         await db.execute(
-            select(DraftPost.source_content, DraftPost.body, DraftPost.content_hash)
-            .order_by(DraftPost.created_at.desc())
-            .limit(300)
+            select(DraftPost.source_content, DraftPost.content_hash)
+            .where(DraftPost.source_content.is_not(None))
         )
     ).all()
-    known_texts = [text for row in seen_rows for text in (row[0], row[1]) if text and len(text) >= 24]
-    known_hashes = {row[2] for row in seen_rows if row[2]}
+    known_texts = [row[0] for row in seen_rows if row[0] and len(row[0]) >= 24]
+    known_hashes = {row[1] for row in seen_rows if row[1]}
     created = 0
     filed = 0
     photos = 0
@@ -410,8 +419,17 @@ async def collect_sources(db: AsyncSession, *, force: bool = False) -> dict:
                 analysis["photo_path"] = str(safe_photo_path(photo_path))
                 analysis["vision_model"] = seen.get("model") or ""
                 analysis["vision_provider"] = seen.get("provider") or ""
-            analysis["has_media"] = bool(item.get("has_media") or photo_path)
+            analysis["has_media"] = bool(item.get("has_media") or photo_path or item.get("video_path"))
             analysis["image_note"] = image_note
+            paths = [path for path in (item.get("photo_paths") or []) if path]
+            if photo_path and photo_path not in paths:
+                paths.insert(0, photo_path)
+            if paths:
+                analysis["photo_paths"] = paths
+            if item.get("video_path"):
+                analysis["video_path"] = item["video_path"]
+            if item.get("media_kind"):
+                analysis["media_kind"] = item["media_kind"]
             plan = rewrite_plan(item["text"])
             analysis["rewrite"] = plan
             analysis["style"] = style
@@ -419,7 +437,7 @@ async def collect_sources(db: AsyncSession, *, force: bool = False) -> dict:
             category = source.category_hint or folder_category(style)
             decision = analyze_post(item["text"])
             choice = choose_template(decision, channel_style=None, recent_emoji_styles=recent_emoji)
-            layout = layout_for(category, style, plan)
+            layout = "quiet" if choice.emoji_style_id == "quiet" else layout_for(category, style, plan)
             openings = [opening_signature(body) for body in recent[-6:]]
             style_card = await load_card(db)
             prompt = await compose_prompt(db, "generator")
@@ -442,9 +460,9 @@ async def collect_sources(db: AsyncSession, *, force: bool = False) -> dict:
             analysis["writer_model"] = trace.get("writer_model") or ""
             analysis["writer_provider"] = trace.get("writer_provider") or ""
             analysis["layout"] = layout
-            seen_at = as_utc(item.get("date")) if isinstance(item.get("date"), datetime) else None
+            seen_at = source_stamp(item.get("date"))
             if seen_at:
-                analysis["source_at"] = seen_at.isoformat()
+                analysis["source_at"] = seen_at
             if trace.get("repaired"):
                 config.lessons_json = push_lesson(
                     getattr(config, "lessons_json", None),
@@ -586,39 +604,87 @@ async def published_today(db: AsyncSession, now: datetime | None = None) -> dict
     return {category or "news": int(count) for category, count in rows}
 
 
+def _analysis_dict(raw: str | None) -> dict:
+    try:
+        data = json.loads(raw or "{}")
+    except json.JSONDecodeError:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+async def recent_emoji_ids(db: AsyncSession, exclude_id: str | None = None) -> set[str]:
+    rows = (
+        await db.execute(
+            select(DraftPost.id, DraftPost.analysis_json)
+            .where(DraftPost.status.in_(("published", "sending", "scheduled")))
+            .order_by(DraftPost.updated_at.desc())
+            .limit(16)
+        )
+    ).all()
+    found: set[str] = set()
+    for draft_id, raw in rows:
+        if exclude_id and draft_id == exclude_id:
+            continue
+        for item in _analysis_dict(raw).get("emoji_ids") or []:
+            if str(item).isdigit():
+                found.add(str(item))
+    return found
+
+
 async def deliver_draft(db: AsyncSession, draft: DraftPost, chat_id: int) -> tuple[int | None, str | None]:
     if not (draft.body or "").strip():
         return None, "متن پیش‌نویس خالی است"
+    from backend.app.content.intake import photo_paths_of, video_of
     from backend.app.formatting.spectrum import spectrum_of
+    from backend.app.telegram.sent_mark import drain_sent_ids, fingerprint
 
-    style = ""
-    try:
-        style = str((json.loads(draft.analysis_json or "{}") or {}).get("style") or "")
-    except json.JSONDecodeError:
-        style = ""
+    analysis = _analysis_dict(draft.analysis_json)
+    style = str(analysis.get("style") or "")
     maps = await load_emoji_maps(db)
-    photo = safe_photo_path(photo_of(draft.analysis_json))
+    photos = photo_paths_of(draft.analysis_json)
+    video = video_of(draft.analysis_json)
+    has_media = bool(photos or video)
+    avoid = await recent_emoji_ids(db, draft.id)
     payload = prepare_publish_payload(
         draft.body,
         spectrum_of(style or draft.category),
-        draft.emoji_signature,
+        "quiet" if draft.emoji_signature == "quiet" else draft.emoji_signature,
         maps,
-        is_caption=photo is not None,
+        is_caption=has_media,
+        avoid_emoji_ids=avoid,
     )
+    analysis["emoji_ids"] = payload["emoji_ids"]
+    analysis["sent_fp"] = fingerprint(payload["text"])
+    draft.analysis_json = json.dumps(analysis, ensure_ascii=False)
     await db.commit()
     try:
-        return await asyncio.wait_for(
+        message_id, error = await asyncio.wait_for(
             publish_rendered(
                 chat_id,
                 payload["text"],
                 payload["html_text"],
                 payload["entities"],
-                str(photo) if photo else None,
+                photos[0] if photos else None,
+                photos,
+                video,
             ),
-            timeout=25,
+            timeout=45 if has_media else 25,
         )
     except asyncio.TimeoutError:
         return None, "ارسال به تلگرام بیش از حد طول کشید"
+    sent_ids = drain_sent_ids(chat_id)
+    if message_id and message_id not in sent_ids:
+        sent_ids.insert(0, message_id)
+    if not message_id:
+        analysis.pop("sent_fp", None)
+        analysis.pop("sent_ids", None)
+        draft.analysis_json = json.dumps(analysis, ensure_ascii=False)
+        await db.commit()
+        return None, error or "ارسال نشد"
+    if sent_ids:
+        analysis["sent_ids"] = sent_ids
+        draft.analysis_json = json.dumps(analysis, ensure_ascii=False)
+    return message_id, error
 
 
 def mark_publish_failure(draft: DraftPost, error: str, now: datetime) -> None:

@@ -98,7 +98,8 @@ export default function Settings() {
         <TabsContent value="run">
           <div className="grid gap-2">
             <SettingSwitch disabled={!canEdit} checked={data.dry_run} label="حالت آزمایشی (ادیت واقعی نمی‌شود)" onChange={(v) => save({ dry_run: v })} />
-            <SettingSwitch disabled={!canEdit} checked={data.kill_switch} label="توقف اضطراری" onChange={(v) => save({ kill_switch: v })} />
+            <SettingSwitch disabled={!canEdit} checked={data.kill_switch} label="توقف ادیت پیام خود ادمین" onChange={(v) => save({ kill_switch: v })} />
+            <p className="px-1 text-xs text-muted-foreground">این کلید فقط خوشگل‌سازی پستی را متوقف می‌کند که خودت در کانال می‌نویسی. صف پست خودکار با «توقف اضطراری صف» در پست خودکار می‌ایستد. پستی که ربات منتشر کرده دوباره ادیت نمی‌شود.</p>
             <SettingSwitch disabled={!canEdit} checked={data.auto_register_channels} label="ثبت خودکار کانال وقتی ربات ادمین می‌شود" onChange={(v) => save({ auto_register_channels: v })} />
             <SettingSwitch disabled={!canEdit} checked={data.reprocess_edits} label="بازنویسی اگر ادمین بعداً پست را ادیت کرد" onChange={(v) => save({ reprocess_edits: v })} />
             <SettingSwitch disabled={!canEdit} checked={data.persian_normalize} label="یکسان‌سازی ی و ک فارسی" onChange={(v) => save({ persian_normalize: v })} />

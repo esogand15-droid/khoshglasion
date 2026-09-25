@@ -120,11 +120,13 @@ def should_replace(category: str, mapping: EmojiMapping) -> bool:
 
     wanted = spectrum_of(category)
     mapped = (mapping.category or "").strip()
-    if mapped and mapped not in {"divider", "membership", "support"}:
-        return spectrum_of(mapped) == wanted
-    if not mapping.contexts:
+    if mapped in {"divider", "membership", "support"}:
         return True
-    return category in mapping.contexts or wanted in mapping.contexts
+    if mapped:
+        return spectrum_of(mapped) == wanted
+    # An unclassified glyph must not be sprayed onto every post that happens
+    # to contain the same unicode character.
+    return False
 
 
 def _overlaps(start: int, end: int, occupied: list[tuple[int, int]]) -> bool:

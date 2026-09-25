@@ -106,6 +106,50 @@ def save_source_photo(source_key: str, data: bytes) -> str | None:
     return str(path)
 
 
+def save_source_video(source_key: str, data: bytes) -> str | None:
+    if not data or len(data) < 32 or len(data) > 20_000_000:
+        return None
+    if data[4:8] == b"ftyp":
+        suffix = ".mp4"
+    elif data.startswith(b"\x1a\x45\xdf\xa3"):
+        suffix = ".webm"
+    else:
+        return None
+    name = hashlib.sha256((source_key or "").encode()).hexdigest()[:24] + suffix
+    path = media_root() / name
+    path.write_bytes(data)
+    return str(path)
+
+
+def _analysis(raw: str | None) -> dict:
+    import json
+
+    try:
+        data = json.loads(raw or "")
+    except json.JSONDecodeError:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def photo_paths_of(raw: str | None) -> list[str]:
+    data = _analysis(raw)
+    found: list[str] = []
+    for item in data.get("photo_paths") or []:
+        path = safe_photo_path(item if isinstance(item, str) else None)
+        if path and str(path) not in found:
+            found.append(str(path))
+    single = safe_photo_path(data.get("photo_path") if isinstance(data.get("photo_path"), str) else None)
+    if single and str(single) not in found:
+        found.insert(0, str(single))
+    return found
+
+
+def video_of(raw: str | None) -> str | None:
+    path = _analysis(raw).get("video_path")
+    found = safe_media_path(path if isinstance(path, str) else None)
+    return str(found) if found else None
+
+
 def photo_of(raw: str | None) -> str | None:
     import json
 
@@ -121,6 +165,28 @@ def photo_of(raw: str | None) -> str | None:
 
 
 _PHOTO_NAME = re.compile(r"^[A-Za-z0-9_-]{8,80}\.(?:jpg|jpeg|png|webp|img)$")
+_MEDIA_NAME = re.compile(r"^[A-Za-z0-9_-]{8,80}\.(?:jpg|jpeg|png|webp|img|mp4|webm|mov)$")
+
+
+def safe_media_path(stored: str | None) -> Path | None:
+    """A saved photo or video. The name must stay inside the media directory."""
+    if not stored:
+        return None
+    name = Path(stored).name
+    if not _MEDIA_NAME.fullmatch(name):
+        return None
+    root = media_root()
+    current = (root / name).resolve()
+    try:
+        current.relative_to(root)
+    except ValueError:
+        return None
+    if current.is_file():
+        return current
+    raw = Path(stored)
+    if raw.is_file() and raw.name == name:
+        return raw
+    return None
 
 
 def safe_photo_path(stored: str | None) -> Path | None:

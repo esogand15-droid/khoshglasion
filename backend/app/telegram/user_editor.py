@@ -235,8 +235,11 @@ async def send_via_user(chat_id: int, text: str, entities: list[dict] | None = N
     if client is None:
         return {"ok": False, "error": "user_session_not_configured"}
     try:
-        formatting = _entities(text, None, entities) if entities else None
-        sent = await client.send_message(int(chat_id), text[:4000], formatting_entities=formatting or None)
+        from backend.app.content.caption import clip_text_entities
+
+        body, clipped = clip_text_entities(text, entities, 4000)
+        formatting = _entities(body, None, clipped) if clipped else None
+        sent = await client.send_message(int(chat_id), body, formatting_entities=formatting or None)
         return {"ok": True, "message_id": int(sent.id), "method": "user_session"}
     except Exception as exc:
         logger.warning("User-session send failed: %s", type(exc).__name__)
@@ -257,20 +260,83 @@ async def send_photo_via_user(chat_id: int, caption: str, entities: list[dict] |
 
         from backend.app.content.intake import photo_bytes_for_telegram
 
+        from backend.app.content.caption import clip_text_entities
+
         payload, name = photo_bytes_for_telegram(Path(photo_path))
         blob = BytesIO(payload)
         blob.name = name
-        formatting = _entities(caption, None, entities) if entities else None
+        body, clipped = clip_text_entities(caption, entities, 1024)
+        formatting = _entities(body, None, clipped) if clipped else None
         sent = await client.send_file(
             int(chat_id),
             blob,
-            caption=(caption or "")[:1024],
+            caption=body,
             formatting_entities=formatting or None,
             force_document=False,
         )
         return {"ok": True, "message_id": int(sent.id), "method": "user_session"}
     except Exception as exc:
         logger.warning("User-session photo send failed: %s", type(exc).__name__)
+        return {"ok": False, "error": type(exc).__name__, "method": "user_session"}
+
+
+async def send_video_via_user(chat_id: int, caption: str, entities: list[dict] | None, video_path: str) -> dict:
+    """Send a source video with a caption. Premium emoji stays on the caption."""
+    broken = _reject_broken_emoji(caption, entities)
+    if broken:
+        return {"ok": False, "error": broken, "method": "user_session", "emoji_rejected": True}
+    client = await get_user_client()
+    if client is None:
+        return {"ok": False, "error": "user_session_not_configured"}
+    try:
+        from backend.app.content.caption import clip_text_entities
+
+        body, clipped = clip_text_entities(caption, entities, 1024)
+        formatting = _entities(body, None, clipped) if clipped else None
+        sent = await client.send_file(
+            int(chat_id),
+            video_path,
+            caption=body,
+            formatting_entities=formatting or None,
+            supports_streaming=True,
+            force_document=False,
+        )
+        return {"ok": True, "message_id": int(sent.id), "method": "user_session"}
+    except Exception as exc:
+        logger.warning("User-session video send failed: %s", type(exc).__name__)
+        return {"ok": False, "error": type(exc).__name__, "method": "user_session"}
+
+
+async def send_album_via_user(chat_id: int, caption: str, entities: list[dict] | None, photo_paths: list[str]) -> dict:
+    """Send every saved photo of one album. The caption stays on the first item."""
+    paths = [path for path in photo_paths if path][:10]
+    if len(paths) < 2:
+        return {"ok": False, "error": "album_too_small"}
+    broken = _reject_broken_emoji(caption, entities)
+    if broken:
+        return {"ok": False, "error": broken, "method": "user_session", "emoji_rejected": True}
+    client = await get_user_client()
+    if client is None:
+        return {"ok": False, "error": "user_session_not_configured"}
+    try:
+        from backend.app.content.caption import clip_text_entities
+
+        body, clipped = clip_text_entities(caption, entities, 1024)
+        formatting = _entities(body, None, clipped) if clipped else None
+        sent = await client.send_file(
+            int(chat_id),
+            paths,
+            caption=body,
+            formatting_entities=formatting or None,
+            force_document=False,
+        )
+        messages = sent if isinstance(sent, (list, tuple)) else [sent]
+        ids = [int(item.id) for item in messages if getattr(item, "id", None)]
+        if not ids:
+            return {"ok": False, "error": "album_empty", "method": "user_session"}
+        return {"ok": True, "message_id": ids[0], "message_ids": ids, "method": "user_session"}
+    except Exception as exc:
+        logger.warning("User-session album send failed: %s", type(exc).__name__)
         return {"ok": False, "error": type(exc).__name__, "method": "user_session"}
 
 

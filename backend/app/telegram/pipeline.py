@@ -210,12 +210,30 @@ async def _published_by_automation(db: AsyncSession, chat_id: int, message_id: i
     recent = (
         await db.execute(
             select(DraftPost)
-            .where(DraftPost.status.in_(["sending", "published"]))
+            .where(DraftPost.status.in_(["sending", "published", "scheduled"]))
             .order_by(DraftPost.updated_at.desc())
-            .limit(8)
+            .limit(40)
         )
     ).scalars().all()
     for row in recent:
+        if row.target_chat_id and int(row.target_chat_id) != int(chat_id):
+            continue
+        try:
+            stored = json.loads(row.analysis_json or "{}")
+        except json.JSONDecodeError:
+            stored = {}
+        if not isinstance(stored, dict):
+            stored = {}
+        sent_ids = {int(item) for item in (stored.get("sent_ids") or []) if str(item).isdigit()}
+        if message_id and int(message_id) in sent_ids:
+            return True
+        sent_fp = "".join(str(stored.get("sent_fp") or "").split())
+        if sent_fp and len(sent_fp) >= 40 and (
+            sent_fp == compact
+            or (sent_fp in compact and len(compact) - len(sent_fp) < 180)
+            or (compact in sent_fp and len(sent_fp) - len(compact) < 180)
+        ):
+            return True
         if row.message_id:
             continue
         stamp = row.updated_at
@@ -224,8 +242,6 @@ async def _published_by_automation(db: AsyncSession, chat_id: int, message_id: i
                 stamp = stamp.replace(tzinfo=timezone.utc)
             if stamp < cutoff:
                 continue
-        if row.target_chat_id and int(row.target_chat_id) != int(chat_id):
-            continue
         body = "".join((row.body or "").split())
         if len(body) >= 40 and body in compact and len(compact) - len(body) < 200:
             return True
@@ -258,7 +274,11 @@ async def process_channel_post(
         return {"status": "skipped", "reason": f"non_editable_{media_type}"}
     if not effective:
         return {"status": "skipped", "reason": "no_editable_content"}
-    if await _published_by_automation(db, chat_id, message_id, effective):
+    from backend.app.telegram.sent_mark import automation_already_sent
+
+    # An admin's own channel post still goes through the editor below.
+    # A post this bot just published must not be restyled a second time.
+    if automation_already_sent(chat_id, message_id, effective) or await _published_by_automation(db, chat_id, message_id, effective):
         return {"status": "skipped", "reason": "automation_draft"}
 
     channel = (await db.execute(select(Channel).where(Channel.chat_id == chat_id))).scalar_one_or_none()
@@ -341,9 +361,16 @@ async def process_channel_post(
 
     style = await resolve_style(db, channel.style_id)
     active_style = channel.style_id if style is not None or (channel.style_id and get_style(channel.style_id).slug == channel.style_id) else None
-    footer = channel.footer_text if channel.footer_text is not None else (runtime.default_footer or None)
-    if footer == "":
+    from backend.app.formatting.styles import DEFAULT_FOOTER
+
+    if channel.footer_text is not None:
+        footer = channel.footer_text
+    elif (runtime.default_footer or "").strip():
+        footer = runtime.default_footer
+    elif style is not None and (style.footer_template or "") and style.footer_template != DEFAULT_FOOTER:
         footer = None
+    else:
+        footer = ""
     emoji_maps = await load_emoji_maps(db) if channel.emoji_replacement else []
     from backend.app.formatting.richtext import quote_texts, shield_quotes, unwrap_quotes
 

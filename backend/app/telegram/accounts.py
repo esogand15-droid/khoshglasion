@@ -76,8 +76,8 @@ def pick_news() -> dict | None:
 def news_may_join() -> bool:
     picked = pick_news()
     if picked is None:
-        return True
-    return bool(picked.get("join_public", True))
+        return False
+    return bool(picked.get("join_public", False))
 
 
 async def list_rows(db: AsyncSession) -> list[TelegramAccount]:
@@ -130,7 +130,7 @@ async def import_legacy_panel_account(db: AsyncSession, values: dict[str, str]) 
         premium=premium,
         roles="emoji,news",
         enabled=True,
-        join_public=True,
+        join_public=False,
         api_id=values.get("tg_api_id") or "",
         api_hash=values.get("tg_api_hash") or "",
         session_string=session,
@@ -165,7 +165,8 @@ async def save_logged_in_account(
     row.premium = premium
     row.roles = roles
     row.enabled = True
-    row.join_public = "news" in roles_of(roles)
+    if row.join_public is None:
+        row.join_public = False
     row.api_id = api_id
     row.api_hash = api_hash
     row.session_string = session
@@ -231,8 +232,6 @@ async def apply_command(db: AsyncSession, text: str) -> str:
         row.enabled = True
     elif action in {"both", "emoji", "news", "premium"}:
         row.roles = parse_roles(action)
-        if "news" in roles_of(row.roles) and row.join_public is False and action == "both":
-            row.join_public = True
     else:
         return "نقش را both، emoji، news، on یا off بنویس."
     await db.flush()

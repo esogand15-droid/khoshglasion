@@ -244,6 +244,52 @@ def _is_image_message(message) -> bool:
     return False
 
 
+def _is_video_message(message) -> bool:
+    if getattr(message, "video", None):
+        return True
+    document = getattr(message, "document", None)
+    if document is None:
+        return False
+    mime = (getattr(document, "mime_type", None) or "").lower()
+    return mime.startswith("video/")
+
+
+def _poll_text(message) -> str:
+    poll = getattr(message, "poll", None)
+    if poll is None:
+        media = getattr(message, "media", None)
+        poll = getattr(media, "poll", None) if media is not None else None
+    if poll is None:
+        return ""
+    question = getattr(poll, "question", None)
+    if hasattr(question, "text"):
+        question = question.text
+    lines = [str(question or "").strip()]
+    for answer in getattr(poll, "answers", None) or []:
+        label = getattr(answer, "text", None)
+        if hasattr(label, "text"):
+            label = label.text
+        label = str(label or "").strip()
+        if label:
+            lines.append(f"- {label}")
+    return "\n".join(line for line in lines if line)
+
+
+async def _save_video(client, message, username: str) -> str | None:
+    if not _is_video_message(message):
+        return None
+    try:
+        raw = await asyncio.wait_for(client.download_media(message, bytes), timeout=20)
+    except Exception as exc:
+        logger.info("video download skipped: %s", type(exc).__name__)
+        return None
+    if not isinstance(raw, (bytes, bytearray)):
+        return None
+    from backend.app.content.intake import save_source_video
+
+    return save_source_video(f"{username}:{int(message.id)}:video", bytes(raw))
+
+
 async def _save_photo(client, message, username: str) -> str | None:
     if not _is_image_message(message):
         return None
@@ -346,9 +392,8 @@ async def _messages(client, entity, username: str, *, min_id: int, limit: int, t
 
     async def collect():
         found: list[dict] = []
-        albums: dict[int, str] = {}
+        albums: dict[int, list[str]] = {}
         scanned = 0
-        saved = 0
         kwargs = {"limit": limit}
         if not recent:
             kwargs["min_id"] = min_id or 0
@@ -356,21 +401,26 @@ async def _messages(client, entity, username: str, *, min_id: int, limit: int, t
         async for message in client.iter_messages(entity, **kwargs):
             scanned += 1
             text = (getattr(message, "message", None) or getattr(message, "text", None) or "").strip()
+            poll_text = _poll_text(message)
+            if poll_text and poll_text not in text:
+                text = f"{text}\n{poll_text}".strip() if text else poll_text
             image = _is_image_message(message)
+            video = _is_video_message(message)
             has_media = bool(
                 image
-                or getattr(message, "video", None)
+                or video
+                or poll_text
                 or getattr(message, "document", None)
                 or getattr(message, "grouped_id", None)
             )
-            photo_path = None
-            if image and saved < 8:
-                photo_path = await _save_photo(client, message, username)
-                if photo_path:
-                    saved += 1
-                    grouped = getattr(message, "grouped_id", None)
-                    if grouped:
-                        albums[int(grouped)] = photo_path
+            photo_path = await _save_photo(client, message, username) if image else None
+            video_path = await _save_video(client, message, username) if video and not photo_path else None
+            grouped = getattr(message, "grouped_id", None)
+            if photo_path and grouped:
+                albums.setdefault(int(grouped), [])
+                if photo_path not in albums[int(grouped)]:
+                    albums[int(grouped)].append(photo_path)
+            kind = "poll" if poll_text else "video" if video_path else "photo" if photo_path else ""
             found.append({
                 "id": int(message.id),
                 "text": text[:1800],
@@ -378,14 +428,24 @@ async def _messages(client, entity, username: str, *, min_id: int, limit: int, t
                 "date": getattr(message, "date", None),
                 "has_media": has_media,
                 "photo_path": photo_path,
-                "grouped_id": getattr(message, "grouped_id", None),
-                "usable": len(text) >= 40 or (has_media and len(text) >= 20),
+                "photo_paths": [photo_path] if photo_path else [],
+                "video_path": video_path,
+                "media_kind": kind,
+                "grouped_id": grouped,
+                "usable": len(text) >= 40 or (has_media and len(text) >= 12),
             })
+        captioned = {int(item["grouped_id"]) for item in found if item.get("grouped_id") and item.get("text")}
         for item in found:
             grouped = item.get("grouped_id")
-            if not item.get("photo_path") and grouped and int(grouped) in albums:
-                item["photo_path"] = albums[int(grouped)]
-                item["has_media"] = True
+            if not grouped or int(grouped) not in albums:
+                continue
+            item["photo_paths"] = list(albums[int(grouped)])
+            item["photo_path"] = item["photo_paths"][0]
+            item["has_media"] = True
+            if len(item["photo_paths"]) > 1:
+                item["media_kind"] = "album"
+            if int(grouped) in captioned and not item.get("text"):
+                item["usable"] = False
         found.sort(key=lambda item: item["id"])
         return found, scanned
 
