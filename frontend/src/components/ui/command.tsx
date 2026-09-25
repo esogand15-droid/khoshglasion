@@ -184,14 +184,14 @@ export function CommandDialog({
   if (!mounted || !open) return null;
   return createPortal(
     <div
-      className="fixed inset-0 z-50 flex items-start justify-center bg-black/60 p-4 pt-[15vh] backdrop-blur-sm"
+      className="fixed inset-0 z-[var(--z-modal)] flex items-start justify-center bg-black/60 p-4 pt-[15vh] backdrop-blur-sm"
       onClick={() => onOpenChange(false)}
     >
       <div
         role="dialog"
         aria-modal="true"
         aria-label="جست‌وجو"
-        className="w-full max-w-lg animate-fade-up [animation-duration:250ms]"
+        className="w-full max-w-lg animate-fade-up [animation-duration:var(--duration-slow)]"
         onClick={(e) => e.stopPropagation()}
       >
         <Command

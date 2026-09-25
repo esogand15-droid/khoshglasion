@@ -95,7 +95,7 @@ export function TabsList({
       {ctx.variant === "segmented" && pill ? (
         <span
           aria-hidden
-          className="absolute inset-y-0.5 -z-10 rounded-md bg-background shadow-sm ring-1 ring-border transition-[transform,width] duration-200 ease-out"
+          className="absolute inset-y-0.5 -z-10 rounded-md bg-background shadow-sm ring-1 ring-border transition-[transform,width] duration-[var(--duration-normal)] ease-out"
           style={{ width: pill.w, left: 0, transform: `translateX(${pill.x}px)` }}
         />
       ) : null}
@@ -125,7 +125,7 @@ export function TabsTrigger({
       tabIndex={active ? 0 : -1}
       onClick={() => ctx.setValue(value)}
       className={cn(
-        "relative z-10 cursor-pointer text-sm transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
+        "relative z-10 cursor-pointer text-sm transition-colors duration-[var(--duration-normal)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
         ctx.variant === "segmented"
           ? cn(
               "rounded-md px-3 py-1.5",

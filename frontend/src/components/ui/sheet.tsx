@@ -14,13 +14,10 @@ export interface SheetProps {
   className?: string;
 }
 
-/**
- * Panel spring ≈ Animate UI `{ type: "spring", stiffness: 150, damping: 22 }`.
- * Overlay fade ≈ Animate UI `{ duration: 0.2, ease: "easeInOut" }`.
- */
-const PANEL_MS = 480;
-const PANEL_EASE = "cubic-bezier(0.32, 0.72, 0, 1)";
-const OVERLAY_MS = 200;
+/** Same curve as --duration-slow / --ease-emphasized. Do not invent a second drawer motion. */
+const PANEL_MS = 280;
+const PANEL_EASE = "cubic-bezier(0.16, 1, 0.3, 1)";
+const OVERLAY_MS = 180;
 
 function panelHidden(side: NonNullable<SheetProps["side"]>) {
   if (side === "bottom") return "translate-y-full opacity-0";
@@ -69,7 +66,7 @@ export function Sheet({
   if (!present) return null;
 
   return (
-    <div className="fixed inset-0 z-50" role="presentation">
+    <div className="fixed inset-0 z-[var(--z-modal)]" role="presentation">
       <div
         aria-hidden
         onClick={() => onOpenChange(false)}

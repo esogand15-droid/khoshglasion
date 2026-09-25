@@ -2,6 +2,8 @@ import { useEffect, useState } from "react";
 import api from "../services/api";
 import { useAuth } from "../stores/auth";
 import { Page } from "../components/page";
+import { useConfirm } from "@/components/ui/alert-dialog";
+import { AsyncPage, LoadError, PageSkeleton } from "@/components/ui/page-state";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
@@ -27,8 +29,12 @@ export default function Messages() {
   const [q, setQ] = useState("");
   const [selected, setSelected] = useState<any>(null);
   const [loadError, setLoadError] = useState("");
+  const [ready, setReady] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const { ask, dialog } = useConfirm();
 
   async function load(nextPage = page, nextStatus = status, nextQ = q) {
+    if (ready) setRefreshing(true);
     try {
       const { data } = await api.get("/api/messages", {
         params: { status: nextStatus || undefined, q: nextQ || undefined, limit: LIMIT, offset: (nextPage - 1) * LIMIT },
@@ -39,15 +45,23 @@ export default function Messages() {
       setLoadError("");
     } catch (error: any) {
       setLoadError(error.response?.data?.detail || "پیام‌ها خوانده نشد");
+    } finally {
+      setReady(true);
+      setRefreshing(false);
     }
   }
-  useEffect(() => { load(1, status, q).catch(() => setLoadError("پیام‌ها خوانده نشد")); }, [status]);
+  useEffect(() => { load(1, status, q); }, [status]);
 
   const pages = Math.max(1, Math.ceil(total / LIMIT));
 
+  if (!ready) {
+    return <AsyncPage kicker="بایگانی ادیت" title="پیام‌ها" description="رکورد واقعی از پردازش‌ها." loading skeleton="table" />;
+  }
+
   return (
     <Page kicker="بایگانی ادیت" title="پیام‌ها" description={`${fa(total)} رکورد واقعی از پردازش‌ها.`}>
-      {loadError && <p className="text-sm text-destructive">{loadError}</p>}
+      {dialog}
+      {loadError && <LoadError title={loadError} onRetry={() => load()} />}
       <div className="grid gap-3 md:grid-cols-[1fr_220px_auto] md:items-end">
         <SearchInput value={q} onChange={setQ} onSearch={(value) => { setPage(1); load(1, status, value); }} placeholder="جست‌وجو در متن یا خطا" />
         <Select
@@ -62,10 +76,10 @@ export default function Messages() {
             { value: "pending_edit", label: "در انتظار" },
           ]}
         />
-        <Button variant="outline" onClick={() => load()}>جستجو</Button>
+        <Button variant="outline" loading={refreshing} onClick={() => load()}>جستجو</Button>
       </div>
 
-      {items.length ? (
+      {refreshing ? <PageSkeleton variant="table" /> : loadError ? null : items.length ? (
         <Table>
           <TableHeader>
             <TableRow>
@@ -120,12 +134,11 @@ export default function Messages() {
               <Button variant="brand" disabled={!canEdit} onClick={async () => { const { data } = await api.post(`/api/messages/${selected.id}/retry`); setSelected(data.message); load(); }}>پردازش دوباره</Button>
               <Button variant="outline" disabled={!canEdit} onClick={async () => { setSelected((await api.post(`/api/messages/${selected.id}/skip`)).data); load(); }}>رد کن</Button>
               {selected.status !== "edited" && (
-                <Button variant="destructive" disabled={!canEdit} onClick={async () => {
-                  if (!confirm("این رکورد از بایگانی حذف شود؟ ادیت کانال برنمی‌گردد.")) return;
+                <Button variant="destructive" disabled={!canEdit} onClick={() => ask("این رکورد از بایگانی حذف شود؟ ادیت کانال برنمی‌گردد.", async () => {
                   await api.delete(`/api/messages/${selected.id}`);
                   setSelected(null);
                   load();
-                }}>حذف از بایگانی</Button>
+                })}>حذف از بایگانی</Button>
               )}
             </div>
           </div>

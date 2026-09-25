@@ -47,13 +47,13 @@ export function Collapsible({ trigger, openLabel, open, defaultOpen = false, onO
         )}
       >
         {label}
-        <ChevronDown className={cn("size-4 text-muted-foreground transition-transform duration-200", isOpen && "rotate-180")} aria-hidden />
+        <ChevronDown className={cn("size-4 text-muted-foreground transition-transform duration-[var(--duration-normal)]", isOpen && "rotate-180")} aria-hidden />
       </button>
       <div
         id={id}
         role="region"
         aria-hidden={!isOpen}
-        className={cn("grid transition-[grid-template-rows] duration-200 ease-out", isOpen ? "grid-rows-[1fr]" : "grid-rows-[0fr]")}
+        className={cn("grid transition-[grid-template-rows] duration-[var(--duration-normal)] ease-out", isOpen ? "grid-rows-[1fr]" : "grid-rows-[0fr]")}
       >
         {/* inert keeps hidden links and fields out of the tab order while the rows animate. */}
         <div {...({ inert: isOpen ? undefined : "" } as React.HTMLAttributes<HTMLDivElement>)} className="min-h-0 overflow-hidden">

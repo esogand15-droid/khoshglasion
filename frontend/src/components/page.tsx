@@ -1,5 +1,7 @@
 import type { ReactNode } from "react";
 
+/** Page header. Initial load, error, and retry belong in AsyncPage, not a local spinner. */
+
 export function Page({
   kicker,
   title,

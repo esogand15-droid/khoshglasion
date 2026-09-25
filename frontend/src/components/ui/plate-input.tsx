@@ -262,7 +262,7 @@ export function PlateInput({ value, defaultValue = EMPTY_PLATE, onChange, letter
         dir="rtl"
         onKeyDown={onListKey}
         onMouseLeave={() => setHovered(null)}
-        className="fixed z-50 w-[252px] rounded-xl border border-border bg-popover p-2 text-popover-foreground shadow-[0_20px_50px_-20px_oklch(0_0_0/80%)] animate-fade-up [animation-duration:180ms]"
+        className="fixed z-[var(--z-modal)] w-[252px] rounded-xl border border-border bg-popover p-2 text-popover-foreground shadow-[0_20px_50px_-20px_oklch(0_0_0/80%)] animate-fade-up [animation-duration:var(--duration-normal)]"
       >
           <div className="grid grid-cols-7 gap-1">
             {options.map((l, i) => {

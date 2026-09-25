@@ -47,7 +47,7 @@ export function Dialog({ open, onOpenChange, title, description, children, foote
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 p-4 backdrop-blur-sm sm:items-center"
+      className="fixed inset-0 z-[var(--z-modal)] flex items-end justify-center bg-black/60 p-4 backdrop-blur-sm sm:items-center"
       onClick={() => role === "dialog" && onOpenChange(false)}
     >
       <div
@@ -60,7 +60,7 @@ export function Dialog({ open, onOpenChange, title, description, children, foote
         className={cn(
           "w-full rounded-2xl border border-border bg-popover p-5 text-popover-foreground shadow-[0_30px_80px_-20px_oklch(0_0_0/80%)]",
           widths[size],
-          "animate-fade-up [animation-duration:250ms]",
+          "animate-fade-up [animation-duration:var(--duration-slow)]",
           className,
         )}
       >

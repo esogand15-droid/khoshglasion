@@ -1,16 +1,40 @@
 import { useEffect, useState } from "react";
 import api from "../services/api";
-import { Page } from "../components/page";
 import { EmptyState } from "@/components/ui/empty-state";
+import { AsyncPage } from "@/components/ui/page-state";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { when } from "@/lib/format";
 
 export default function Audit() {
   const [rows, setRows] = useState<any[]>([]);
-  useEffect(() => { api.get("/api/system/audit").then((r) => setRows(r.data)).catch(() => {}); }, []);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+
+  async function load() {
+    setLoading(true);
+    setError("");
+    try {
+      setRows((await api.get("/api/system/audit")).data);
+    } catch (e: any) {
+      setError(e.response?.data?.detail || "ردپا خوانده نشد");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => { load(); }, []);
+
   return (
-    <Page kicker="چه کسی چه کرد" title="ردپا">
-      {rows.length ? (
+    <AsyncPage
+      kicker="چه کسی چه کرد"
+      title="ردپا"
+      description="هر تغییر مدیریتی با نام ادمین و زمان ثبت می‌شود."
+      loading={loading}
+      error={error}
+      onRetry={load}
+      skeleton="table"
+    >
+      {!error && (rows.length ? (
         <Table>
           <TableHeader>
             <TableRow>
@@ -33,7 +57,9 @@ export default function Audit() {
             ))}
           </TableBody>
         </Table>
-      ) : <EmptyState title="هنوز ردپایی نیست" />}
-    </Page>
+      ) : (
+        <EmptyState title="هنوز ردپایی نیست" description="بعد از ذخیره، انتشار یا تغییر تنظیم، همین‌جا دیده می‌شود." />
+      ))}
+    </AsyncPage>
   );
 }

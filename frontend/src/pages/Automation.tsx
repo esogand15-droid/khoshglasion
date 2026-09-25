@@ -3,7 +3,8 @@ import api from "../services/api";
 import { useAuth } from "../stores/auth";
 import { Page } from "../components/page";
 import { Alert } from "@/components/ui/alert";
-import { Skeleton } from "@/components/ui/skeleton";
+import { AsyncPage } from "@/components/ui/page-state";
+import { useConfirm } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -95,8 +96,11 @@ export default function Automation() {
   const canEdit = !role || role !== "VIEWER";
   const canPublish = !role || role === "OWNER" || role === "ADMIN";
 
+  const { ask, dialog } = useConfirm();
+
   async function load(status = statusFilter, category = categoryFilter) {
     setLoading(true);
+    setLoadError("");
     try {
       const state = await api.get("/api/automation", {
         params: { draft_status: status || undefined, draft_category: category || undefined },
@@ -140,14 +144,15 @@ export default function Automation() {
 
   if (!data) {
     return (
-      <Page title="پست خودکار" description={loading ? "در حال خواندن صف…" : "صف خوانده نشد"}>
-        <div className="space-y-3" aria-busy={loading}>
-          <Skeleton shimmer className="h-16 w-full rounded-2xl" />
-          <Skeleton shimmer className="h-40 w-full rounded-2xl" />
-        </div>
-        {loadError && <Alert className="mt-3" variant="warning" title={loadError} />}
-        <Button className="mt-3" variant="outline" disabled={loading} onClick={() => load().catch(() => setLoadError("صف اتوماسیون خوانده نشد"))}>{loading ? "در حال خواندن…" : "دوباره"}</Button>
-      </Page>
+      <AsyncPage
+        kicker="اتوماسیون"
+        title="پست خودکار"
+        description="منبع خوانده می‌شود، در پوشهٔ سبک طبقه می‌شود، و پست با لحن کانال‌های کنکور ساخته می‌شود."
+        loading={loading && !loadError}
+        error={loadError}
+        onRetry={() => load()}
+        skeleton="stats"
+      />
     );
   }
 
@@ -166,7 +171,7 @@ export default function Automation() {
       kicker="اتوماسیون"
       title="پست خودکار"
       description="منبع خوانده می‌شود، در پوشهٔ سبک طبقه می‌شود، و پست با لحن کانال‌های کنکور ساخته می‌شود."
-      actions={<Button variant="brand" disabled={busy || !canEdit} onClick={async () => {
+      actions={<Button variant="brand" disabled={!canEdit} loading={busy} onClick={async () => {
         setBusy(true);
         try {
           const { data: result } = await api.post("/api/automation/collect");
@@ -175,12 +180,13 @@ export default function Automation() {
           await load();
         } catch (error: any) { setMsg(error.response?.data?.detail || "جمع‌آوری انجام نشد"); }
         finally { setBusy(false); }
-      }}>{busy ? "در حال جمع‌آوری" : "جمع‌آوری الان"}</Button>}
+      }}>جمع‌آوری الان</Button>}
     >
       <Alert title="مسیر یک پست">
         هر جمع‌آوری پست را در پوشهٔ فاین‌تیون طبقه می‌کند. نویسنده از همان پوشه می‌فهمد خبر را کوتاه بگوید، فان را نصیحت نکند و اطلاعیه را مقاله نکند. لینک خصوصی فقط وقتی ثبت می‌شود که اکانت خبر از قبل عضو همان کانال باشد؛ جوین خودکار انجام نمی‌شود.
       </Alert>
       {data.last_error && <Alert variant="destructive" title={data.last_error} />}
+      {dialog}
       {loadError && <Alert variant="warning" title={loadError}><Button variant="outline" onClick={() => load()}>دوباره</Button></Alert>}
       {msg && <Alert>{msg}</Alert>}
 
@@ -356,7 +362,7 @@ export default function Automation() {
                           <Input className="h-8 w-20" type="number" min={1} max={200} defaultValue={tag.priority || 60} disabled={!canEdit} aria-label="اولویت" onBlur={(event) => { const next = Number(event.target.value) || 60; if (next !== tag.priority) run(async () => { await api.patch(`/api/automation/hashtags/${tag.id}`, { priority: next }); await load(); }, "اولویت ذخیره نشد"); }} />
                           <label className="flex items-center gap-2 text-xs">فعال <Switch checked={!!tag.enabled && !tag.forbidden} disabled={!canEdit} onCheckedChange={(value) => run(async () => { await api.patch(`/api/automation/hashtags/${tag.id}`, { enabled: value, forbidden: value ? false : tag.forbidden }); await load(); }, "هشتگ ذخیره نشد")} /></label>
                           <label className="flex items-center gap-2 text-xs">ممنوع <Switch checked={!!tag.forbidden} disabled={!canEdit} onCheckedChange={(value) => run(async () => { await api.patch(`/api/automation/hashtags/${tag.id}`, { forbidden: value }); await load(); }, "هشتگ ذخیره نشد")} /></label>
-                          <Button size="sm" variant="destructive" disabled={!canEdit} onClick={() => { if (!confirm(`#${tag.tag} حذف شود؟`)) return; run(async () => { await api.delete(`/api/automation/hashtags/${tag.id}`); await load(); }, "حذف نشد"); }}>حذف</Button>
+                          <Button size="sm" variant="destructive" disabled={!canEdit} onClick={() => ask(`#${tag.tag} حذف شود؟`, () => run(async () => { await api.delete(`/api/automation/hashtags/${tag.id}`); await load(); }, "حذف نشد"))}>حذف</Button>
                         </div>
                       </div>
                     ))}

@@ -9,7 +9,7 @@ import { BarChart, LineChart, Sparkline } from "@/components/ui/chart";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Progress } from "@/components/ui/progress";
-import { Skeleton } from "@/components/ui/skeleton";
+import { AsyncPage } from "@/components/ui/page-state";
 import { Stat } from "@/components/ui/stat";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Timeline } from "@/components/ui/timeline";
@@ -29,22 +29,32 @@ export default function Dashboard() {
   const [alerts, setAlerts] = useState<any[]>([]);
   const [error, setError] = useState("");
 
-  useEffect(() => {
-    api.get("/api/dashboard").then((r) => setData(r.data)).catch(() => setError("داشبورد خوانده نشد."));
-    api.get("/api/system/overview").then((r) => setAlerts(r.data.alerts || [])).catch(() => {});
-  }, []);
+  async function load() {
+    setError("");
+    try {
+      const dash = await api.get("/api/dashboard");
+      setData(dash.data);
+      api.get("/api/system/overview").then((r) => setAlerts(r.data.alerts || [])).catch(() => {});
+    } catch {
+      setError("داشبورد خوانده نشد.");
+    }
+  }
 
-  if (!data && !error) {
+  useEffect(() => { load(); }, []);
+
+  if (!data) {
     return (
-      <div className="space-y-4" aria-busy="true" aria-label="در حال خواندن داشبورد">
-        <Skeleton shimmer className="h-40 w-full rounded-2xl" />
-        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-          {Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} shimmer className="h-24 rounded-xl" />)}
-        </div>
-      </div>
+      <AsyncPage
+        kicker="عملیات"
+        title="داشبورد"
+        description={formatJalali(new Date(), { weekday: true })}
+        loading={!error}
+        error={error}
+        onRetry={load}
+        skeleton="stats"
+      />
     );
   }
-  if (!data) return <Alert variant="destructive">{error}</Alert>;
 
   const empty = !data.has_data;
   const days = data.per_day || [];

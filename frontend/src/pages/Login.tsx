@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Field, Input } from "@/components/ui/input";
 import { PasswordInput } from "@/components/ui/password-input";
-import { Spinner } from "@/components/ui/spinner";
+
 
 export default function Login() {
   const [username, setUsername] = useState("");
@@ -54,9 +54,7 @@ export default function Login() {
               <PasswordInput autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} />
             </Field>
             {error && <Alert variant="destructive">{error}</Alert>}
-            <Button type="submit" variant="brand" className="w-full" disabled={loading}>
-              {loading ? <Spinner size="sm" className="text-brand-foreground" label="در حال ورود" /> : "ورود"}
-            </Button>
+            <Button type="submit" variant="brand" className="w-full" loading={loading}>ورود</Button>
           </form>
         </CardContent>
       </Card>

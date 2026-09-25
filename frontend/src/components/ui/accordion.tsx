@@ -35,10 +35,10 @@ export function Accordion({ items, multiple, defaultOpen = [], className }: Acco
                 className="flex w-full cursor-pointer items-center justify-between gap-3 px-4 py-3 text-start text-sm font-medium transition-colors hover:bg-accent/40"
               >
                 {it.title}
-                <ChevronDown className={cn("size-4 shrink-0 text-muted-foreground transition-transform duration-200", isOpen && "rotate-180")} />
+                <ChevronDown className={cn("size-4 shrink-0 text-muted-foreground transition-transform duration-[var(--duration-normal)]", isOpen && "rotate-180")} />
               </button>
             </h3>
-            <div id={`acc-${it.id}`} className={cn("grid transition-[grid-template-rows] duration-200 ease-out", isOpen ? "grid-rows-[1fr]" : "grid-rows-[0fr]")}>
+            <div id={`acc-${it.id}`} className={cn("grid transition-[grid-template-rows] duration-[var(--duration-normal)] ease-out", isOpen ? "grid-rows-[1fr]" : "grid-rows-[0fr]")}>
               <div className="overflow-hidden">
                 <div className="px-4 pb-4 text-sm leading-7 text-muted-foreground">{it.content}</div>
               </div>

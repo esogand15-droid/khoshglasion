@@ -74,7 +74,7 @@ export function SegmentedControl({ options, value, defaultValue, onChange, size 
       {pill && (
         <span
           aria-hidden
-          className="absolute inset-y-0.5 -z-10 rounded-md bg-background shadow-sm ring-1 ring-border transition-[transform,width] duration-200 ease-out"
+          className="absolute inset-y-0.5 -z-10 rounded-md bg-background shadow-sm ring-1 ring-border transition-[transform,width] duration-[var(--duration-normal)] ease-out"
           style={{ width: pill.w, left: 0, transform: `translateX(${pill.x}px)` }}
         />
       )}
@@ -92,7 +92,7 @@ export function SegmentedControl({ options, value, defaultValue, onChange, size 
             tabIndex={on ? 0 : -1}
             onClick={() => select(o.value)}
             className={cn(
-              "relative cursor-pointer rounded-md font-medium whitespace-nowrap transition-colors duration-200",
+              "relative cursor-pointer rounded-md font-medium whitespace-nowrap transition-colors duration-[var(--duration-normal)]",
               "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
               "disabled:cursor-not-allowed disabled:opacity-40",
               size === "sm" ? "h-7 px-2.5 text-xs" : "h-8 px-3.5 text-sm",

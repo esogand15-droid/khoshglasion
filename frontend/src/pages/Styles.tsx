@@ -2,6 +2,9 @@ import { useEffect, useState } from "react";
 import api from "../services/api";
 import { useAuth } from "../stores/auth";
 import { Page } from "../components/page";
+import { Alert } from "@/components/ui/alert";
+import { useConfirm } from "@/components/ui/alert-dialog";
+import { AsyncPage, LoadError } from "@/components/ui/page-state";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -21,12 +24,30 @@ export default function Styles() {
   const [form, setForm] = useState({ name: "", slug: "", footer: "", divider: "━━━━━━━━━━━━" });
   const [edit, setEdit] = useState<any>(null);
   const [msg, setMsg] = useState("");
-  async function load() { setItems((await api.get("/api/styles", { timeout: 12000 })).data); }
-  useEffect(() => { load().catch((error: any) => setMsg(error.response?.data?.detail || "استایل‌ها خوانده نشد")); }, []);
+  const [ready, setReady] = useState(false);
+  const [loadError, setLoadError] = useState("");
+  const { ask, dialog } = useConfirm();
+  async function load() {
+    try {
+      setItems((await api.get("/api/styles", { timeout: 12000 })).data);
+      setLoadError("");
+    } catch (error: any) {
+      setLoadError(error.response?.data?.detail || "استایل‌ها خوانده نشد");
+    } finally {
+      setReady(true);
+    }
+  }
+  useEffect(() => { load(); }, []);
+
+  if (!ready) {
+    return <AsyncPage kicker="هویت بصری" title="استایل و فوتر" description="استایل سفارشی را بساز و در تنظیم کانال انتخاب کن." loading skeleton="form" />;
+  }
 
   return (
     <Page kicker="هویت بصری" title="استایل و فوتر" description="استایل سفارشی را بساز و در تنظیم کانال انتخاب کن.">
-      {msg && <p className="text-sm text-muted-foreground" role="status">{msg}</p>}
+      {dialog}
+      {loadError && <LoadError title={loadError} onRetry={load} />}
+      {msg && <Alert role="status">{msg}</Alert>}
       <Card>
         <CardHeader><CardTitle>استایل سفارشی</CardTitle></CardHeader>
         <CardContent className="space-y-4">
@@ -69,14 +90,14 @@ export default function Styles() {
                       await api.patch(`/api/styles/${style.id}`, { config: { ...config, enabled: style.enabled === false } });
                       load();
                     }}>{style.enabled === false ? "روشن" : "خاموش"}</Button>}
-                    {!style.is_builtin && <Button size="sm" variant="destructive" disabled={!canEdit} onClick={async () => { if (!confirm("این استایل حذف شود؟")) return; await api.delete(`/api/styles/${style.id}`); load(); }}>حذف</Button>}
+                    {!style.is_builtin && <Button size="sm" variant="destructive" disabled={!canEdit} onClick={() => ask("این استایل حذف شود؟", async () => { await api.delete(`/api/styles/${style.id}`); load(); })}>حذف</Button>}
                   </div>
                 </CardContent>
               </Card>
             );
           })}
         </div>
-      ) : <EmptyState title="استایلی نیست" />}
+      ) : loadError ? null : <EmptyState title="استایلی نیست" description="یک نام و فوتر بگذار تا استایل ساخته شود." />}
 
       <Dialog open={!!edit} onOpenChange={(open) => !open && setEdit(null)} title={edit ? `ویرایش ${edit.name}` : undefined}>
         {edit && (

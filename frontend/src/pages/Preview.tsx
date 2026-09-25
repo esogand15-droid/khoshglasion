@@ -7,7 +7,6 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Select } from "@/components/ui/select";
-import { Spinner } from "@/components/ui/spinner";
 import { Textarea } from "@/components/ui/textarea";
 import { DiffList, TelegramPreview } from "@/lib/telegram";
 
@@ -38,7 +37,7 @@ export default function Preview() {
       kicker="قبل از کانال"
       title="میز آزمایش"
       description="خروجی را پیش از انتشار ببین. ایموجی‌های کتابخانه همین‌جا متحرک پخش می‌شوند، نه به‌صورت یونیکد ساده."
-      actions={<Button variant="brand" onClick={run} disabled={loading}>{loading ? <Spinner size="sm" className="text-brand-foreground" label="در حال کار" /> : "اجرا"}</Button>}
+      actions={<Button variant="brand" onClick={run} loading={loading}>اجرا</Button>}
     >
       <div className="flex flex-wrap items-center gap-4">
         <div className="w-full max-w-xs">

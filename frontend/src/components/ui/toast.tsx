@@ -47,7 +47,7 @@ export function ToastProvider({ children, max = 3, position = "bottom-start" }: 
   return (
     <ToastCtx.Provider value={{ toast, dismiss, dismissAll }}>
       {children}
-      <div aria-live="polite" className={cn("pointer-events-none fixed z-[60] flex w-[min(360px,calc(100vw-2rem))] flex-col gap-2", pos, fromTop ? "" : "flex-col-reverse")}>
+      <div aria-live="polite" className={cn("pointer-events-none fixed z-[var(--z-toast)] flex w-[min(360px,calc(100vw-2rem))] flex-col gap-2", pos, fromTop ? "" : "flex-col-reverse")}>
         {items.map((t) => <ToastCard key={t.id} toast={t} onClose={() => dismiss(t.id)} />)}
         {items.length > 1 && (
           <button type="button" onClick={dismissAll} className="pointer-events-auto self-end rounded-md px-2 py-1 text-[11px] text-muted-foreground hover:text-foreground">
@@ -75,7 +75,7 @@ export function ToastCard({ toast, onClose, className }: { toast: Omit<Toast, "i
       role="status"
       className={cn(
         "pointer-events-auto flex items-start gap-3 rounded-xl border border-border bg-popover px-3.5 py-3 text-popover-foreground shadow-[0_12px_40px_-16px_oklch(0_0_0/70%)]",
-        "animate-slide-in",
+        "animate-slide-in [animation-duration:var(--duration-normal)]",
         className,
       )}
     >

@@ -83,8 +83,8 @@ export function DropdownMenu({
         panelRef={panel}
         role="menu"
         className={cn(
-          "fixed z-50 min-w-44 rounded-lg border border-border bg-popover p-1 text-sm text-popover-foreground shadow-lg",
-          "animate-fade-up [animation-duration:150ms]",
+          "fixed z-[var(--z-modal)] min-w-44 rounded-lg border border-border bg-popover p-1 text-sm text-popover-foreground shadow-lg",
+          "animate-fade-up [animation-duration:var(--duration-normal)]",
         )}
       >
         {items.map((it, i) => {

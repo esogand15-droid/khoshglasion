@@ -61,7 +61,7 @@ export function DatePicker({ value, onChange, placeholder = "انتخاب تار
           </span>
         )}
       </button>
-      <FloatPortal open={open} mounted={mounted} style={style} theme={theme} panelRef={panel} role="dialog" className="fixed z-50 shadow-xl">
+      <FloatPortal open={open} mounted={mounted} style={style} theme={theme} panelRef={panel} role="dialog" className="fixed z-[var(--z-modal)] shadow-xl">
         <Calendar {...cal} value={date} onChange={(d) => { set(d); setOpen(false); }} />
       </FloatPortal>
     </div>

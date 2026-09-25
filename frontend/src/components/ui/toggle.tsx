@@ -172,7 +172,7 @@ export function ToggleGroup(props: ToggleGroupProps) {
       {sliding && pill ? (
         <span
           aria-hidden
-          className="absolute inset-y-0.5 -z-10 rounded-md bg-background shadow-sm ring-1 ring-border transition-[transform,width] duration-200 ease-out"
+          className="absolute inset-y-0.5 -z-10 rounded-md bg-background shadow-sm ring-1 ring-border transition-[transform,width] duration-[var(--duration-normal)] ease-out"
           style={{ width: pill.w, left: 0, transform: `translateX(${pill.x}px)` }}
         />
       ) : null}

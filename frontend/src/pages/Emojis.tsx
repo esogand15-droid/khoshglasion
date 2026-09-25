@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import api from "../services/api";
 import { useAuth } from "../stores/auth";
 import { Page } from "../components/page";
+import { useConfirm } from "@/components/ui/alert-dialog";
+import { AsyncPage, LoadError } from "@/components/ui/page-state";
 import { DefaultEmoji, EmojiPreview, useEmojiMeta } from "@/components/EmojiPreview";
 import { Alert } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -29,9 +31,21 @@ export default function Emojis() {
   const [selected, setSelected] = useState<string[]>([]);
   const [bulkCategory, setBulkCategory] = useState("");
   const [bulkPriority, setBulkPriority] = useState("70");
+  const [ready, setReady] = useState(false);
+  const [loadError, setLoadError] = useState("");
+  const { ask, dialog } = useConfirm();
 
-  async function load() { setItems((await api.get("/api/emojis", { timeout: 12000 })).data); }
-  useEffect(() => { load().catch((error: any) => setMsg(error.response?.data?.detail || "ایموجی‌ها خوانده نشد")); }, []);
+  async function load() {
+    try {
+      setItems((await api.get("/api/emojis", { timeout: 12000 })).data);
+      setLoadError("");
+    } catch (error: any) {
+      setLoadError(error.response?.data?.detail || "ایموجی‌ها خوانده نشد");
+    } finally {
+      setReady(true);
+    }
+  }
+  useEffect(() => { load(); }, []);
   useEffect(() => {
     const ids = items.map((item) => item.custom_emoji_id).filter(Boolean);
     if (!ids.length) return;
@@ -57,7 +71,14 @@ export default function Emojis() {
 
   async function bulk(action: string, extra: Record<string, unknown> = {}) {
     if (!selected.length) return;
-    if (action === "delete" && !confirm(`${selected.length} ایموجی حذف شود؟`)) return;
+    if (action === "delete") {
+      ask(`${fa(selected.length)} ایموجی حذف شود؟`, () => bulkNow(action, extra));
+      return;
+    }
+    await bulkNow(action, extra);
+  }
+
+  async function bulkNow(action: string, extra: Record<string, unknown> = {}) {
     try {
       let count = 0;
       for (let index = 0; index < selected.length; index += 500) {
@@ -72,12 +93,19 @@ export default function Emojis() {
     }
   }
 
+  if (!ready) {
+    return <AsyncPage kicker="کتابخانه متحرک" title="ایموجی پرمیوم" description="نگاشت ایموجی متحرک از همین کتابخانه خوانده می‌شود." loading skeleton="form" />;
+  }
+
   return (
     <Page
       kicker="کتابخانه متحرک"
       title="ایموجی پرمیوم"
+      description="نگاشت ایموجی متحرک از همین کتابخانه خوانده می‌شود."
       actions={<Button variant="outline" onClick={async () => { const { data } = await api.get("/api/emojis/export"); const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" }); const url = URL.createObjectURL(blob); const a = document.createElement("a"); a.href = url; a.download = "khoshgelasion-emojis.json"; a.click(); }}>خروجی</Button>}
     >
+      {dialog}
+      {loadError && <LoadError title={loadError} onRetry={load} />}
       <Alert title="کتابخانه از خود تلگرام پر می‌شود">
         لینک https://t.me/addemoji/نام‌پک را اینجا یا در خصوصی ربات بفرست. تصویر متحرک هر کارت از getCustomEmojiStickers و getFile تلگرام می‌آید و توکن ربات در مرورگر نیست. کنارش ایموجی معمولی همان استیکر است؛ Bot API برای ایموجی معمولی فایل متحرک جدا ندارد.
       </Alert>
@@ -114,7 +142,7 @@ export default function Emojis() {
               load();
             } catch (error: any) { setMsg(error.response?.data?.detail || "ثبت نشد"); }
           }}>افزودن</Button>
-          {msg && <p className="text-xs text-muted-foreground">{msg}</p>}
+          {msg && <Alert>{msg}</Alert>}
         </CardContent>
       </Card>
 
@@ -151,7 +179,7 @@ export default function Emojis() {
               onZoom={() => setZoom(item)}
               onEdit={() => setEdit({ ...item })}
               onToggle={async () => { await api.patch(`/api/emojis/${item.id}`, { enabled: !item.enabled }); load(); }}
-              onDelete={async () => { if (!confirm("این نگاشت حذف شود؟")) return; await api.delete(`/api/emojis/${item.id}`); load(); }}
+              onDelete={() => ask("این نگاشت حذف شود؟", async () => { await api.delete(`/api/emojis/${item.id}`); load(); })}
               onAdopt={async () => {
                 try {
                   await api.post(`/api/emojis/${item.id}/telegram-fallback`);
@@ -162,7 +190,7 @@ export default function Emojis() {
             />
           ))}
         </div>
-      ) : <EmptyState title="نگاشتی نیست" description="یک ایموجی پرمیوم را به ربات فوروارد کن." />}
+      ) : loadError ? null : <EmptyState title="نگاشتی نیست" description="یک ایموجی پرمیوم را به ربات فوروارد کن." />}
 
       <Dialog open={!!edit} onOpenChange={(open) => !open && setEdit(null)} title="ویرایش نگاشت">
         {edit && (

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
+import { Outlet, useLocation, useNavigate } from "react-router-dom";
 import {
   Activity,
   CalendarClock,
@@ -20,7 +20,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Sheet } from "@/components/ui/sheet";
 import { Sidebar, SidebarGroup, SidebarItem } from "@/components/ui/sidebar";
-import { cn } from "@/lib/utils";
+
 
 const NAV = [
   { to: "/", label: "خانه", icon: LayoutDashboard, end: true },
@@ -88,6 +88,7 @@ function NavItems({ onPick }: { onPick?: () => void }) {
 }
 
 export default function Layout() {
+  const location = useLocation();
   const username = useAuth((s) => s.username);
   const role = useAuth((s) => s.role);
   const logout = useAuth((s) => s.logout);
@@ -148,29 +149,15 @@ export default function Layout() {
           </div>
         </header>
         <main className="flex-1 p-4 sm:p-6">
-          <Outlet />
+          <div key={location.pathname} className="page-enter">
+            <Outlet />
+          </div>
         </main>
       </div>
 
       <Sheet open={open} onOpenChange={setOpen} title="خوشگلاسیون" side="start">
-        <nav className="space-y-1">
-          {NAV.map((item) => (
-            <NavLink
-              key={item.to}
-              to={item.to}
-              end={item.end}
-              onClick={() => setOpen(false)}
-              className={({ isActive }) =>
-                cn(
-                  "flex items-center gap-2 rounded-lg px-3 py-2 text-sm text-muted-foreground hover:bg-accent hover:text-foreground",
-                  isActive && "bg-accent font-medium text-foreground",
-                )
-              }
-            >
-              <item.icon className="size-4" />
-              {item.label}
-            </NavLink>
-          ))}
+        <nav>
+          <NavItems onPick={() => setOpen(false)} />
         </nav>
       </Sheet>
     </div>

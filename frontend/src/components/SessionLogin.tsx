@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import api from "../services/api";
 import { useAuth } from "../stores/auth";
 import { Alert } from "@/components/ui/alert";
+import { useConfirm } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -10,7 +11,7 @@ import { Field, Input } from "@/components/ui/input";
 import { OtpField } from "@/components/ui/otp-field";
 import { PasswordInput } from "@/components/ui/password-input";
 import { Select } from "@/components/ui/select";
-import { Spinner } from "@/components/ui/spinner";
+import { LoadError, PageSkeleton } from "@/components/ui/page-state";
 import { Switch } from "@/components/ui/switch";
 import { en } from "@/lib/utils";
 
@@ -59,6 +60,7 @@ export default function SessionLogin({ premiumMode, onChange }: { premiumMode?: 
   const [password, setPassword] = useState("");
   const [msg, setMsg] = useState("");
   const [busy, setBusy] = useState(false);
+  const { ask, dialog } = useConfirm();
 
   async function load() {
     setStatus((await api.get("/api/system/telegram-session")).data);
@@ -79,7 +81,11 @@ export default function SessionLogin({ premiumMode, onChange }: { premiumMode?: 
     }
   }
 
-  if (!status) return <Spinner label="در حال خواندن نشست‌ها" />;
+  if (!status) {
+    return msg
+      ? <LoadError title={msg} onRetry={() => load().catch((error) => setMsg(detailOf(error)))} />
+      : <PageSkeleton variant="form" />;
+  }
   const step = status.pending_step;
   const accounts = status.accounts || [];
   const modeBlocks = premiumMode === "bot" || premiumMode === "off";
@@ -91,12 +97,13 @@ export default function SessionLogin({ premiumMode, onChange }: { premiumMode?: 
 
   return (
     <Card>
+      {dialog}
       <CardHeader>
         <CardTitle>نشست‌های تلگرام</CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
         <p className="text-sm text-muted-foreground">
-          چند اکانت می‌توانند هم‌زمان وصل باشند. اکانت پرمیوم ایموجی متحرک کانال را ادیت می‌کند. اکانت معمولی در کانال‌های عمومی خبری عضو می‌شود و خبر جمع می‌کند. اگر بخواهی، همان اکانت پرمیوم هر دو کار را انجام می‌دهد. لینک دعوت خصوصی قبول نیست.
+          چند اکانت می‌توانند هم‌زمان وصل باشند. اکانت پرمیوم ایموجی متحرک کانال را ادیت می‌کند. اکانت معمولی در کانال‌های عمومی خبری عضو می‌شود و خبر جمع می‌کند. اگر بخواهی، همان اکانت پرمیوم هر دو کار را انجام می‌دهد. لینک خصوصی جوین نمی‌شود. اگر اکانت خبر از قبل عضو است، همان لینک را اینجا یا در منابع بگذار تا فقط خوانده شود.
         </p>
         {modeBlocks && (
           <Alert variant="warning" title="حالت ایموجی این نشست را استفاده نمی‌کند">
@@ -155,10 +162,9 @@ export default function SessionLogin({ premiumMode, onChange }: { premiumMode?: 
                   <Button variant="outline" size="sm" disabled={busy} onClick={() => patch(account, { enabled: !account.enabled })}>
                     {account.enabled ? "خاموش کردن" : "روشن کردن"}
                   </Button>
-                  <Button variant="destructive" size="sm" disabled={busy} onClick={() => run(async () => {
-                    if (!confirm("این نشست قطع شود؟")) return;
+                  <Button variant="destructive" size="sm" disabled={busy} onClick={() => ask("این نشست قطع شود؟", () => run(async () => {
                     await api.post(`/api/system/telegram-sessions/${account.id}/disconnect`);
-                  })}>قطع این نشست</Button>
+                  }))}>قطع این نشست</Button>
                 </div>
               </div>
             )}
@@ -233,10 +239,10 @@ export default function SessionLogin({ premiumMode, onChange }: { premiumMode?: 
             <Field label="شماره با کد کشور" hint="رقم فارسی قبول است. ۰۹۱۲… و ۹۱۲… هر دو به ‎+98 تبدیل می‌شوند">
               <Input dir="ltr" inputMode="tel" autoComplete="tel" placeholder="+98912…" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} />
             </Field>
-            <Button variant="brand" disabled={busy || !canWrite} onClick={() => run(async () => {
+            <Button variant="brand" disabled={!canWrite} loading={busy} onClick={() => run(async () => {
               await api.post("/api/system/telegram-session/start", { ...form, api_id: en(form.api_id), phone: en(form.phone) });
             })}>
-              {busy ? <Spinner size="sm" label="در حال فرستادن کد" /> : "فرستادن کد تلگرام"}
+              فرستادن کد تلگرام
             </Button>
             {!canWrite && <p className="text-xs text-muted-foreground">فقط مالک یا ادمین می‌تواند نشست را وصل کند.</p>}
           </div>
@@ -245,7 +251,7 @@ export default function SessionLogin({ premiumMode, onChange }: { premiumMode?: 
         {canWrite && (
           <div className="grid gap-2">
             <Field label="عضو شدن در یک کانال عمومی">
-              <Input dir="ltr" value={joinName} onChange={(e) => setJoinName(e.target.value)} placeholder="@channel یا https://t.me/channel" />
+              <Input dir="ltr" value={joinName} onChange={(e) => setJoinName(e.target.value)} placeholder="@channel یا https://t.me/+invite" />
             </Field>
             <Button variant="outline" disabled={busy || !joinName.trim()} onClick={() => run(async () => {
               const { data } = await api.post("/api/system/telegram-sessions/join", { username: joinName.trim() });

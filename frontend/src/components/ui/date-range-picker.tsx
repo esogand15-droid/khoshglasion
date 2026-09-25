@@ -250,7 +250,7 @@ export function DateRangePicker({ value, defaultValue = EMPTY, onChange, placeho
           </span>
         )}
       </button>
-      <FloatPortal open={open} mounted={mounted} style={style} theme={theme} panelRef={panel} role="dialog" className="fixed z-50 rounded-xl border border-border bg-card p-3 shadow-xl">
+      <FloatPortal open={open} mounted={mounted} style={style} theme={theme} panelRef={panel} role="dialog" className="fixed z-[var(--z-modal)] rounded-xl border border-border bg-card p-3 shadow-xl">
           {presets.length > 0 && (
             <div className="mb-3 flex flex-wrap gap-1.5">
               {presets.map((p) => (

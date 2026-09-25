@@ -12,7 +12,7 @@ import { FileUpload } from "@/components/ui/file-upload";
 import { PasswordInput } from "@/components/ui/password-input";
 import { Select } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
-import { Spinner } from "@/components/ui/spinner";
+import { AsyncPage } from "@/components/ui/page-state";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
@@ -47,6 +47,7 @@ export default function Settings() {
   const tab = ["run", "ai", "look", "session", "access", "problems"].includes(params.get("tab") || "") ? params.get("tab")! : "run";
 
   async function load() {
+    setLoadError("");
     try {
       const next = (await api.get("/api/system/settings")).data;
       setData(next);
@@ -68,13 +69,21 @@ export default function Settings() {
     }
   }
   if (!data) {
-    return loadError
-      ? <Page title="اتاق تنظیم"><Alert variant="destructive" title={loadError}><Button variant="outline" onClick={() => load()}>دوباره</Button></Alert></Page>
-      : <Spinner label="در حال بارگذاری تنظیم‌ها" />;
+    return (
+      <AsyncPage
+        kicker="کنترل زنده"
+        title="اتاق تنظیم"
+        description="تغییرها بدون ری‌استارت اعمال می‌شوند."
+        loading={!loadError}
+        error={loadError}
+        onRetry={load}
+        skeleton="form"
+      />
+    );
   }
 
   return (
-    <Page kicker="کنترل زنده" title="اتاق تنظیم">
+    <Page kicker="کنترل زنده" title="اتاق تنظیم" description="تغییرها بدون ری‌استارت اعمال می‌شوند.">
       {msg && <Alert>{msg}</Alert>}
       {!canEdit && <Alert>این نقش فقط می‌تواند تنظیم‌ها را ببیند.</Alert>}
       <Tabs value={tab} defaultValue="run" onValueChange={(value) => setParams({ tab: value })}>
@@ -179,7 +188,7 @@ export default function Settings() {
                       } finally {
                         setDetecting("");
                       }
-                    }}>{detecting === item.id ? <Spinner size="sm" label="در حال تشخیص" /> : "تشخیص مدل‌ها"}</Button>
+                    }} loading={detecting === item.id}>تشخیص مدل‌ها</Button>
                     {(preset?.key_url || detected?.key_url) && (
                       <a className="text-xs underline" href={preset?.key_url || detected?.key_url} target="_blank" rel="noreferrer">گرفتن کلید</a>
                     )}
@@ -187,7 +196,7 @@ export default function Settings() {
                   <p className="text-xs text-muted-foreground">{detected?.provider || preset?.label || item.provider || "ارائه‌دهنده بعد از انتخاب یا تشخیص"}{endpoint ? ` · ${endpoint}` : ""}</p>
                   {(preset?.hint || detected?.hint) && <p className="text-xs text-muted-foreground">{preset?.hint || detected?.hint}</p>}
                   {detected?.note && <p className="text-xs text-muted-foreground">{detected.note}</p>}
-                  {detected?.error && <p className="text-xs text-destructive">{detected.error}</p>}
+                  {detected?.error && <Alert variant="destructive">{detected.error}</Alert>}
                   {detected?.ok && <p className="text-xs text-muted-foreground">{detected.models.length} مدل چت از همین کلید{detected.truncated ? "؛ بقیه را دستی بنویس" : ""}. اگر شناسه موردنظرت در فهرست نیست، همان را در Model بنویس.</p>}
                   <Field label={`کلید API ${item.api_key_masked || ""}`}>
                     <PasswordInput disabled={!canEdit} placeholder={item.api_key_set ? "خالی = بدون تغییر" : "کلید این سرویس"} value={item.api_key || ""} onChange={(e) => setModels((rows) => rows?.map((row, rowIndex) => rowIndex === index ? { ...row, api_key: e.target.value } : row) || [])} />
@@ -226,7 +235,7 @@ export default function Settings() {
                   } finally {
                     setTesting(false);
                   }
-                }}>{testing ? <Spinner size="sm" label="در حال تست" /> : "تست زنجیره"}</Button>
+                }} loading={testing}>تست زنجیره</Button>
               </div>
               {aiTest && (
                 <Alert variant={aiTest.ok ? "success" : "destructive"} title={aiTest.ok ? `مدل جواب داد: ${aiTest.sample || "سلام"}` : aiTest.error}>

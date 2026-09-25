@@ -24,14 +24,18 @@ export interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElemen
   variant?: Variant;
   size?: Size;
   asChild?: boolean;
+  /** Action wait. Disables the button and shows one ring. Do not put a second spinner inside. */
+  loading?: boolean;
 }
 
-export function Button({ className, variant = "default", size = "md", type = "button", ...props }: ButtonProps) {
+export function Button({ className, variant = "default", size = "md", type = "button", loading, disabled, children, ...props }: ButtonProps) {
   return (
     <button
       type={type}
+      disabled={disabled || loading}
+      aria-busy={loading || undefined}
       className={cn(
-        "inline-flex items-center justify-center whitespace-nowrap font-semibold transition-all duration-200",
+        "inline-flex items-center justify-center whitespace-nowrap font-semibold transition-all duration-[var(--duration-normal)]",
         "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
         "disabled:pointer-events-none disabled:opacity-50 active:scale-[0.98]",
         "[&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0",
@@ -40,6 +44,9 @@ export function Button({ className, variant = "default", size = "md", type = "bu
         className,
       )}
       {...props}
-    />
+    >
+      {loading && <span aria-hidden className="inline-block size-3.5 shrink-0 animate-spin rounded-full border-2 border-current border-e-transparent" />}
+      {children}
+    </button>
   );
 }

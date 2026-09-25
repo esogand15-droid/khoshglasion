@@ -134,7 +134,7 @@ export function MultiSelect({
         <ChevronDown className={cn("ms-auto size-4 shrink-0 text-muted-foreground transition-transform", open && "rotate-180")} aria-hidden />
       </div>
 
-      <FloatPortal open={open} mounted={mounted} style={style} theme={theme} panelRef={panel} className="fixed z-50">
+      <FloatPortal open={open} mounted={mounted} style={style} theme={theme} panelRef={panel} className="fixed z-[var(--z-modal)]">
         <div className="overflow-hidden rounded-lg border border-border bg-popover text-sm shadow-lg">
           {searchable && (
             <div className="flex items-center gap-2 border-b border-border px-2.5">

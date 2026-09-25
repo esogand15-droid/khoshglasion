@@ -3,8 +3,12 @@ import { RefreshCw } from "lucide-react";
 import api from "../services/api";
 import { useAuth } from "../stores/auth";
 import { Page } from "../components/page";
+import { Alert } from "@/components/ui/alert";
+import { useConfirm } from "@/components/ui/alert-dialog";
+import { AsyncPage, LoadError } from "@/components/ui/page-state";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
 import { Dialog } from "@/components/ui/dialog";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Field, Input } from "@/components/ui/input";
@@ -33,13 +37,26 @@ export default function Channels() {
   const [form, setForm] = useState(EMPTY);
   const [msg, setMsg] = useState("");
   const [edit, setEdit] = useState<any>(null);
+  const [ready, setReady] = useState(false);
+  const [loadError, setLoadError] = useState("");
+  const [refreshing, setRefreshing] = useState(false);
+  const { ask, dialog } = useConfirm();
 
   async function load() {
-    const [channels, styleRows] = await Promise.all([api.get("/api/channels", { timeout: 12000 }), api.get("/api/styles", { timeout: 12000 })]);
-    setItems(channels.data);
-    setStyles(styleRows.data);
+    if (ready) setRefreshing(true);
+    try {
+      const [channels, styleRows] = await Promise.all([api.get("/api/channels", { timeout: 12000 }), api.get("/api/styles", { timeout: 12000 })]);
+      setItems(channels.data);
+      setStyles(styleRows.data);
+      setLoadError("");
+    } catch (error: any) {
+      setLoadError(error.response?.data?.detail || "کانال‌ها خوانده نشد");
+    } finally {
+      setReady(true);
+      setRefreshing(false);
+    }
   }
-  useEffect(() => { load().catch((error: any) => setMsg(error.response?.data?.detail || "کانال‌ها خوانده نشد")); }, []);
+  useEffect(() => { load(); }, []);
 
   async function add() {
     const chatId = Number(form.chat_id);
@@ -66,14 +83,28 @@ export default function Channels() {
     load();
   }
 
+  if (!ready) {
+    return (
+      <AsyncPage
+        kicker="پوشش کانال"
+        title="کانال‌ها"
+        description="اگر ربات ادمین کانال شود، کانال خودش ثبت می‌شود. Chat ID منفی است و با ‎-100 شروع می‌شود."
+        loading
+        skeleton="table"
+      />
+    );
+  }
+
   return (
     <Page
       kicker="پوشش کانال"
       title="کانال‌ها"
       description="اگر ربات ادمین کانال شود، کانال خودش ثبت می‌شود. Chat ID منفی است و با ‎-100 شروع می‌شود."
-      actions={<Button variant="outline" onClick={() => load()}><RefreshCw /> تازه‌سازی</Button>}
+      actions={<Button variant="outline" loading={refreshing} onClick={() => load()}><RefreshCw /> تازه‌سازی</Button>}
     >
-      <div className="rounded-2xl border border-border bg-card p-5">
+      {dialog}
+      {loadError && <LoadError title={loadError} onRetry={load} />}
+      <Card className="p-5">
         <div className="grid gap-3 md:grid-cols-3">
           <Field label="Chat ID" htmlFor="chat-id"><Input id="chat-id" dir="ltr" value={form.chat_id} onChange={(e) => setForm({ ...form, chat_id: e.target.value })} placeholder="-100…" /></Field>
           <Field label="عنوان" htmlFor="title"><Input id="title" value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} /></Field>
@@ -83,8 +114,8 @@ export default function Channels() {
           <Button variant="brand" disabled={!canEdit} onClick={add}>افزودن</Button>
           <Button variant="outline" disabled={!canEdit} onClick={async () => { if (!form.chat_id) return; await api.post("/api/channels/sync", { chat_id: Number(form.chat_id) }); load(); }}>خواندن از تلگرام</Button>
         </div>
-        {msg && <p className="mt-3 text-xs text-muted-foreground">{msg}</p>}
-      </div>
+        {msg && <Alert className="mt-3">{msg}</Alert>}
+      </Card>
 
       {items.length ? (
         <Table>
@@ -114,14 +145,14 @@ export default function Channels() {
                 <TableCell>
                   <div className="flex flex-wrap gap-2">
                     <Button size="sm" variant="outline" disabled={!canEdit} onClick={() => setEdit({ ...channel, ai_rewrite: channel.ai_rewrite ?? "" })}>تنظیم</Button>
-                    <Button size="sm" variant="destructive" disabled={!canEdit} onClick={async () => { if (confirm("کانال حذف شود؟")) { await api.delete(`/api/channels/${channel.id}`); load(); } }}>حذف</Button>
+                    <Button size="sm" variant="destructive" disabled={!canEdit} onClick={() => ask("کانال حذف شود؟", async () => { await api.delete(`/api/channels/${channel.id}`); load(); })}>حذف</Button>
                   </div>
                 </TableCell>
               </TableRow>
             ))}
           </TableBody>
         </Table>
-      ) : <EmptyState title="هنوز کانالی نیست" description="Chat ID را بالا وارد کن، یا ربات را ادمین کانال کن." />}
+      ) : loadError ? null : <EmptyState title="هنوز کانالی نیست" description="Chat ID را بالا وارد کن، یا ربات را ادمین کانال کن." />}
 
       <Dialog open={!!edit} onOpenChange={(open) => !open && setEdit(null)} size="lg" title={edit?.title || "تنظیم کانال"}>
         {edit && (

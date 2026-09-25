@@ -30,17 +30,36 @@ export function AlertDialog({ open, onOpenChange, title, description, confirmTex
         <>
           <Button
             variant={destructive ? "destructive" : "default"}
-            disabled={busy}
+            loading={busy}
             onClick={async () => {
               setBusy(true);
               try { await onConfirm(); onOpenChange(false); } finally { setBusy(false); }
             }}
           >
-            {busy ? "لطفاً صبر کنید…" : confirmText}
+            {confirmText}
           </Button>
-          <Button variant="outline" data-autofocus onClick={() => onOpenChange(false)}>{cancelText}</Button>
+          <Button variant="outline" data-autofocus disabled={busy} onClick={() => onOpenChange(false)}>{cancelText}</Button>
         </>
       }
     />
   );
+}
+
+/** One confirm dialog for destructive page actions. Render `dialog` once. */
+export function useConfirm() {
+  const [pending, setPending] = React.useState<{ title: string; run: () => void | Promise<void> } | null>(null);
+  function ask(title: string, run: () => void | Promise<void>) {
+    setPending({ title, run });
+  }
+  const dialog = (
+    <AlertDialog
+      open={pending !== null}
+      onOpenChange={(open) => { if (!open) setPending(null); }}
+      title={pending?.title || "تأیید"}
+      confirmText="حذف"
+      destructive
+      onConfirm={() => pending?.run()}
+    />
+  );
+  return { ask, dialog };
 }
