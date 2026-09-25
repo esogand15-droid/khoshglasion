@@ -9,11 +9,19 @@ from backend.app.formatting.engine import format_message
 LAYOUTS = {"list", "scatter", "closing", "title", "quiet"}
 
 
-def prepare_publish_payload(body: str, category: str | None, layout: str | None, mappings: list | None) -> dict:
+def prepare_publish_payload(
+    body: str,
+    category: str | None,
+    layout: str | None,
+    mappings: list | None,
+    *,
+    is_caption: bool = False,
+) -> dict:
     chosen = layout if layout in LAYOUTS else "list"
     quiet = chosen == "quiet"
     result = format_message(
         body or "",
+        is_caption=is_caption,
         emoji_mappings=mappings or [],
         enable_emoji=not quiet,
         header_enabled=False,

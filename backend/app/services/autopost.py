@@ -13,11 +13,11 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.content.pipeline import extra_long_numbers, extract_facts, invented_quotes
-from backend.app.content.prompts import FACT_LOCK, LEGACY_PROMPTS, MODE_PROMPT, PROMPTS, RETIRED_PROMPTS, STYLE_LOCK, WRITER_STAGES
+from backend.app.content.intake import copied_whole, rewrite_plan
+from backend.app.content.prompts import FACT_LOCK, LEGACY_PROMPTS, MODE_PROMPT, PROMPTS, RETIRED_PROMPTS, STRUCTURE_LOCK, STYLE_LOCK, WRITER_STAGES
 from backend.app.formatting.editor import analyze_post
 from backend.app.formatting.textutil import missing_long_numbers
 from backend.app.models.automation import AutomationConfig, DraftPost, HashtagRule, NewsSource, PromptVersion, PublishSlot
-from backend.app.services.ai import complete_text
 from backend.app.services.prompts import wrap_post
 
 logger = logging.getLogger(__name__)
@@ -70,7 +70,13 @@ def too_verbatim(source: str, draft: str) -> bool:
     return False
 
 
-def accept_draft(source_blob: str, draft: str | None) -> tuple[str | None, str]:
+def accept_draft(
+    source_blob: str,
+    draft: str | None,
+    *,
+    verbatim_source: str | None = None,
+    plan: str = "summarize",
+) -> tuple[str | None, str]:
     cleaned = (draft or "").strip()
     if not cleaned or cleaned.upper() == "SKIP":
         return None, "skip"
@@ -82,7 +88,11 @@ def accept_draft(source_blob: str, draft: str | None) -> tuple[str | None, str]:
         return None, "invented_numbers"
     if invented_quotes(source_blob, cleaned):
         return None, "invented_quote"
-    if too_verbatim(source_blob, cleaned):
+    original = verbatim_source if verbatim_source is not None else source_blob
+    if plan == "preserve":
+        if copied_whole(original, cleaned):
+            return None, "verbatim"
+    elif too_verbatim(original, cleaned):
         return None, "verbatim"
     return cleaned, "ok"
 
@@ -191,6 +201,7 @@ async def compose_prompt(db: AsyncSession, name: str) -> str:
             parts.append("دستورهای اضافهٔ پنل:\n" + "\n".join(f"- {item}" for item in extras))
         parts.append(STYLE_LOCK)
         parts.append(FACT_LOCK)
+        parts.append(STRUCTURE_LOCK)
     return "\n\n".join(part for part in parts if part)
 
 
@@ -232,7 +243,11 @@ async def draft_from_source(
     system_prompt: str | None = None,
     style: str | None = None,
     style_card: str | None = None,
+    plan: str | None = None,
+    image_note: str | None = None,
+    trace: dict | None = None,
 ) -> tuple[str | None, str, str]:
+    from backend.app.services.ai import call_models
     from backend.app.services.finetune import classify_style, folder_category, writer_context
 
     decision = analyze_post(source_text)
@@ -241,23 +256,33 @@ async def draft_from_source(
     if runtime is None or not runtime.ai_ready:
         return None, category or decision.category, "not_ready"
     prompt_name = MODE_PROMPT.get(mode, "generator")
-    facts = extract_facts(source_text)
+    chosen_plan = plan or rewrite_plan(source_text)
+    facts = extract_facts(source_text + ("\n" + image_note if image_note else ""))
     openings = " | ".join(item for item in (avoid or []) if item) or "هیچ"
-    raw = await complete_text(runtime, [
+    picture = image_note.strip() if image_note else "عکسی به نویسنده داده نشده"
+    result = await call_models(runtime, [
         {"role": "system", "content": system_prompt or PROMPTS[prompt_name]},
         {
             "role": "user",
             "content": (
                 f"{writer_context(style_name, style_card)}\n"
+                f"حالت: {chosen_plan}\n"
                 f"زاویه: {template_hint or 'طبیعی'}\n"
                 f"شروع‌های اخیر که نباید تکرار شوند: {openings}\n"
-                f"عددهای مجاز: {', '.join(facts['numbers']) or 'هیچ'}\n"
+                f"عددهای مجاز، از متن و از توضیح عکس: {', '.join(facts['numbers']) or 'هیچ'}\n"
+                f"توضیح عکس، فقط اگر واقعیت تازه‌ای دارد در یک خط بیاور: {picture}\n"
                 f"منبع: {source_label}\n"
                 f"{wrap_post(source_text[:1800])}"
             ),
         },
     ])
-    accepted, guard = accept_draft(source_text, raw)
+    if trace is not None:
+        trace["writer_model"] = result.get("model") or ""
+        trace["writer_provider"] = result.get("provider") or ""
+        trace["rewrite"] = chosen_plan
+    raw = result.get("text")
+    fact_source = source_text + ("\n" + image_note if image_note else "")
+    accepted, guard = accept_draft(fact_source, raw, verbatim_source=source_text, plan=chosen_plan)
     return (accepted, category, "ok") if accepted else (None, category, guard)
 
 

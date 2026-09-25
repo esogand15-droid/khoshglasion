@@ -243,6 +243,28 @@ async def send_via_user(chat_id: int, text: str, entities: list[dict] | None = N
         return {"ok": False, "error": type(exc).__name__, "method": "user_session"}
 
 
+async def send_photo_via_user(chat_id: int, caption: str, entities: list[dict] | None, photo_path: str) -> dict:
+    """Send the source photo with a caption. Premium emoji stays on the caption, never as unicode."""
+    broken = _reject_broken_emoji(caption, entities)
+    if broken:
+        return {"ok": False, "error": broken, "method": "user_session", "emoji_rejected": True}
+    client = await get_user_client()
+    if client is None:
+        return {"ok": False, "error": "user_session_not_configured"}
+    try:
+        formatting = _entities(caption, None, entities) if entities else None
+        sent = await client.send_file(
+            int(chat_id),
+            photo_path,
+            caption=(caption or "")[:1024],
+            formatting_entities=formatting or None,
+        )
+        return {"ok": True, "message_id": int(sent.id), "method": "user_session"}
+    except Exception as exc:
+        logger.warning("User-session photo send failed: %s", type(exc).__name__)
+        return {"ok": False, "error": type(exc).__name__, "method": "user_session"}
+
+
 async def user_session_status() -> dict:
     api_id, _api_hash, _session = current_credentials()
     configured = session_configured()

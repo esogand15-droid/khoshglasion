@@ -228,37 +228,74 @@ async def _open_source(client, username: str, *, access_hash: int | None = None,
     return await _entity(client, username)
 
 
-async def _messages(client, entity, username: str, *, min_id: int, limit: int, title: str | None = None):
+async def _save_photo(client, message, username: str) -> str | None:
+    if not getattr(message, "photo", None):
+        return None
+    try:
+        raw = await asyncio.wait_for(client.download_media(message, bytes), timeout=8)
+    except Exception as exc:
+        logger.info("photo download skipped: %s", type(exc).__name__)
+        return None
+    if not isinstance(raw, (bytes, bytearray)):
+        return None
+    from backend.app.content.intake import save_source_photo
+
+    return save_source_photo(f"{username}:{int(message.id)}", bytes(raw))
+
+
+async def _messages(client, entity, username: str, *, min_id: int, limit: int, title: str | None = None, recent: bool = False):
     from backend.app.telegram.accounts import news_may_join
 
     label = title or getattr(entity, "title", None) or username
 
     async def collect():
         found: list[dict] = []
+        albums: dict[int, str] = {}
         scanned = 0
-        async for message in client.iter_messages(entity, limit=limit, min_id=min_id or 0, reverse=True):
+        saved = 0
+        kwargs = {"limit": limit}
+        if not recent:
+            kwargs["min_id"] = min_id or 0
+            kwargs["reverse"] = True
+        async for message in client.iter_messages(entity, **kwargs):
             scanned += 1
             text = (getattr(message, "message", None) or getattr(message, "text", None) or "").strip()
+            photo = bool(getattr(message, "photo", None))
             has_media = bool(
-                getattr(message, "photo", None)
+                photo
                 or getattr(message, "video", None)
                 or getattr(message, "document", None)
                 or getattr(message, "grouped_id", None)
             )
+            photo_path = None
+            if photo and saved < 3:
+                photo_path = await _save_photo(client, message, username)
+                if photo_path:
+                    saved += 1
+                    grouped = getattr(message, "grouped_id", None)
+                    if grouped:
+                        albums[int(grouped)] = photo_path
             found.append({
                 "id": int(message.id),
                 "text": text[:1800],
                 "title": label,
                 "date": getattr(message, "date", None),
                 "has_media": has_media,
+                "photo_path": photo_path,
+                "grouped_id": getattr(message, "grouped_id", None),
                 "usable": len(text) >= 40 or (has_media and len(text) >= 20),
             })
+        for item in found:
+            grouped = item.get("grouped_id")
+            if not item.get("photo_path") and grouped and int(grouped) in albums:
+                item["photo_path"] = albums[int(grouped)]
+                item["has_media"] = True
         found.sort(key=lambda item: item["id"])
         return found, scanned
 
     try:
         found, scanned = await collect()
-        return found, None, scanned >= limit
+        return found, None, (not recent and scanned >= limit)
     except Exception as exc:
         logger.info("source read failed: %s", type(exc).__name__)
         if _public_name(username) and news_may_join():
@@ -266,7 +303,7 @@ async def _messages(client, entity, username: str, *, min_id: int, limit: int, t
             if joined is None:
                 try:
                     found, scanned = await collect()
-                    return found, None, scanned >= limit
+                    return found, None, (not recent and scanned >= limit)
                 except Exception as nested:
                     logger.info("source reread failed: %s", type(nested).__name__)
         if not _public_name(username):
@@ -293,6 +330,7 @@ async def read_channel_posts(
     invite_hash: str | None = None,
     updates: dict | None = None,
     title: str | None = None,
+    recent: bool = False,
 ) -> tuple[list[dict], str | None, bool]:
     try:
         return await asyncio.wait_for(
@@ -304,6 +342,7 @@ async def read_channel_posts(
                 invite_hash=invite_hash,
                 updates=updates,
                 title=title,
+                recent=recent,
             ),
             timeout=25,
         )
@@ -321,6 +360,7 @@ async def _read_channel_posts(
     invite_hash: str | None = None,
     updates: dict | None = None,
     title: str | None = None,
+    recent: bool = False,
 ) -> tuple[list[dict], str | None, bool]:
     client = await _news_client()
     if client is None:
@@ -334,8 +374,9 @@ async def _read_channel_posts(
     )
     if error or entity is None:
         return [], error or "این کانال باز نشد", False
+    page_limit = 12 if recent else limit
     found, read_error, truncated = await _messages(
-        client, entity, username, min_id=min_id, limit=limit, title=title,
+        client, entity, username, min_id=0 if recent else min_id, limit=page_limit, title=title, recent=recent,
     )
     if not read_error:
         return found, None, truncated
@@ -345,9 +386,10 @@ async def _read_channel_posts(
             client,
             resolved["chat"],
             resolved["username"],
-            min_id=min_id,
-            limit=limit,
+            min_id=0 if recent else min_id,
+            limit=12 if recent else limit,
             title=resolved.get("title") or title,
+            recent=recent,
         )
     return [], resolve_error or read_error, truncated
 

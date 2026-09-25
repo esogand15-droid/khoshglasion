@@ -39,7 +39,8 @@ from backend.app.models.automation import (
     NewsSource,
     PublishSlot,
 )
-from backend.app.services.ai import complete_text
+from backend.app.content.intake import layout_for, photo_of, rewrite_plan, safe_photo_path
+from backend.app.services.ai import complete_text, describe_image
 from backend.app.services.finetune import (
     angle_label,
     classify_style,
@@ -97,6 +98,14 @@ async def alert_admin(db: AsyncSession, key: str, text: str, runtime=None) -> No
         logger.info("admin alert failed")
 
 
+SKIP_FA = {
+    "DUPLICATE": "تکراری است",
+    "ADVERTISEMENT": "تبلیغ کانال دیگر است و برای پست استفاده نمی‌شود",
+    "LOW_VALUE": "برای پست کانال مناسب نیست",
+    "OUTDATED": "کهنه است",
+}
+
+
 def _remember_skip(db: AsyncSession, source: NewsSource, item: dict, reason: str, config) -> None:
     db.add(DraftPost(
         status="skipped",
@@ -106,7 +115,7 @@ def _remember_skip(db: AsyncSession, source: NewsSource, item: dict, reason: str
         source_label=source.title or source.username,
         source_key=f"{source.username}:{int(item['id'])}",
         content_hash=content_hash(item.get("text") or "") or None,
-        error=reason[:120],
+        error=(SKIP_FA.get(reason) or reason)[:120],
         confidence="low",
         analysis_json=json.dumps({"value": reason, "has_media": bool(item.get("has_media"))}, ensure_ascii=False),
         target_chat_id=config.target_chat_id,
@@ -240,6 +249,9 @@ async def collect_sources(db: AsyncSession, *, force: bool = False) -> dict:
     recent_emoji = [row.emoji_signature for row in recent_rows if row.emoji_signature]
     created = 0
     filed = 0
+    photos = 0
+    ads = 0
+    used_recent = False
     style_card = await load_card(db)
     errors: list[str] = []
     truncated_any = False
@@ -271,6 +283,24 @@ async def collect_sources(db: AsyncSession, *, force: bool = False) -> dict:
             source.access_hash = int(updates["access_hash"])
         if updates.get("title"):
             source.title = updates["title"]
+        if not error and not posts and (force or source.last_collect_at is None) and int(source.last_message_id or 0) > 0:
+            try:
+                posts, error, truncated = await asyncio.wait_for(
+                    read_channel_posts(
+                        source.username,
+                        min_id=0,
+                        access_hash=getattr(source, "access_hash", None),
+                        invite_hash=getattr(source, "invite_hash", None),
+                        updates=updates,
+                        title=source.title,
+                        recent=True,
+                    ),
+                    timeout=30,
+                )
+            except asyncio.TimeoutError:
+                posts, error, truncated = [], "خواندن پست‌های اخیر این منبع بیش از حد طول کشید", False
+            used_recent = True
+            truncated = False
         if error:
             source.last_error = error[:300]
             errors.append(error)
@@ -309,6 +339,8 @@ async def collect_sources(db: AsyncSession, *, force: bool = False) -> dict:
                     text=item["text"],
                 )
             if judgment["value"] in {"LOW_VALUE", "ADVERTISEMENT", "OUTDATED"} and not keep_fun(item["text"], judgment, style):
+                if judgment["value"] == "ADVERTISEMENT":
+                    ads += 1
                 _remember_skip(db, source, item, judgment["value"], config)
                 handled.add(message_id)
                 await write_log(db, "collect_skip", f"{source.username}:{message_id} {judgment['value']}")
@@ -320,15 +352,34 @@ async def collect_sources(db: AsyncSession, *, force: bool = False) -> dict:
                 await alert_admin(db, "ai-not-ready", "هوش مصنوعی آماده نیست. جمع‌آوری روی همین پیام مانده.", runtime)
                 break
             analysis = await _analyze(db, item["text"], item.get("date"), runtime)
-            analysis["has_media"] = bool(item.get("has_media"))
+            photo_path = item.get("photo_path") if safe_photo_path(item.get("photo_path")) else None
+            image_note = ""
+            if photo_path:
+                photos += 1
+                try:
+                    raw_photo = safe_photo_path(photo_path).read_bytes()
+                    seen = await describe_image(runtime, raw_photo, item["text"])
+                except Exception:
+                    logger.info("image describe skipped")
+                    seen = {"text": None, "model": "", "provider": ""}
+                image_note = (seen.get("text") or "").strip()
+                analysis["photo_path"] = str(safe_photo_path(photo_path))
+                analysis["vision_model"] = seen.get("model") or ""
+                analysis["vision_provider"] = seen.get("provider") or ""
+            analysis["has_media"] = bool(item.get("has_media") or photo_path)
+            analysis["image_note"] = image_note
+            plan = rewrite_plan(item["text"])
+            analysis["rewrite"] = plan
             analysis["style"] = style
             analysis["style_label"] = folder_label(style)
             category = source.category_hint or folder_category(style)
             decision = analyze_post(item["text"])
             choice = choose_template(decision, channel_style=None, recent_emoji_styles=recent_emoji)
+            layout = layout_for(category, style, plan)
             openings = [opening_signature(body) for body in recent[-6:]]
             style_card = await load_card(db)
             prompt = await compose_prompt(db, "generator")
+            trace: dict = {}
             body, _category, reason = await draft_from_source(
                 item["text"],
                 item.get("title") or source.username,
@@ -339,7 +390,13 @@ async def collect_sources(db: AsyncSession, *, force: bool = False) -> dict:
                 system_prompt=prompt,
                 style=style,
                 style_card=style_card,
+                plan=plan,
+                image_note=image_note or None,
+                trace=trace,
             )
+            analysis["writer_model"] = trace.get("writer_model") or ""
+            analysis["writer_provider"] = trace.get("writer_provider") or ""
+            analysis["layout"] = layout
             similar = False
             if body and too_similar(body, recent):
                 fresh_prompt = await compose_prompt(db, "regenerator_fresh")
@@ -353,6 +410,8 @@ async def collect_sources(db: AsyncSession, *, force: bool = False) -> dict:
                     system_prompt=fresh_prompt,
                     style=style,
                     style_card=style_card,
+                    plan=plan,
+                    image_note=image_note or None,
                 )
                 if alt and not too_similar(alt, recent):
                     body = alt
@@ -382,7 +441,7 @@ async def collect_sources(db: AsyncSession, *, force: bool = False) -> dict:
             if credit and credit not in body:
                 body = f"{body.strip()}\n\n{credit}"
             body = append_hashtags(body, tags)
-            validated = await _validate(db, item["text"], body, runtime)
+            validated = await _validate(db, item["text"] + (f"\n{image_note}" if image_note else ""), body, runtime)
             auto = (
                 bool(config.auto_publish)
                 and not getattr(config, "paused", False)
@@ -402,7 +461,7 @@ async def collect_sources(db: AsyncSession, *, force: bool = False) -> dict:
                 hashtags=" ".join(f"#{tag}" for tag in tags),
                 template_id=f"{choice.template_id}.{style}",
                 style_id=choice.style_id,
-                emoji_signature=choice.emoji_style_id,
+                emoji_signature=layout,
                 confidence=analysis.get("confidence"),
                 importance=analysis.get("importance"),
                 scheduled_at=when.astimezone(timezone.utc) if when else None,
@@ -440,7 +499,15 @@ async def collect_sources(db: AsyncSession, *, force: bool = False) -> dict:
         style_card = await load_card(db)
     await write_log(db, "collect_done", f"created={created} filed={filed}")
     await db.flush()
-    return {"created": created, "errors": errors, "truncated": truncated_any, "filed": filed}
+    return {
+        "created": created,
+        "errors": errors,
+        "truncated": truncated_any,
+        "filed": filed,
+        "photos": photos,
+        "ads": ads,
+        "recent": used_recent,
+    }
 
 
 async def published_today(db: AsyncSession, now: datetime | None = None) -> dict[str, int]:
@@ -461,11 +528,24 @@ async def deliver_draft(db: AsyncSession, draft: DraftPost, chat_id: int) -> tup
     if not (draft.body or "").strip():
         return None, "متن پیش‌نویس خالی است"
     maps = await load_emoji_maps(db)
-    payload = prepare_publish_payload(draft.body, draft.category, draft.emoji_signature, maps)
+    photo = safe_photo_path(photo_of(draft.analysis_json))
+    payload = prepare_publish_payload(
+        draft.body,
+        draft.category,
+        draft.emoji_signature,
+        maps,
+        is_caption=photo is not None,
+    )
     await db.commit()
     try:
         return await asyncio.wait_for(
-            publish_rendered(chat_id, payload["text"], payload["html_text"], payload["entities"]),
+            publish_rendered(
+                chat_id,
+                payload["text"],
+                payload["html_text"],
+                payload["entities"],
+                str(photo) if photo else None,
+            ),
             timeout=25,
         )
     except asyncio.TimeoutError:

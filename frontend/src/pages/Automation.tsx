@@ -170,13 +170,15 @@ export default function Automation() {
     <Page
       kicker="اتوماسیون"
       title="پست خودکار"
-      description="منبع خوانده می‌شود، در پوشهٔ سبک طبقه می‌شود، و پست با لحن کانال‌های کنکور ساخته می‌شود."
+      description="آخرین پست کانال خوانده می‌شود. تبلیغ کنار می‌رود. خبر کوتاه خلاصه نمی‌شود. اگر عکس داشته باشد، همان عکس با کپشن می‌رود."
       actions={<Button variant="brand" disabled={!canEdit} loading={busy} onClick={async () => {
         setBusy(true);
         try {
           const { data: result } = await api.post("/api/automation/collect");
           const filed = Number(result.filed || 0);
-          setMsg(result.error || (result.skipped === "disabled" ? "اتوماسیون خاموش است" : result.skipped === "paused" ? "صف متوقف است" : `پیش‌نویس تازه: ${fa(result.created ?? 0)}${filed ? ` · پوشه فاین‌تیون: ${fa(filed)}` : ""}`));
+          const photos = Number(result.photos || 0);
+          const ads = Number(result.ads || 0);
+          setMsg(result.error || (result.skipped === "disabled" ? "اتوماسیون خاموش است" : result.skipped === "paused" ? "صف متوقف است" : `پیش‌نویس تازه: ${fa(result.created ?? 0)}${photos ? ` · عکس: ${fa(photos)}` : ""}${ads ? ` · تبلیغ رد شد: ${fa(ads)}` : ""}${filed ? ` · پوشه فاین‌تیون: ${fa(filed)}` : ""}${result.recent ? " · پست‌های اخیر کانال خوانده شد" : ""}`));
           await load();
         } catch (error: any) { setMsg(error.response?.data?.detail || "جمع‌آوری انجام نشد"); }
         finally { setBusy(false); }
@@ -387,18 +389,20 @@ export default function Automation() {
                     <article key={draft.id} className="space-y-3 rounded-2xl border border-border p-4">
                       <div className="flex flex-wrap items-center gap-2">
                         <Badge variant={draft.status === "failed" ? "destructive" : draft.status === "published" ? "success" : "secondary"}>{STATUS[draft.status] || draft.status}</Badge>
-                        <span className="text-xs text-muted-foreground">{draft.source_label} · {draft.style_label || categoryLabel(draft.category)} · {draft.confidence || "—"} {draft.has_media ? "· کپشن" : ""}</span>
+                        <span className="text-xs text-muted-foreground">{draft.source_label} · {draft.style_label || categoryLabel(draft.category)} · {draft.confidence || "—"} {draft.has_photo ? "· همراه عکس" : draft.has_media ? "· کپشن" : ""} {draft.rewrite === "preserve" ? "· بدون خلاصه" : draft.rewrite === "summarize" ? "· خلاصه" : ""}</span>
                         {draft.hashtags && <span className="text-xs text-muted-foreground" dir="ltr">{draft.hashtags}</span>}
                       </div>
                       {edit?.id === draft.id ? (
                         <Textarea value={edit.body} onChange={(event) => setEdit({ ...edit, body: event.target.value })} />
-                      ) : <p className="whitespace-pre-wrap text-sm">{draft.body || "متن تولید نشده؛ منبع پایین را ببین."}</p>}
+                      ) : <p className="whitespace-pre-wrap text-sm">{draft.body || draft.error || "متن تولید نشده؛ منبع پایین را ببین."}</p>}
                       {draft.source_content && (
                         <details className="text-xs text-muted-foreground">
                           <summary>متن منبع، جدا از پیش‌نویس</summary>
                           <p className="mt-2 whitespace-pre-wrap">{draft.source_content}</p>
                         </details>
                       )}
+                      {draft.image_note && <p className="text-xs text-muted-foreground">از روی عکس: {draft.image_note}</p>}
+                      {(draft.writer_model || draft.vision_model) && <p className="text-xs text-muted-foreground">مدل نویسنده: {draft.writer_model || "—"}{draft.vision_model ? ` · مدل عکس: ${draft.vision_model}` : ""}</p>}
                       {draft.analysis_summary && <p className="text-xs text-muted-foreground">تحلیل: {draft.analysis_summary}</p>}
                       {draft.versions?.length ? (
                         <details className="text-xs text-muted-foreground">
@@ -422,9 +426,9 @@ export default function Automation() {
                         <Button size="sm" variant="outline" disabled={!canEdit} onClick={() => setEdit(edit?.id === draft.id ? null : { ...draft })}>{edit?.id === draft.id ? "بستن" : "ویرایش"}</Button>
                         {edit?.id === draft.id && <Button size="sm" variant="brand" onClick={() => run(async () => { await api.patch(`/api/automation/drafts/${draft.id}`, { body: edit.body }); setEdit(null); setMsg("متن ذخیره شد"); await load(); }, "متن ذخیره نشد")}>ذخیره متن</Button>}
                         <Button size="sm" variant="outline" onClick={() => run(async () => { setPreview((await api.get(`/api/automation/drafts/${draft.id}/preview`)).data); }, "پیش‌نمایش نشد")}>خروجی ارسال</Button>
-                        {canPublish && <Button size="sm" variant="outline" onClick={() => run(async () => { await api.post(`/api/automation/drafts/${draft.id}/test-send`); setMsg("پیش‌نمایش به خودت رفت، نه کانال"); }, "ارسال آزمایشی نشد")}>بفرست به خودم</Button>}
-                        {canPublish && <Button size="sm" variant="outline" onClick={() => run(async () => { await api.post(`/api/automation/drafts/${draft.id}/approve`); setMsg("برای ساعت بعدی زمان‌بندی شد"); await load(); }, "تأیید نشد")}>تأیید</Button>}
-                        {canPublish && <Button size="sm" variant="brand" onClick={() => run(async () => { await api.post(`/api/automation/drafts/${draft.id}/publish`); setMsg("منتشر شد"); await load(); }, "منتشر نشد")}>انتشار الان</Button>}
+                        {canPublish && draft.body && draft.status !== "skipped" && <Button size="sm" variant="outline" onClick={() => run(async () => { await api.post(`/api/automation/drafts/${draft.id}/test-send`); setMsg("پیش‌نمایش به خودت رفت، نه کانال"); }, "ارسال آزمایشی نشد")}>بفرست به خودم</Button>}
+                        {canPublish && draft.body && draft.status !== "skipped" && <Button size="sm" variant="outline" onClick={() => run(async () => { await api.post(`/api/automation/drafts/${draft.id}/approve`); setMsg("برای ساعت بعدی زمان‌بندی شد"); await load(); }, "تأیید نشد")}>تأیید</Button>}
+                        {canPublish && draft.body && draft.status !== "skipped" && <Button size="sm" variant="brand" onClick={() => run(async () => { await api.post(`/api/automation/drafts/${draft.id}/publish`); setMsg("منتشر شد"); await load(); }, "منتشر نشد")}>انتشار الان</Button>}
                         {canPublish && draft.published_url && <a className="self-center text-xs underline" href={draft.published_url} target="_blank" rel="noreferrer">پیام کانال</a>}
                         {canPublish && draft.message_id && <Button size="sm" variant="destructive" onClick={() => run(async () => { await api.post(`/api/automation/drafts/${draft.id}/unsend`); setMsg("از کانال حذف شد"); await load(); }, "حذف نشد")}>پس بگیر</Button>}
                         {canEdit && <Button size="sm" variant="outline" onClick={() => run(async () => { setProposal({ id: draft.id, mode: "fresh", ...(await api.post(`/api/automation/drafts/${draft.id}/regenerate?mode=fresh`)).data }); }, "بازنویسی نشد")}>شروع تازه</Button>}

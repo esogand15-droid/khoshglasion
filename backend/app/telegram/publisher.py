@@ -30,13 +30,26 @@ async def publish_rendered(
     text: str,
     html_text: str | None = None,
     entities: list[dict] | None = None,
+    photo_path: str | None = None,
 ) -> tuple[int | None, str | None]:
+    from backend.app.content.intake import safe_photo_path
     from backend.app.telegram.bot import get_bot
-    from backend.app.telegram.user_editor import send_via_user
+    from backend.app.telegram.user_editor import send_photo_via_user, send_via_user
 
-    body = (text or "")[:4000]
+    body = (text or "")[:1024 if photo_path else 4000]
     if not body.strip():
         return None, "متن پیش‌نویس خالی است"
+    photo = safe_photo_path(photo_path) if photo_path else None
+    if photo_path and photo is None:
+        return None, "عکس منبع پیدا نشد"
+    if photo is not None and requires_premium_send(entities, html_text):
+        sent = await send_photo_via_user(chat_id, body, entities, str(photo))
+        if sent.get("ok"):
+            return int(sent["message_id"]), None
+        logger.info("premium photo send failed; unicode fallback removed: %s", sent.get("error"))
+        return None, str(sent.get("error") or "premium_send_failed")
+    if photo is not None:
+        return await _send_photo(chat_id, body, html_text, str(photo))
     if requires_premium_send(entities, html_text):
         sent = await send_via_user(chat_id, body, entities)
         if sent.get("ok"):
@@ -61,6 +74,27 @@ async def publish_rendered(
     if sent.get("ok"):
         return int(sent["message_id"]), None
     return None, "نه ربات و نه نشست پرمیوم نتوانستند در کانال بنویسند"
+
+
+async def _send_photo(chat_id: int, caption: str, html_text: str | None, photo_path: str) -> tuple[int | None, str | None]:
+    from aiogram.types import FSInputFile
+
+    from backend.app.telegram.bot import get_bot
+    from backend.app.telegram.edit import strip_custom_emoji_html
+    from backend.app.telegram.user_editor import send_photo_via_user
+
+    bot = get_bot()
+    plain = strip_custom_emoji_html(html_text) or caption
+    if bot is not None:
+        try:
+            sent = await bot.send_photo(chat_id, FSInputFile(photo_path), caption=plain[:1024])
+            return int(sent.message_id), None
+        except Exception as exc:
+            logger.info("bot photo publish failed: %s", type(exc).__name__)
+    sent = await send_photo_via_user(chat_id, caption, None, photo_path)
+    if sent.get("ok"):
+        return int(sent["message_id"]), None
+    return None, "عکس با کپشن ارسال نشد"
 
 
 async def delete_published(chat_id: int, message_id: int) -> str | None:

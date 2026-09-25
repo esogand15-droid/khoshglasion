@@ -152,7 +152,9 @@ def judge_value(text: str, *, created_at: datetime | None = None, now: datetime 
     reasons: list[str] = []
     if len(raw) < 40:
         return {"value": "LOW_VALUE", "importance": "low", "confidence": "low", "reasons": ["too_short"]}
-    if any(word in raw for word in AD_WORDS):
+    from backend.app.content.intake import is_advertisement
+
+    if is_advertisement(raw) or any(word in raw for word in AD_WORDS):
         reasons.append("advertisement")
         return {"value": "ADVERTISEMENT", "importance": "low", "confidence": "low", "reasons": reasons}
     if any(word in raw for word in LOW_VALUE):

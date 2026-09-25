@@ -205,6 +205,37 @@ def parse_layout_token(raw: str | None) -> str | None:
     return token if token in LAYOUTS else None
 
 
+async def describe_image(runtime: RuntimeState, image: bytes, caption: str) -> dict:
+    """Ask the model list what a source photo shows. A model that cannot see it is skipped."""
+    if runtime is None or not runtime.ai_ready or not image or len(image) > 1_500_000:
+        return {"text": None, "model": "", "provider": ""}
+    from backend.app.content.intake import image_mime
+    import base64
+
+    mime = image_mime(image)
+    encoded = base64.b64encode(image).decode("ascii")
+    result = await call_models(runtime, [
+        {
+            "role": "system",
+            "content": (
+                "تو فقط همین عکس را می‌بینی. حداکثر دو خط فارسی: عکس چیست و چه متنی در آن خوانا است. "
+                "عدد و اسم را فقط اگر در عکس یا کپشن هست بگو. اگر عکس تزئینی یا نامفهوم است فقط SKIP بنویس."
+            ),
+        },
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": f"کپشن منبع:\n{wrap_post((caption or '')[:800])}"},
+                {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{encoded}"}},
+            ],
+        },
+    ])
+    text = (result.get("text") or "").strip()
+    if not text or text.upper() == "SKIP" or text.upper().startswith("SKIP"):
+        text = None
+    return {"text": text, "model": result.get("model") or "", "provider": result.get("provider") or ""}
+
+
 async def complete_text(runtime: RuntimeState, messages: list[dict]) -> str | None:
     if not runtime.ai_ready:
         return None

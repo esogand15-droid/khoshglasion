@@ -105,6 +105,11 @@ def dump_draft(row: DraftPost, username: str | None = None) -> dict:
         "source_url": row.source_url,
         "published_url": channel_message_url(row.target_chat_id, row.message_id, username),
         "has_media": bool(_analysis_flag(row.analysis_json, "has_media")),
+        "has_photo": bool(_analysis_flag(row.analysis_json, "photo_path")),
+        "image_note": _analysis_flag(row.analysis_json, "image_note") or "",
+        "rewrite": _analysis_flag(row.analysis_json, "rewrite") or "",
+        "writer_model": _analysis_flag(row.analysis_json, "writer_model") or "",
+        "vision_model": _analysis_flag(row.analysis_json, "vision_model") or "",
         "versions": _versions(row.versions_json),
         "created_at": _iso(row.created_at),
     }
@@ -468,9 +473,12 @@ async def preview_draft(draft_id: str, db: AsyncSession = Depends(get_db), admin
     row = await _draft(db, draft_id)
     if len((row.body or "").strip()) < 8:
         raise HTTPException(status_code=400, detail="متن پیش‌نویس برای پیش‌نمایش کافی نیست")
+    from backend.app.content.intake import photo_of
+
     maps = await load_emoji_maps(db)
-    payload = prepare_publish_payload(row.body, row.category, row.emoji_signature, maps)
-    return {"text": payload["text"], "html_text": payload["html_text"], "emoji_ids": payload["emoji_ids"]}
+    photo = photo_of(row.analysis_json)
+    payload = prepare_publish_payload(row.body, row.category, row.emoji_signature, maps, is_caption=photo is not None)
+    return {"text": payload["text"], "html_text": payload["html_text"], "emoji_ids": payload["emoji_ids"], "has_photo": photo is not None}
 
 
 @router.post("/drafts/{draft_id}/test-send")
@@ -481,12 +489,15 @@ async def test_send_draft(draft_id: str, request: Request, db: AsyncSession = De
     chat_id = runtime.notify_id or admin.telegram_id
     if not chat_id:
         raise HTTPException(status_code=400, detail="اول چت اعلان یا آیدی تلگرام ادمین را در تنظیمات بگذار")
+    from backend.app.content.intake import photo_of
+
     maps = await load_emoji_maps(db)
-    payload = prepare_publish_payload(row.body, row.category, row.emoji_signature, maps)
+    photo = photo_of(row.analysis_json)
+    payload = prepare_publish_payload(row.body, row.category, row.emoji_signature, maps, is_caption=photo is not None)
     note_id, note_error = await publish_rendered(int(chat_id), "پیش‌نمایش آزمایشی. این پیام در کانال عمومی نرفت.")
     if note_error:
         raise HTTPException(status_code=400, detail=note_error)
-    message_id, error = await publish_rendered(int(chat_id), payload["text"], payload["html_text"], payload["entities"])
+    message_id, error = await publish_rendered(int(chat_id), payload["text"], payload["html_text"], payload["entities"], photo)
     if error:
         raise HTTPException(status_code=400, detail=error)
     await write_audit(db, admin=admin, action="test_send", resource="draft", resource_id=row.id, ip_address=request.client.host if request.client else None)

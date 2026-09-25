@@ -231,11 +231,11 @@ async def load_card(db: AsyncSession) -> str:
 
 
 async def remember_sample(db: AsyncSession, *, source_key: str, source_label: str | None, text: str) -> int:
-    from backend.app.content.pipeline import AD_WORDS
+    from backend.app.content.intake import is_advertisement
     from backend.app.models.automation import StyleSample
 
     raw = (text or "").strip()
-    if len(raw) < 40 or any(word in raw for word in AD_WORDS):
+    if len(raw) < 40 or is_advertisement(raw):
         return 0
     key = (source_key or "").strip()[:160]
     if not key:
