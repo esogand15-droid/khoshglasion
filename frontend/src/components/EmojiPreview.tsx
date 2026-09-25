@@ -30,7 +30,7 @@ export function DefaultEmoji({ value, size = 40 }: { value: string; size?: numbe
   );
 }
 
-export function EmojiPreview({ id, size = 72, active = true, fallback = "" }: { id: string; size?: number; active?: boolean; fallback?: string }) {
+export function EmojiPreview({ id, size = 72, active = true, fallback = "", inline = false }: { id: string; size?: number; active?: boolean; fallback?: string; inline?: boolean }) {
   const meta = useEmojiMeta(id);
   const box = useRef<HTMLDivElement>(null);
   const [media, setMedia] = useState<{ url?: string; animationData?: object; error?: string } | null>(null);
@@ -69,10 +69,12 @@ export function EmojiPreview({ id, size = 72, active = true, fallback = "" }: { 
   }, [active, media, reduceMotion]);
 
   return (
-    <div
-      className="flex shrink-0 items-center justify-center overflow-hidden rounded-2xl border border-border bg-background/70"
+    <span
+      className={inline
+        ? "inline-flex shrink-0 items-center justify-center align-middle overflow-hidden"
+        : "flex shrink-0 items-center justify-center overflow-hidden rounded-2xl border border-border bg-background/70"}
       style={{ width: size, height: size }}
-      aria-label="پیش‌نمایش ایموجی پرمیوم"
+      aria-label="ایموجی پرمیوم"
     >
       {active && media?.url && meta?.format === "webm" && (
         <video
@@ -87,10 +89,10 @@ export function EmojiPreview({ id, size = 72, active = true, fallback = "" }: { 
       {active && media?.url && meta?.format === "image" && (
         <img src={media.url} alt="" className="h-full w-full object-contain" />
       )}
-      {active && meta?.format === "lottie" && <div ref={box} className="h-full w-full" />}
+      {active && meta?.format === "lottie" && <span ref={box} className="block h-full w-full" />}
       {meta === null && (fallback ? <DefaultEmoji value={fallback} size={Math.round(size * 0.55)} /> : <span className="text-[10px] text-muted-foreground">نیست</span>)}
       {meta === undefined && <span className="size-4 animate-pulse rounded-full bg-muted" />}
-      {media?.error && <span className="px-1 text-center text-[10px] text-muted-foreground">باز نشد</span>}
-    </div>
+      {media?.error && (inline ? <DefaultEmoji value={fallback} size={Math.round(size * 0.7)} /> : <span className="px-1 text-center text-[10px] text-muted-foreground">باز نشد</span>)}
+    </span>
   );
 }

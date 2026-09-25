@@ -48,8 +48,18 @@ router = APIRouter(prefix="/api/system", tags=["system"])
 SECRET_TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{1,256}$")
 
 
+class AIModelIn(BaseModel):
+    id: str | None = None
+    label: str = ""
+    base_url: str = ""
+    model: str = ""
+    api_key: str | None = None
+    enabled: bool = True
+
+
 class RuntimePatch(BaseModel):
     dry_run: bool | None = None
+    ai_models: list[AIModelIn] | None = None
     kill_switch: bool | None = None
     safe_mode: bool | None = None
     ai_enabled: bool | None = None
@@ -119,6 +129,8 @@ def _runtime_updates(payload: RuntimePatch, current_key: str) -> dict[str, str]:
     data = payload.model_dump(exclude_unset=True)
     updates: dict[str, str] = {}
     for key, value in data.items():
+        if key == "ai_models":
+            continue
         if key not in RUNTIME_KEYS or value is None and key != "default_footer":
             continue
         if key == "ai_api_key":
@@ -188,7 +200,7 @@ async def _alerts(db: AsyncSession, runtime, settings) -> list[dict]:
     if channels == 0:
         alerts.append(_alert("info", "no_channels", "هنوز کانالی ثبت نشده. ربات را ادمین کانال کن یا از صفحه کانال‌ها اضافه‌اش کن.", "/channels", "رفتن به کانال‌ها"))
     if runtime.ai_enabled and not runtime.ai_ready:
-        alerts.append(_alert("warn", "ai_incomplete", "هوش مصنوعی روشن است ولی آدرس، مدل یا کلید کامل نیست.", "/settings?tab=ai", "تکمیل هوش مصنوعی"))
+        alerts.append(_alert("warn", "ai_incomplete", "هوش مصنوعی روشن است ولی هیچ مدل کاملی در فهرست نیست.", "/settings?tab=ai", "تکمیل مدل‌ها"))
     last_emoji = (await db.execute(select(SystemSetting).where(SystemSetting.key == "last_emoji_error"))).scalar_one_or_none()
     if last_emoji and last_emoji.value:
         alerts.append(_alert("warn", "emoji_error", f"آخرین رد شدن ایموجی پرمیوم: {last_emoji.value[:180]}", "/settings?tab=problems", "پاک کردن خطا"))
@@ -304,10 +316,19 @@ async def update_settings(payload: RuntimePatch, request: Request, db: AsyncSess
     assert_editor(admin)
     runtime = await load_runtime(db)
     updates = _runtime_updates(payload, runtime.ai_api_key)
+    if payload.ai_models is not None:
+        from backend.app.services.ai_models import merge_models
+
+        merged = merge_models(payload.ai_models, runtime.ai_models, runtime.ai_api_key)
+        updates["ai_models"] = json.dumps(merged, ensure_ascii=False)
+        first = next((item for item in merged if item["enabled"] and item["base_url"] and item["model"] and item["api_key"]), None)
+        updates["ai_base_url"] = first["base_url"] if first else ""
+        updates["ai_model"] = first["model"] if first else ""
+        updates["ai_api_key"] = first["api_key"] if first else ""
     saved = await save_runtime_values(db, updates)
     await write_audit(
         db, admin=admin, action="update", resource="runtime",
-        new_value={k: ("***" if k == "ai_api_key" else v) for k, v in updates.items()},
+        new_value={k: ("***" if k in {"ai_api_key", "ai_models"} else v) for k, v in updates.items()},
         ip_address=request.client.host if request.client else None,
     )
     return _annotate_ai(saved.public_dict(), saved.ai_base_url)
@@ -702,6 +723,11 @@ async def backup(include_secrets: bool = False, db: AsyncSession = Depends(get_d
     runtime = {}
     for row in settings_rows:
         if row.key == "ai_api_key" and not include_secrets:
+            continue
+        if row.key == "ai_models" and not include_secrets:
+            from backend.app.services.ai_models import redact_models_json
+
+            runtime[row.key] = redact_models_json(row.value)
             continue
         if is_secret_setting(row.key):
             continue

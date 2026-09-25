@@ -31,6 +31,7 @@ export default function Settings() {
   const [msg, setMsg] = useState("");
   const [aiTest, setAiTest] = useState<any>(null);
   const [testing, setTesting] = useState(false);
+  const [models, setModels] = useState<any[] | null>(null);
   const [password, setPassword] = useState({ current_password: "", new_password: "" });
   const [adminForm, setAdminForm] = useState({ username: "", password: "", role: "ADMIN" });
   const [params, setParams] = useSearchParams();
@@ -40,7 +41,11 @@ export default function Settings() {
   const canConnect = !role || role === "OWNER" || role === "ADMIN";
   const tab = ["run", "ai", "look", "session", "access", "problems"].includes(params.get("tab") || "") ? params.get("tab")! : "run";
 
-  async function load() { setData((await api.get("/api/system/settings")).data); }
+  async function load() {
+    const next = (await api.get("/api/system/settings")).data;
+    setData(next);
+    setModels((current) => current ?? (next.ai_models?.length ? next.ai_models.map((item: any) => ({ ...item, api_key: "" })) : []));
+  }
   useEffect(() => { load().catch(() => {}); }, []);
 
   async function save(partial: any) {
@@ -82,39 +87,69 @@ export default function Settings() {
             <CardHeader><CardTitle>هوش مصنوعی</CardTitle></CardHeader>
             <CardContent className="space-y-3">
               <SettingSwitch disabled={!canEdit} checked={data.ai_enabled} label="بازنویسی هوشمند" onChange={(v) => save({ ai_enabled: v })} />
-              <p className="text-xs text-muted-foreground">پست‌های معمولی به مدل فرستاده می‌شوند. گزینه و پاسخ آزمون، و متن کوتاه‌تر از حداقل کاراکتر، دست نمی‌خورند. اگر مدل عدد یا نقل‌قول را بیندازد، همان متن ادمین می‌ماند و در پیام‌ها علتش نوشته می‌شود.</p>
-              <Field label="Base URL"><Input dir="ltr" value={data.ai_base_url || ""} onChange={(e) => setData({ ...data, ai_base_url: e.target.value })} placeholder="https://integrate.api.nvidia.com/v1" /></Field>
-              <p className="text-xs text-muted-foreground">برای NVIDIA همین را بگذار: https://integrate.api.nvidia.com/v1 — سیستم خودش /chat/completions را اضافه می‌کند. درخواست واقعی: {data.ai_endpoint || "بعد از ذخیره دیده می‌شود"} · provider: {data.ai_provider || "—"}</p>
-              <Field label="Model"><Input dir="ltr" value={data.ai_model || ""} onChange={(e) => setData({ ...data, ai_model: e.target.value })} placeholder="openai/gpt-oss-20b" /></Field>
-              <div className="grid gap-3 md:grid-cols-3">
-                <Field label="دما"><Input type="number" min={0} max={1.5} step={0.1} value={data.ai_temperature ?? 0.7} onChange={(e) => setData({ ...data, ai_temperature: e.target.value })} /></Field>
-                <Field label="سقف توکن"><Input type="number" min={64} max={4000} value={data.ai_max_tokens ?? 1800} onChange={(e) => setData({ ...data, ai_max_tokens: e.target.value })} /></Field>
-                <Field label="حداقل کاراکتر"><Input type="number" min={0} max={500} value={data.ai_min_chars ?? 40} onChange={(e) => setData({ ...data, ai_min_chars: e.target.value })} /></Field>
-              </div>
-              <Field label={`کلید API ${data.ai_api_key_masked || ""}`}>
-                <PasswordInput placeholder="خالی = بدون تغییر" onChange={(e) => setData({ ...data, ai_api_key: e.target.value })} />
-              </Field>
+              <p className="text-xs text-muted-foreground">چند مدل از چند سرویس می‌توانی بگذاری. ترتیب فهرست، ترتیب فالبک است: اگر اولی قطع باشد یا جواب ندهد، دومی و بعدی صدا زده می‌شوند تا بازنویسی سکته نکند. دما، سقف توکن و حداقل کاراکتر برداشته شده تا هر مدل با ظرفیت خودش جواب بدهد. اگر مدل عدد یا نقل‌قول را بیندازد، همان متن ادمین می‌ماند.</p>
+              {(models || []).map((item, index) => (
+                <div key={item.id || index} className="space-y-3 rounded-xl border border-border p-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <p className="text-sm font-medium">مدل {index + 1}{index === 0 ? " · اول" : " · فالبک"}</p>
+                    <SettingSwitch disabled={!canEdit} checked={item.enabled !== false} label="روشن" onChange={(on) => setModels((rows) => rows?.map((row, rowIndex) => rowIndex === index ? { ...row, enabled: on } : row) || [])} />
+                  </div>
+                  <div className="grid gap-3 md:grid-cols-2">
+                    <Field label="نام"><Input disabled={!canEdit} value={item.label || ""} onChange={(e) => setModels((rows) => rows?.map((row, rowIndex) => rowIndex === index ? { ...row, label: e.target.value } : row) || [])} placeholder="NVIDIA" /></Field>
+                    <Field label="Model"><Input dir="ltr" disabled={!canEdit} value={item.model || ""} onChange={(e) => setModels((rows) => rows?.map((row, rowIndex) => rowIndex === index ? { ...row, model: e.target.value } : row) || [])} placeholder="nvidia/nemotron-3-super-120b-a12b" /></Field>
+                  </div>
+                  <Field label="Base URL"><Input dir="ltr" disabled={!canEdit} value={item.base_url || ""} onChange={(e) => setModels((rows) => rows?.map((row, rowIndex) => rowIndex === index ? { ...row, base_url: e.target.value } : row) || [])} placeholder="https://integrate.api.nvidia.com/v1" /></Field>
+                  <p className="text-xs text-muted-foreground">{item.provider || "provider بعد از ذخیره"}{item.endpoint ? ` · ${item.endpoint}` : ""}</p>
+                  <Field label={`کلید API ${item.api_key_masked || ""}`}>
+                    <PasswordInput disabled={!canEdit} placeholder={item.api_key_set ? "خالی = بدون تغییر" : "کلید این سرویس"} value={item.api_key || ""} onChange={(e) => setModels((rows) => rows?.map((row, rowIndex) => rowIndex === index ? { ...row, api_key: e.target.value } : row) || [])} />
+                  </Field>
+                  <div className="flex flex-wrap gap-2">
+                    <Button size="sm" variant="outline" disabled={!canEdit || index === 0} onClick={() => setModels((rows) => {
+                      if (!rows || index === 0) return rows;
+                      const next = [...rows];
+                      [next[index - 1], next[index]] = [next[index], next[index - 1]];
+                      return next;
+                    })}>بالاتر</Button>
+                    <Button size="sm" variant="outline" disabled={!canEdit || !models || index === models.length - 1} onClick={() => setModels((rows) => {
+                      if (!rows || index === rows.length - 1) return rows;
+                      const next = [...rows];
+                      [next[index + 1], next[index]] = [next[index], next[index + 1]];
+                      return next;
+                    })}>پایین‌تر</Button>
+                    <Button size="sm" variant="destructive" disabled={!canEdit} onClick={() => setModels((rows) => rows?.filter((_, rowIndex) => rowIndex !== index) || [])}>حذف</Button>
+                  </div>
+                </div>
+              ))}
+              <Button variant="outline" disabled={!canEdit || (models || []).length >= 8} onClick={() => setModels((rows) => [...(rows || []), { id: `m${Date.now()}`, label: "", base_url: "", model: "", api_key: "", enabled: true }])}>افزودن مدل</Button>
               <div className="flex flex-wrap gap-2">
-                <Button variant="brand" disabled={!canEdit} onClick={() => save({ ai_enabled: data.ai_enabled, ai_base_url: data.ai_base_url, ai_model: data.ai_model, ai_api_key: data.ai_api_key || undefined, ai_temperature: Number(data.ai_temperature), ai_max_tokens: Number(data.ai_max_tokens), ai_min_chars: Number(data.ai_min_chars) })}>ذخیره AI</Button>
+                <Button variant="brand" disabled={!canEdit} onClick={() => save({ ai_enabled: data.ai_enabled, ai_models: models || [] })}>ذخیره مدل‌ها</Button>
                 <Button variant="outline" disabled={testing || !canEdit} onClick={async () => {
                   setTesting(true);
                   setAiTest(null);
                   try {
-                    await save({ ai_enabled: data.ai_enabled, ai_base_url: data.ai_base_url, ai_model: data.ai_model, ai_api_key: data.ai_api_key || undefined });
+                    await save({ ai_enabled: data.ai_enabled, ai_models: models || [] });
                     const { data: result } = await api.post("/api/system/ai/test");
                     setAiTest(result);
-                    setMsg(result.ok ? `اتصال برقرار شد · ${result.provider} · ${result.latency_ms}ms` : result.error);
+                    setMsg(result.ok ? `جواب از ${result.model}${result.fallback ? "، بعد از فالبک" : ""}` : result.error);
                   } catch (error: any) {
                     setMsg(error.response?.data?.detail || error.message || "تست انجام نشد");
                   } finally {
                     setTesting(false);
                   }
-                }}>{testing ? <Spinner size="sm" label="در حال تست" /> : "تست اتصال"}</Button>
+                }}>{testing ? <Spinner size="sm" label="در حال تست" /> : "تست زنجیره"}</Button>
               </div>
               {aiTest && (
                 <Alert variant={aiTest.ok ? "success" : "destructive"} title={aiTest.ok ? `مدل جواب داد: ${aiTest.sample || "سلام"}` : aiTest.error}>
-                  {aiTest.provider} · {aiTest.endpoint}{aiTest.latency_ms ? ` · ${aiTest.latency_ms}ms` : ""}
+                  {aiTest.provider} · {aiTest.model} · {aiTest.endpoint}{aiTest.latency_ms ? ` · ${aiTest.latency_ms}ms` : ""}
+                  {aiTest.fallback ? " · از مدل بعدی استفاده شد" : ""}
                 </Alert>
+              )}
+              {!!aiTest?.attempts?.length && (
+                <ul className="space-y-1 text-xs text-muted-foreground">
+                  {aiTest.attempts.map((item: any, index: number) => (
+                    <li key={`${item.model}-${index}`}>{item.ok ? "روشن" : "قطع"} · {item.provider} · {item.model}{item.error ? ` · ${item.error}` : ""}</li>
+                  ))}
+                </ul>
               )}
             </CardContent>
           </Card>

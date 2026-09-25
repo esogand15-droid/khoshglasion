@@ -65,28 +65,29 @@ def build_payload(
     model: str,
     messages: list[dict],
     *,
-    temperature: float,
-    max_tokens: int,
+    temperature: float | None = None,
+    max_tokens: int | None = None,
     health: bool = False,
 ) -> dict:
-    # Reasoning models on NVIDIA spend the first tokens before visible content.
-    # A 16-token health check comes back empty even when the route is correct.
-    limit = max(64, min(int(max_tokens or 256), 256)) if health else int(max_tokens or 800)
+    """Real calls do not send a temperature or token ceiling.
+
+    A health probe still asks for a short answer so the test button returns.
+    Provider defaults decide the real completion. Penalties are not sent:
+    they narrow the model on purpose.
+    """
     payload: dict = {
         "model": model,
         "messages": messages,
-        "temperature": 0.2 if health else temperature,
-        "max_tokens": limit,
         "stream": False,
     }
-    # NVIDIA and Groq reject several OpenAI penalty fields with HTTP 400.
-    if provider not in {"nvidia", "groq"}:
-        payload["top_p"] = 0.9
-        if not health:
-            payload["presence_penalty"] = 0.4
-            payload["frequency_penalty"] = 0.2
-    else:
-        payload["top_p"] = 0.9
+    if health:
+        payload["temperature"] = 0
+        payload["max_tokens"] = 256
+        return payload
+    if temperature is not None:
+        payload["temperature"] = temperature
+    if max_tokens:
+        payload["max_tokens"] = int(max_tokens)
     return payload
 
 

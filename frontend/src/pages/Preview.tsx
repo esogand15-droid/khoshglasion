@@ -37,7 +37,7 @@ export default function Preview() {
     <Page
       kicker="قبل از کانال"
       title="میز آزمایش"
-      description="خروجی را پیش از انتشار ببین. نقل‌قول و لینک در حباب دیده می‌شوند؛ انیمیشن ایموجی فقط داخل تلگرام پخش می‌شود."
+      description="خروجی را پیش از انتشار ببین. ایموجی‌های کتابخانه همین‌جا متحرک پخش می‌شوند، نه به‌صورت یونیکد ساده."
       actions={<Button variant="brand" onClick={run} disabled={loading}>{loading ? <Spinner size="sm" className="text-brand-foreground" label="در حال کار" /> : "اجرا"}</Button>}
     >
       <div className="flex flex-wrap items-center gap-4">

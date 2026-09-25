@@ -1,7 +1,7 @@
 """Panel-editable settings stored in Postgres/SQLite, layered over env defaults."""
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, fields
+from dataclasses import asdict, dataclass, field, fields
 import time
 
 from sqlalchemy import select
@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.core.config import Settings, get_settings
 from backend.app.models.system import SystemSetting
+from backend.app.services.ai_models import parse_models, public_models, configured_models
 
 RUNTIME_KEYS = (
     "dry_run",
@@ -33,6 +34,7 @@ RUNTIME_KEYS = (
     "default_footer",
     "footer_url",
     "support_username",
+    "ai_models",
 )
 
 _cache: dict = {"ts": 0.0, "data": None}
@@ -98,6 +100,7 @@ class RuntimeState:
     default_footer: str
     footer_url: str = "https://t.me/Rotbeland1"
     support_username: str = "Rotbeland_support"
+    ai_models: tuple = field(default_factory=tuple)
 
     @property
     def admin_ids(self) -> list[int]:
@@ -113,7 +116,9 @@ class RuntimeState:
 
     @property
     def ai_ready(self) -> bool:
-        return bool(self.ai_enabled and self.ai_base_url and self.ai_model and self.ai_api_key)
+        if not self.ai_enabled:
+            return False
+        return bool(configured_models(self))
 
     def public_dict(self) -> dict:
         data = asdict(self)
@@ -121,6 +126,7 @@ class RuntimeState:
         data["ai_api_key_set"] = bool(key)
         data["ai_api_key_masked"] = (key[:4] + "…" + key[-4:]) if len(key) > 10 else ("••••" if key else "")
         data.pop("ai_api_key", None)
+        data["ai_models"] = public_models(self)
         data["ai_ready"] = self.ai_ready
         data["admin_ids"] = self.admin_ids
         return data
@@ -155,6 +161,7 @@ def runtime_from_mapping(settings: Settings, mapping: dict[str, str | None]) -> 
         default_footer=(raw("default_footer") if raw("default_footer") is not None else "") or "",
         footer_url=(raw("footer_url") or "https://t.me/Rotbeland1"),
         support_username=(raw("support_username") or "Rotbeland_support").lstrip("@"),
+        ai_models=tuple(parse_models(raw("ai_models"))),
     )
 
 

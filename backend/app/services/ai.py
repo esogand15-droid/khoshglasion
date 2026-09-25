@@ -8,10 +8,10 @@ from typing import Optional
 import httpx
 
 from backend.app.core.runtime import RuntimeState
+from backend.app.services.ai_models import AIModel, configured_models
 from backend.app.services.ai_provider import (
     build_headers,
     build_payload,
-    detect_provider,
     extract_message_text,
     format_http_error,
     redact,
@@ -25,7 +25,6 @@ from backend.app.formatting.textutil import (
     restore_protected_tokens,
 )
 from backend.app.services.prompts import SYSTEM_PROMPT, wrap_post
-from backend.app.services.retry import retry_wait_seconds, should_retry_status
 
 logger = logging.getLogger(__name__)
 
@@ -111,60 +110,91 @@ def accept_ai_output(original: str, raw: str | None, limit: int, required: list[
     return cleaned, "ok"
 
 
-def _provider_call(runtime: RuntimeState, messages: list[dict], temperature: float, *, health: bool = False) -> tuple[str, dict]:
-    provider = detect_provider(runtime.ai_base_url)
-    url = resolve_chat_completions_url(runtime.ai_base_url)
+def _spec(model: AIModel, messages: list[dict], *, health: bool = False, max_tokens: int | None = None) -> tuple[str, dict]:
+    url = resolve_chat_completions_url(model.base_url)
     payload = build_payload(
-        provider,
-        runtime.ai_model,
+        model.provider,
+        model.model,
         messages,
-        temperature=temperature,
-        max_tokens=runtime.ai_max_tokens,
+        max_tokens=256 if health else max_tokens,
         health=health,
     )
     return url, {
-        "provider": provider,
-        "headers": build_headers(provider, runtime.ai_api_key),
+        "provider": model.provider,
+        "headers": build_headers(model.provider, model.api_key),
         "payload": payload,
     }
 
 
-async def _call_model(runtime: RuntimeState, messages: list[dict], temperature: float) -> str | None:
-    url, spec = _provider_call(runtime, messages, temperature)
-    timeout = httpx.Timeout(45.0, connect=10.0)
-    last_error: Exception | None = None
+async def _post_model(model: AIModel, messages: list[dict], *, health: bool = False) -> tuple[str | None, str | None, str]:
+    """One model. A high internal budget is only a retry if the gateway rejects the open call."""
+    timeout = httpx.Timeout(20.0 if health else 40.0, connect=8.0)
+    caps: list[int | None] = [None] if health else [None, 16384]
+    last_error = "مدل پاسخ نداد"
+    url = ""
     async with httpx.AsyncClient(timeout=timeout) as client:
-        for attempt in range(3):
+        for cap in caps:
+            url, spec = _spec(model, messages, health=health, max_tokens=cap)
             try:
                 response = await client.post(url, json=spec["payload"], headers=spec["headers"])
-            except httpx.TimeoutException as exc:
-                last_error = exc
-                if attempt == 2:
-                    raise
-                await _sleep_retry(attempt, None)
+            except httpx.TimeoutException:
+                return None, "زمان مدل تمام شد", url
+            except Exception as exc:
+                return None, redact(f"{type(exc).__name__}", model.api_key), url
+            if response.status_code == 400 and cap is None and not health:
+                last_error = format_http_error(400, response.text, url, model.provider, model.api_key)
                 continue
             if response.status_code >= 400:
-                if should_retry_status(response.status_code) and attempt < 2:
-                    hinted = response.headers.get("retry-after")
-                    await _sleep_retry(attempt, hinted)
-                    continue
-                raise httpx.HTTPStatusError(
-                    format_http_error(response.status_code, response.text, url, spec["provider"], runtime.ai_api_key),
-                    request=response.request,
-                    response=response,
-                )
-            text, _reason = extract_message_text(response.json())
-            return text
-    if last_error:
-        raise last_error
-    return None
+                return None, format_http_error(response.status_code, response.text, url, model.provider, model.api_key), url
+            try:
+                text, _finish = extract_message_text(response.json())
+            except Exception:
+                return None, "پاسخ مدل خوانده نشد", url
+            if text:
+                return text, None, url
+            last_error = "مدل پاسخ خالی داد"
+            if health:
+                return None, last_error, url
+    return None, last_error, url
 
 
-async def _sleep_retry(attempt: int, retry_after: str | None) -> None:
-    import asyncio
-    wait = retry_wait_seconds(attempt, float(retry_after) if retry_after and retry_after.replace(".", "", 1).isdigit() else None)
-    logger.info("AI provider blip, retrying in %.1fs", wait)
-    await asyncio.sleep(wait)
+async def call_models(runtime: RuntimeState, messages: list[dict], *, health: bool = False) -> dict:
+    models = configured_models(runtime)
+    if not models:
+        return {"ok": False, "error": "هیچ مدل کاملی در فهرست نیست", "attempts": [], "provider": "unconfigured", "model": "", "endpoint": ""}
+    attempts = []
+    for index, model in enumerate(models):
+        text, error, url = await _post_model(model, messages, health=health)
+        attempt = {
+            "ok": bool(text),
+            "provider": model.provider,
+            "model": model.model,
+            "endpoint": url,
+            "error": error,
+        }
+        attempts.append(attempt)
+        if text:
+            return {
+                "ok": True,
+                "text": text,
+                "provider": model.provider,
+                "model": model.model,
+                "endpoint": url,
+                "fallback": index > 0,
+                "attempts": attempts,
+            }
+        logger.info("AI model unavailable, next if any: %s %s", model.provider, model.model)
+    last = attempts[-1]
+    return {
+        "ok": False,
+        "text": None,
+        "error": last.get("error") or "همهٔ مدل‌ها از دسترس خارج بودند",
+        "provider": last.get("provider"),
+        "model": last.get("model"),
+        "endpoint": last.get("endpoint") or "",
+        "fallback": False,
+        "attempts": attempts,
+    }
 
 
 LAYOUTS = {"title", "scatter", "list", "closing"}
@@ -178,25 +208,15 @@ def parse_layout_token(raw: str | None) -> str | None:
 async def complete_text(runtime: RuntimeState, messages: list[dict]) -> str | None:
     if not runtime.ai_ready:
         return None
-    url, spec = _provider_call(runtime, messages, runtime.ai_temperature)
-    try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(40.0, connect=8.0)) as client:
-            response = await client.post(url, json=spec["payload"], headers=spec["headers"])
-        if response.status_code != 200:
-            logger.info("draft model status %s", response.status_code)
-            return None
-        text, _finish = extract_message_text(response.json())
-        return text or None
-    except Exception as exc:
-        logger.info("draft model skipped: %s", type(exc).__name__)
-        return None
+    result = await call_models(runtime, messages)
+    return result.get("text") or None
 
 
 async def pick_layout(text: str, runtime: RuntimeState) -> str | None:
     """Ask the model which decoration fits. Failure falls back to rotation."""
     if not runtime.ai_ready or not text or len(text.strip()) < 20:
         return None
-    url, spec = _provider_call(
+    result = await call_models(
         runtime,
         [
             {
@@ -205,19 +225,9 @@ async def pick_layout(text: str, runtime: RuntimeState) -> str | None:
             },
             {"role": "user", "content": wrap_post(text[:1200])},
         ],
-        0.2,
         health=True,
     )
-    try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(12.0, connect=5.0)) as client:
-            response = await client.post(url, json=spec["payload"], headers=spec["headers"])
-        if response.status_code != 200:
-            return None
-        raw, _finish = extract_message_text(response.json())
-        return parse_layout_token(raw)
-    except Exception as exc:
-        logger.info("layout pick skipped: %s", type(exc).__name__)
-        return None
+    return parse_layout_token(result.get("text"))
 
 
 async def edit_with_ai(
@@ -232,37 +242,35 @@ async def edit_with_ai(
     """Return the accepted text and a reason the caller can store on the log."""
     if runtime is None or not runtime.ai_ready:
         return None, "not_ready"
-    if not text or len(text.strip()) < runtime.ai_min_chars:
+    if not text or not text.strip():
         return None, "too_short"
     if mode not in {"rewrite", "tidy"}:
         mode = "tidy"
 
     messages = build_messages(text, category, previous_context, mode=mode)
-    try:
-        raw = await _call_model(runtime, messages, runtime.ai_temperature)
+    varied = False
+    last_reason = "empty"
+    for model in configured_models(runtime):
+        raw, error, _url = await _post_model(model, messages)
+        if error or not raw:
+            last_reason = "timeout" if error and "زمان" in error else "http_error"
+            continue
         accepted, reason = accept_ai_output(text, raw, limit, required)
         opening = _content_hash((accepted or "").strip().split("\n", 1)[0][:80]) if accepted else ""
         repeated = bool(accepted) and (_content_hash(accepted) in _recent_hashes or f"open:{opening}" in _recent_hashes)
-        if repeated and mode == "rewrite":
+        if repeated and mode == "rewrite" and not varied:
+            varied = True
             logger.info("AI output repeated a recent post; retrying once")
-            messages = build_messages(text, category, previous_context, extra_variation=True, mode=mode)
-            raw = await _call_model(runtime, messages, min(0.95, runtime.ai_temperature + 0.15))
-            accepted, reason = accept_ai_output(text, raw, limit, required)
-        if not accepted:
-            logger.info("AI output rejected: %s", reason)
-            return None, reason
-        _record_output(accepted)
-        logger.info("AI enhanced category=%s mode=%s len=%s", category, mode, len(accepted))
-        return accepted, "ok"
-    except httpx.HTTPStatusError as exc:
-        logger.error("AI API error %s", redact(str(exc), runtime.ai_api_key if runtime else None))
-        return None, "http_error"
-    except httpx.TimeoutException:
-        logger.error("AI request timed out")
-        return None, "timeout"
-    except Exception as exc:
-        logger.error("AI call failed: %s: %s", type(exc).__name__, exc)
-        return None, "error"
+            raw, error, _url = await _post_model(model, build_messages(text, category, previous_context, extra_variation=True, mode=mode))
+            if raw and not error:
+                accepted, reason = accept_ai_output(text, raw, limit, required)
+        if accepted:
+            _record_output(accepted)
+            logger.info("AI enhanced category=%s mode=%s len=%s model=%s", category, mode, len(accepted), model.model)
+            return accepted, "ok"
+        last_reason = reason
+        logger.info("AI output rejected by %s: %s", model.model, reason)
+    return None, last_reason
 
 
 async def enhance_with_ai(
@@ -287,63 +295,24 @@ async def enhance_with_ai(
 
 
 async def test_ai_connection(runtime: RuntimeState) -> dict:
-    provider = detect_provider(runtime.ai_base_url)
-    if not runtime.ai_ready:
+    models = configured_models(runtime)
+    provider = models[0].provider if models else "unconfigured"
+    model_name = models[0].model if models else getattr(runtime, "ai_model", "")
+    if not models:
         return {
             "ok": False,
             "provider": provider,
-            "model": runtime.ai_model,
+            "model": model_name,
             "endpoint": "",
-            "error": "AI کامل تنظیم نشده (آدرس، مدل یا کلید)",
+            "error": "هیچ مدل کاملی در فهرست نیست",
+            "attempts": [],
         }
-    try:
-        url = resolve_chat_completions_url(runtime.ai_base_url)
-    except ValueError as exc:
-        return {"ok": False, "provider": provider, "model": runtime.ai_model, "endpoint": "", "error": str(exc)}
-    messages = [{"role": "user", "content": "فقط همین کلمه را برگردان: سلام"}]
-    spec_url, spec = _provider_call(runtime, messages, 0.2, health=True)
     started = time.perf_counter()
-    try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(30.0, connect=10.0)) as client:
-            response = await client.post(spec_url, json=spec["payload"], headers=spec["headers"])
-        latency = round((time.perf_counter() - started) * 1000)
-        if response.status_code != 200:
-            return {
-                "ok": False,
-                "provider": provider,
-                "model": runtime.ai_model,
-                "endpoint": url,
-                "status_code": response.status_code,
-                "latency_ms": latency,
-                "error": format_http_error(response.status_code, response.text, url, provider, runtime.ai_api_key),
-            }
-        text, finish = extract_message_text(response.json())
-        if not text:
-            return {
-                "ok": False,
-                "provider": provider,
-                "model": runtime.ai_model,
-                "endpoint": url,
-                "status_code": 200,
-                "latency_ms": latency,
-                "finish_reason": finish,
-                "error": "مدل پاسخ خالی داد. اگر مدل reasoning است، سقف توکن را بالاتر ببر.",
-            }
-        return {
-            "ok": True,
-            "provider": provider,
-            "model": runtime.ai_model,
-            "endpoint": url,
-            "status_code": 200,
-            "latency_ms": latency,
-            "finish_reason": finish,
-            "sample": text[:80],
-        }
-    except Exception as exc:
-        return {
-            "ok": False,
-            "provider": provider,
-            "model": runtime.ai_model,
-            "endpoint": url,
-            "error": redact(str(exc), runtime.ai_api_key),
-        }
+    result = await call_models(runtime, [{"role": "user", "content": "فقط همین کلمه را برگردان: سلام"}], health=True)
+    latency = round((time.perf_counter() - started) * 1000)
+    result["latency_ms"] = latency
+    result["sample"] = (result.get("text") or "")[:80]
+    result.pop("text", None)
+    if not result.get("ok") and not result.get("error"):
+        result["error"] = "همهٔ مدل‌ها از دسترس خارج بودند"
+    return result
