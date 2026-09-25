@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import api from "../services/api";
+import { useAuth } from "../stores/auth";
 import { Page } from "../components/page";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -17,6 +18,8 @@ import { fa } from "@/lib/utils";
 const LIMIT = 20;
 
 export default function Messages() {
+  const role = useAuth((state) => state.role);
+  const canEdit = !role || role !== "VIEWER";
   const [items, setItems] = useState<any[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
@@ -106,10 +109,10 @@ export default function Messages() {
             <p className="text-xs text-muted-foreground">{selected.applied_rules}</p>
             <DiffList rows={selected.diff} />
             <div className="flex flex-wrap gap-2">
-              <Button variant="brand" onClick={async () => { const { data } = await api.post(`/api/messages/${selected.id}/retry`); setSelected(data.message); load(); }}>پردازش دوباره</Button>
-              <Button variant="outline" onClick={async () => { setSelected((await api.post(`/api/messages/${selected.id}/skip`)).data); load(); }}>رد کن</Button>
+              <Button variant="brand" disabled={!canEdit} onClick={async () => { const { data } = await api.post(`/api/messages/${selected.id}/retry`); setSelected(data.message); load(); }}>پردازش دوباره</Button>
+              <Button variant="outline" disabled={!canEdit} onClick={async () => { setSelected((await api.post(`/api/messages/${selected.id}/skip`)).data); load(); }}>رد کن</Button>
               {selected.status !== "edited" && (
-                <Button variant="destructive" onClick={async () => {
+                <Button variant="destructive" disabled={!canEdit} onClick={async () => {
                   if (!confirm("این رکورد از بایگانی حذف شود؟ ادیت کانال برنمی‌گردد.")) return;
                   await api.delete(`/api/messages/${selected.id}`);
                   setSelected(null);

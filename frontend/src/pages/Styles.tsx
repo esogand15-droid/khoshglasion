@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import api from "../services/api";
+import { useAuth } from "../stores/auth";
 import { Page } from "../components/page";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -14,6 +15,8 @@ function readConfig(raw: string | undefined) {
 }
 
 export default function Styles() {
+  const role = useAuth((state) => state.role);
+  const canEdit = !role || role !== "VIEWER";
   const [items, setItems] = useState<any[]>([]);
   const [form, setForm] = useState({ name: "", slug: "", footer: "", divider: "━━━━━━━━━━━━" });
   const [edit, setEdit] = useState<any>(null);
@@ -39,7 +42,7 @@ export default function Styles() {
               setMsg("ساخته شد. در تنظیم کانال انتخابش کن.");
               load();
             } catch (error: any) { setMsg(error.response?.data?.detail || "ساخته نشد"); }
-          }}>ساخت استایل</Button>
+          }} disabled={!canEdit}>ساخت استایل</Button>
         </CardContent>
       </Card>
 
@@ -60,13 +63,13 @@ export default function Styles() {
                 <CardContent className="space-y-3">
                   <div className="rounded-xl border border-border bg-background/40 p-3 text-sm whitespace-pre-wrap">{typeof footer === "string" ? footer || "بدون فوتر" : "بدون فوتر"}</div>
                   <div className="flex flex-wrap gap-2">
-                    <Button size="sm" variant="outline" onClick={async () => { await api.post(`/api/styles/${style.id}/duplicate`); setMsg("کپی ساخته شد"); load(); }}>کپی</Button>
-                    {!style.is_builtin && <Button size="sm" variant="outline" onClick={() => setEdit({ id: style.id, name: style.name, footer: config.footer || "", divider: config.divider || "", enabled: style.enabled !== false, config })}>ویرایش</Button>}
-                    {!style.is_builtin && <Button size="sm" variant="outline" onClick={async () => {
+                    <Button size="sm" variant="outline" disabled={!canEdit} onClick={async () => { await api.post(`/api/styles/${style.id}/duplicate`); setMsg("کپی ساخته شد"); load(); }}>کپی</Button>
+                    {!style.is_builtin && <Button size="sm" variant="outline" disabled={!canEdit} onClick={() => setEdit({ id: style.id, name: style.name, footer: config.footer || "", divider: config.divider || "", enabled: style.enabled !== false, config })}>ویرایش</Button>}
+                    {!style.is_builtin && <Button size="sm" variant="outline" disabled={!canEdit} onClick={async () => {
                       await api.patch(`/api/styles/${style.id}`, { config: { ...config, enabled: style.enabled === false } });
                       load();
                     }}>{style.enabled === false ? "روشن" : "خاموش"}</Button>}
-                    {!style.is_builtin && <Button size="sm" variant="destructive" onClick={async () => { if (!confirm("این استایل حذف شود؟")) return; await api.delete(`/api/styles/${style.id}`); load(); }}>حذف</Button>}
+                    {!style.is_builtin && <Button size="sm" variant="destructive" disabled={!canEdit} onClick={async () => { if (!confirm("این استایل حذف شود؟")) return; await api.delete(`/api/styles/${style.id}`); load(); }}>حذف</Button>}
                   </div>
                 </CardContent>
               </Card>
@@ -82,7 +85,7 @@ export default function Styles() {
             <Field label="فوتر"><Textarea value={edit.footer} onChange={(e) => setEdit({ ...edit, footer: e.target.value })} /></Field>
             <Field label="جداکننده"><Input value={edit.divider} onChange={(e) => setEdit({ ...edit, divider: e.target.value })} /></Field>
             <div className="flex gap-2">
-              <Button variant="brand" onClick={async () => {
+              <Button variant="brand" disabled={!canEdit} onClick={async () => {
                 await api.patch(`/api/styles/${edit.id}`, { name: edit.name, config: { ...edit.config, footer: edit.footer, divider: edit.divider, enabled: edit.enabled } });
                 setMsg("استایل ذخیره شد");
                 setEdit(null);

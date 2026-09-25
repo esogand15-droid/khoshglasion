@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.app.db.base import get_db
 from backend.app.formatting.styles import BUILTIN_STYLES, style_is_enabled
 from backend.app.models.style import StylePreset
-from backend.app.security.deps import get_current_admin
+from backend.app.security.deps import assert_editor, get_current_admin
 
 router = APIRouter(prefix="/api/styles", tags=["styles"])
 
@@ -46,6 +46,7 @@ async def list_styles(db: AsyncSession = Depends(get_db), admin=Depends(get_curr
 
 @router.post("")
 async def create_style(payload: dict, db: AsyncSession = Depends(get_db), admin=Depends(get_current_admin)):
+    assert_editor(admin)
     slug = (payload.get("slug") or "").strip()
     name = (payload.get("name") or "").strip()
     if not slug or not name:
@@ -69,6 +70,7 @@ async def create_style(payload: dict, db: AsyncSession = Depends(get_db), admin=
 
 @router.patch("/{style_id}")
 async def update_style(style_id: str, payload: dict, db: AsyncSession = Depends(get_db), admin=Depends(get_current_admin)):
+    assert_editor(admin)
     if style_id.startswith("builtin_"):
         raise HTTPException(status_code=400, detail="استایل داخلی را کپی کن و نسخه سفارشی را ویرایش کن")
     row = (await db.execute(select(StylePreset).where(StylePreset.id == style_id))).scalar_one_or_none()
@@ -84,6 +86,7 @@ async def update_style(style_id: str, payload: dict, db: AsyncSession = Depends(
 
 @router.post("/{style_id}/duplicate")
 async def duplicate_style(style_id: str, db: AsyncSession = Depends(get_db), admin=Depends(get_current_admin)):
+    assert_editor(admin)
     if style_id.startswith("builtin_"):
         slug = style_id.removeprefix("builtin_")
         style = BUILTIN_STYLES.get(slug)
@@ -128,6 +131,7 @@ async def duplicate_style(style_id: str, db: AsyncSession = Depends(get_db), adm
 
 @router.delete("/{style_id}")
 async def delete_style(style_id: str, db: AsyncSession = Depends(get_db), admin=Depends(get_current_admin)):
+    assert_editor(admin)
     if style_id.startswith("builtin_"):
         raise HTTPException(status_code=400, detail="استایل داخلی حذف نمی‌شود")
     row = (await db.execute(select(StylePreset).where(StylePreset.id == style_id))).scalar_one_or_none()

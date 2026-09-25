@@ -20,7 +20,7 @@ from backend.app.models.message_log import MessageLog
 from backend.app.models.style import StylePreset
 from backend.app.models.system import SystemSetting
 from backend.app.security.auth import hash_password
-from backend.app.security.deps import get_current_admin, require_role
+from backend.app.security.deps import assert_editor, get_current_admin, require_role
 from backend.app.services.ai import test_ai_connection
 from backend.app.services.ai_provider import detect_provider, resolve_chat_completions_url
 from backend.app.services.audit import write_audit
@@ -253,6 +253,7 @@ async def get_settings_api(db: AsyncSession = Depends(get_db), admin=Depends(get
 
 @router.post("/settings")
 async def update_settings(payload: RuntimePatch, request: Request, db: AsyncSession = Depends(get_db), admin=Depends(get_current_admin)):
+    assert_editor(admin)
     runtime = await load_runtime(db)
     updates = _runtime_updates(payload, runtime.ai_api_key)
     saved = await save_runtime_values(db, updates)
@@ -279,6 +280,7 @@ def _safe_endpoint(base_url: str) -> str:
 
 @router.post("/ai/test")
 async def test_ai(db: AsyncSession = Depends(get_db), admin=Depends(get_current_admin)):
+    assert_editor(admin)
     runtime = await load_runtime(db, force=True)
     return await test_ai_connection(runtime)
 

@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.app.db.base import get_db
 from backend.app.models.emoji import EmojiMapping
 from backend.app.schemas.emoji import EmojiCreate, EmojiUpdate
-from backend.app.security.deps import get_current_admin
+from backend.app.security.deps import assert_editor, get_current_admin
 from backend.app.services.audit import write_audit
 from backend.app.telegram.bot import get_bot
 from backend.app.telegram.emoji_pack import fetch_sticker_set, import_pack_names, parse_pack_names
@@ -39,6 +39,7 @@ async def export_emojis(db: AsyncSession = Depends(get_db), admin=Depends(get_cu
 
 @router.post("/import")
 async def import_emojis(payload: list[dict], db: AsyncSession = Depends(get_db), admin=Depends(get_current_admin)):
+    assert_editor(admin)
     imported = 0
     for item in payload:
         emoji = item.get("unicode_emoji")
@@ -78,6 +79,7 @@ async def import_emojis(payload: list[dict], db: AsyncSession = Depends(get_db),
 
 @router.post("/import-pack")
 async def import_pack(payload: dict, db: AsyncSession = Depends(get_db), admin=Depends(get_current_admin)):
+    assert_editor(admin)
     raw = str(payload.get("url") or payload.get("link") or payload.get("name") or "").strip()
     names = parse_pack_names(raw, allow_bare=True)
     if not names:
@@ -109,6 +111,7 @@ async def validate_emojis(payload: dict, admin=Depends(get_current_admin)):
 
 @router.post("/cleanup-fake")
 async def cleanup_fake(db: AsyncSession = Depends(get_db), admin=Depends(get_current_admin)):
+    assert_editor(admin)
     rows = (await db.execute(select(EmojiMapping).where(EmojiMapping.custom_emoji_id.like("53683241%")))).scalars().all()
     for row in rows:
         await db.delete(row)
@@ -124,6 +127,7 @@ async def list_emojis(db: AsyncSession = Depends(get_db), admin=Depends(get_curr
 
 @router.post("")
 async def create_emoji(payload: EmojiCreate, request: Request, db: AsyncSession = Depends(get_db), admin=Depends(get_current_admin)):
+    assert_editor(admin)
     if not str(payload.custom_emoji_id).isdigit():
         raise HTTPException(status_code=400, detail="custom_emoji_id باید عدد باشد")
     row = EmojiMapping(
@@ -143,6 +147,7 @@ async def create_emoji(payload: EmojiCreate, request: Request, db: AsyncSession 
 
 @router.patch("/{emoji_id}")
 async def update_emoji(emoji_id: str, payload: EmojiUpdate, db: AsyncSession = Depends(get_db), admin=Depends(get_current_admin)):
+    assert_editor(admin)
     row = (await db.execute(select(EmojiMapping).where(EmojiMapping.id == emoji_id))).scalar_one_or_none()
     if not row:
         raise HTTPException(status_code=404, detail="ایموجی پیدا نشد")
@@ -156,6 +161,7 @@ async def update_emoji(emoji_id: str, payload: EmojiUpdate, db: AsyncSession = D
 
 @router.delete("/{emoji_id}")
 async def delete_emoji(emoji_id: str, db: AsyncSession = Depends(get_db), admin=Depends(get_current_admin)):
+    assert_editor(admin)
     row = (await db.execute(select(EmojiMapping).where(EmojiMapping.id == emoji_id))).scalar_one_or_none()
     if not row:
         raise HTTPException(status_code=404, detail="ایموجی پیدا نشد")

@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.app.db.base import get_db
 from backend.app.formatting.diff import line_diff
 from backend.app.models.message_log import MessageLog
-from backend.app.security.deps import get_current_admin
+from backend.app.security.deps import assert_editor, get_current_admin
 from backend.app.telegram.pipeline import reprocess_log
 
 router = APIRouter(prefix="/api/messages", tags=["messages"])
@@ -94,6 +94,7 @@ async def get_message(msg_id: str, db: AsyncSession = Depends(get_db), admin=Dep
 
 @router.post("/{msg_id}/retry")
 async def retry_message(msg_id: str, db: AsyncSession = Depends(get_db), admin=Depends(get_current_admin)):
+    assert_editor(admin)
     row = (await db.execute(select(MessageLog).where(MessageLog.id == msg_id))).scalar_one_or_none()
     if not row:
         raise HTTPException(status_code=404, detail="پیام پیدا نشد")
@@ -105,6 +106,7 @@ async def retry_message(msg_id: str, db: AsyncSession = Depends(get_db), admin=D
 
 @router.post("/{msg_id}/skip")
 async def skip_message(msg_id: str, db: AsyncSession = Depends(get_db), admin=Depends(get_current_admin)):
+    assert_editor(admin)
     row = (await db.execute(select(MessageLog).where(MessageLog.id == msg_id))).scalar_one_or_none()
     if not row:
         raise HTTPException(status_code=404, detail="پیام پیدا نشد")
@@ -116,6 +118,7 @@ async def skip_message(msg_id: str, db: AsyncSession = Depends(get_db), admin=De
 
 @router.delete("/{msg_id}")
 async def delete_message(msg_id: str, db: AsyncSession = Depends(get_db), admin=Depends(get_current_admin)):
+    assert_editor(admin)
     row = (await db.execute(select(MessageLog).where(MessageLog.id == msg_id))).scalar_one_or_none()
     if not row:
         raise HTTPException(status_code=404, detail="پیام پیدا نشد")

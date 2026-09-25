@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import api from "../services/api";
+import { useAuth } from "../stores/auth";
 import { Page } from "../components/page";
 import { Alert } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -13,6 +14,8 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { fa } from "@/lib/utils";
 
 export default function Emojis() {
+  const role = useAuth((state) => state.role);
+  const canEdit = !role || role !== "VIEWER";
   const [items, setItems] = useState<any[]>([]);
   const [form, setForm] = useState({ unicode_emoji: "", custom_emoji_id: "", category: "", priority: "70" });
   const [msg, setMsg] = useState("");
@@ -38,7 +41,7 @@ export default function Emojis() {
         <CardHeader><CardTitle>ورود از لینک پک</CardTitle></CardHeader>
         <CardContent className="space-y-3">
           <Field label="لینک یا نام پک"><Input dir="ltr" value={packUrl} onChange={(e) => setPackUrl(e.target.value)} placeholder="https://t.me/addemoji/Name" /></Field>
-          <Button variant="brand" disabled={packBusy || !packUrl.trim()} onClick={async () => {
+          <Button variant="brand" disabled={!canEdit || packBusy || !packUrl.trim()} onClick={async () => {
             setPackBusy(true);
             try {
               const { data } = await api.post("/api/emojis/import-pack", { url: packUrl.trim() });
@@ -59,7 +62,7 @@ export default function Emojis() {
             <Field label="دسته"><Input value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })} /></Field>
             <Field label="اولویت"><Input value={form.priority} onChange={(e) => setForm({ ...form, priority: e.target.value })} /></Field>
           </div>
-          <Button variant="brand" onClick={async () => {
+          <Button variant="brand" disabled={!canEdit} onClick={async () => {
             try {
               await api.post("/api/emojis", { ...form, priority: Number(form.priority), category: form.category || undefined });
               setForm({ unicode_emoji: "", custom_emoji_id: "", category: "", priority: "70" });
@@ -74,7 +77,7 @@ export default function Emojis() {
       <div className="flex flex-wrap items-center gap-2">
         <div className="w-full max-w-xs"><SearchInput value={q} onChange={setQ} placeholder="جست‌وجوی ایموجی یا ID" /></div>
         <Button variant="outline" onClick={async () => { const ids = shown.slice(0, 20).map((item) => item.custom_emoji_id); const { data } = await api.post("/api/emojis/validate", { custom_emoji_ids: ids }); setMsg(`معتبر: ${data.valid?.length || 0} / نامعتبر: ${data.invalid?.length || 0}${data.error ? " · " + data.error : ""}`); }}>اعتبارسنجی ۲۰ تای اول</Button>
-        <Button variant="outline" onClick={async () => { await api.post("/api/emojis/cleanup-fake"); load(); }}>حذف IDهای فیک</Button>
+        <Button variant="outline" disabled={!canEdit} onClick={async () => { await api.post("/api/emojis/cleanup-fake"); load(); }}>حذف IDهای فیک</Button>
       </div>
 
       {shown.length ? (
@@ -102,9 +105,9 @@ export default function Emojis() {
                 <TableCell><Badge variant={item.enabled ? "success" : "secondary"}>{item.enabled ? "فعال" : "خاموش"}</Badge></TableCell>
                 <TableCell>
                   <div className="flex flex-wrap gap-2">
-                    <Button size="sm" variant="outline" onClick={() => setEdit({ ...item })}>ویرایش</Button>
-                    <Button size="sm" variant="outline" onClick={async () => { await api.patch(`/api/emojis/${item.id}`, { enabled: !item.enabled }); load(); }}>{item.enabled ? "خاموش" : "روشن"}</Button>
-                    <Button size="sm" variant="destructive" onClick={async () => { if (!confirm("این نگاشت حذف شود؟")) return; await api.delete(`/api/emojis/${item.id}`); load(); }}>حذف</Button>
+                    <Button size="sm" variant="outline" disabled={!canEdit} onClick={() => setEdit({ ...item })}>ویرایش</Button>
+                    <Button size="sm" variant="outline" disabled={!canEdit} onClick={async () => { await api.patch(`/api/emojis/${item.id}`, { enabled: !item.enabled }); load(); }}>{item.enabled ? "خاموش" : "روشن"}</Button>
+                    <Button size="sm" variant="destructive" disabled={!canEdit} onClick={async () => { if (!confirm("این نگاشت حذف شود؟")) return; await api.delete(`/api/emojis/${item.id}`); load(); }}>حذف</Button>
                   </div>
                 </TableCell>
               </TableRow>
@@ -120,7 +123,7 @@ export default function Emojis() {
             <Field label="custom_emoji_id"><Input dir="ltr" value={edit.custom_emoji_id} onChange={(e) => setEdit({ ...edit, custom_emoji_id: e.target.value })} /></Field>
             <Field label="دسته"><Input value={edit.category || ""} onChange={(e) => setEdit({ ...edit, category: e.target.value })} /></Field>
             <Field label="اولویت"><Input value={edit.priority} onChange={(e) => setEdit({ ...edit, priority: e.target.value })} /></Field>
-            <Button variant="brand" onClick={async () => {
+            <Button variant="brand" disabled={!canEdit} onClick={async () => {
               try {
                 await api.patch(`/api/emojis/${edit.id}`, { unicode_emoji: edit.unicode_emoji, custom_emoji_id: edit.custom_emoji_id, category: edit.category || null, priority: Number(edit.priority) });
                 setEdit(null);

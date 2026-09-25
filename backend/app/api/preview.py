@@ -14,7 +14,7 @@ from backend.app.formatting.engine import format_message
 from backend.app.models.channel import Channel
 from backend.app.models.emoji import EmojiMapping
 from backend.app.schemas.preview import PreviewRequest, PreviewResponse
-from backend.app.security.deps import get_current_admin
+from backend.app.security.deps import assert_editor, get_current_admin
 from backend.app.services.ai import edit_with_ai
 from backend.app.telegram.pipeline import parse_contexts, resolve_style
 
@@ -44,6 +44,7 @@ class AIPreviewRequest(BaseModel):
 
 @router.post("/ai-enhance")
 async def preview_ai_enhance(payload: AIPreviewRequest, db: AsyncSession = Depends(get_db), admin=Depends(get_current_admin)):
+    assert_editor(admin)
     runtime = await load_runtime(db)
     should_ai, decision, reason = preview_ai_plan(payload.text, True, runtime.ai_ready)
     enhanced = None

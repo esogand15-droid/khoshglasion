@@ -328,6 +328,7 @@ async def update_slot(slot_id: str, payload: SlotPatch, db: AsyncSession = Depen
 
 @router.delete("/slots/{slot_id}")
 async def delete_slot(slot_id: str, db: AsyncSession = Depends(get_db), admin=Depends(get_current_admin)):
+    assert_editor(admin)
     row = (await db.execute(select(PublishSlot).where(PublishSlot.id == slot_id))).scalar_one_or_none()
     if not row:
         raise HTTPException(status_code=404, detail="ساعت پیدا نشد")
@@ -337,6 +338,7 @@ async def delete_slot(slot_id: str, db: AsyncSession = Depends(get_db), admin=De
 
 @router.post("/collect")
 async def collect_now(db: AsyncSession = Depends(get_db), admin=Depends(get_current_admin)):
+    assert_editor(admin)
     return await collect_sources(db, force=True)
 
 

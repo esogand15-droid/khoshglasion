@@ -497,10 +497,13 @@ def _result_has_premium(result) -> bool:
 
 
 def premium_edit_plan(has_premium: bool, mode: str, session_ready: bool) -> str:
-    """user sends premium entities. refuse does not downgrade to unicode. bot is plain formatting."""
-    if not has_premium or (mode or "").lower() == "off":
+    """user uses the saved session. bot keeps premium HTML and never falls back to unicode."""
+    normalized = (mode or "").lower()
+    if not has_premium or normalized == "off":
         return "bot"
-    if session_ready and (mode or "").lower() in {"auto", "user"}:
+    if normalized == "bot":
+        return "bot"
+    if session_ready and normalized in {"auto", "user"}:
         return "user"
     return "refuse"
 
@@ -525,14 +528,17 @@ async def _edit(runtime: RuntimeState, channel: Channel, chat_id: int, message_i
             "method": "user_session",
             "emoji_rejected": True,
         }
+    html = result.html_text if has_formatting else None
+    if html and "<tg-emoji" in html and plan != "bot":
+        html = None
     return await edit_telegram_message(
         chat_id=chat_id,
         message_id=message_id,
         text=result.text,
-        html_text=result.html_text if has_formatting and mode != "user" else None,
+        html_text=html,
         is_caption=has_media,
         reply_markup=markup,
-        prefer_html=has_formatting and mode != "user",
+        prefer_html=bool(html),
     )
 
 

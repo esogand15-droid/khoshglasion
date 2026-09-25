@@ -64,8 +64,12 @@ export default function Automation() {
   useEffect(() => { load().catch(() => setMsg("وضعیت اتوماسیون خوانده نشد")); }, [statusFilter, categoryFilter]);
 
   async function saveConfig(patch: Record<string, unknown>) {
-    await api.patch("/api/automation", patch);
-    await load();
+    try {
+      await api.patch("/api/automation", patch);
+      await load();
+    } catch (error: any) {
+      setMsg(error.response?.data?.detail || "ذخیره نشد");
+    }
   }
 
   if (!data) return <Page title="پست خودکار" description="در حال خواندن تنظیم واقعی…" />;
@@ -77,7 +81,7 @@ export default function Automation() {
       kicker="اتوماسیون"
       title="پست خودکار"
       description="کانال منبع خوانده می‌شود، تکراری حذف می‌شود، پست مستقل ساخته می‌شود و تا تأیید یا کلید انتشار خودکار در صف می‌ماند."
-      actions={<Button variant="brand" disabled={busy} onClick={async () => {
+      actions={<Button variant="brand" disabled={busy || !canEdit} onClick={async () => {
         setBusy(true);
         try {
           const { data: result } = await api.post("/api/automation/collect");
@@ -105,19 +109,19 @@ export default function Automation() {
         <CardContent className="space-y-3">
           <label className="flex items-center justify-between gap-4 rounded-xl border border-border px-4 py-3 text-sm">
             <span>جمع‌آوری خودکار</span>
-            <Switch checked={!!data.enabled} onCheckedChange={(value) => saveConfig({ enabled: value })} />
+            <Switch checked={!!data.enabled} disabled={!canEdit} onCheckedChange={(value) => saveConfig({ enabled: value })} />
           </label>
           <label className="flex items-center justify-between gap-4 rounded-xl border border-border px-4 py-3 text-sm">
             <span>در ساعت مشخص، بدون تأیید دستی منتشر شود</span>
-            <Switch checked={!!data.auto_publish} disabled={!canPublish} onCheckedChange={(value) => saveConfig({ auto_publish: value })} />
+            <Switch checked={!!data.auto_publish} disabled={!canEdit || !canPublish} onCheckedChange={(value) => saveConfig({ auto_publish: value })} />
           </label>
           <label className="flex items-center justify-between gap-4 rounded-xl border border-border px-4 py-3 text-sm">
             <span>توقف اضطراری صف</span>
-            <Switch checked={!!data.paused} onCheckedChange={(value) => saveConfig({ paused: value })} />
+            <Switch checked={!!data.paused} disabled={!canEdit} onCheckedChange={(value) => saveConfig({ paused: value })} />
           </label>
           <label className="flex items-center justify-between gap-4 rounded-xl border border-border px-4 py-3 text-sm">
             <span>تعادل دسته در سقف روزانه</span>
-            <Switch checked={data.balance_categories !== false} onCheckedChange={(value) => saveConfig({ balance_categories: value })} />
+            <Switch checked={data.balance_categories !== false} disabled={!canEdit} onCheckedChange={(value) => saveConfig({ balance_categories: value })} />
           </label>
           <div className="grid gap-3 sm:grid-cols-2">
             <Field label="سقف انتشار روزانه">
@@ -159,7 +163,7 @@ export default function Automation() {
             <select className="h-10 rounded-xl border border-border bg-background px-3 text-sm" value={sourceCategory} onChange={(event) => setSourceCategory(event.target.value)}>
               {CATEGORIES.map(([value, label]) => <option key={value || "none"} value={value}>{label}</option>)}
             </select>
-            <Button variant="outline" onClick={async () => {
+            <Button variant="outline" disabled={!canEdit} onClick={async () => {
               try {
                 await api.post("/api/automation/sources", { username: source, category_hint: sourceCategory || null });
                 setSource("");
@@ -205,7 +209,7 @@ export default function Automation() {
             <select className="h-10 rounded-xl border border-border bg-background px-3 text-sm" value={slotCategory} onChange={(event) => setSlotCategory(event.target.value)}>
               {CATEGORIES.map(([value, label]) => <option key={value || "any"} value={value}>{label}</option>)}
             </select>
-            <Button variant="outline" onClick={async () => { await api.post("/api/automation/slots", { hour: Number(hour), minute: Number(minute), category: slotCategory || null }); load(); }}>ساعت تازه</Button>
+            <Button variant="outline" disabled={!canEdit} onClick={async () => { await api.post("/api/automation/slots", { hour: Number(hour), minute: Number(minute), category: slotCategory || null }); load(); }}>ساعت تازه</Button>
           </div>
           {data.slots?.length ? data.slots.map((slot: any) => (
             <div key={slot.id} className="flex items-center justify-between rounded-xl border border-border px-4 py-2 text-sm">
@@ -227,6 +231,7 @@ export default function Automation() {
               key={tag.id}
               size="sm"
               variant={tag.enabled && !tag.forbidden ? "brand" : "outline"}
+              disabled={!canEdit}
               onClick={async () => { await api.patch(`/api/automation/hashtags/${tag.id}`, { enabled: !tag.enabled }); load(); }}
             >
               #{tag.tag}

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { RefreshCw } from "lucide-react";
 import api from "../services/api";
+import { useAuth } from "../stores/auth";
 import { Page } from "../components/page";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -15,16 +16,18 @@ import { fa } from "@/lib/utils";
 
 const EMPTY = { chat_id: "", title: "", username: "" };
 
-function Flag({ label, checked, onChange }: { label: string; checked: boolean; onChange: (value: boolean) => void }) {
+function Flag({ label, checked, onChange, disabled }: { label: string; checked: boolean; onChange: (value: boolean) => void; disabled?: boolean }) {
   return (
     <label className="flex items-center justify-between gap-3 rounded-lg border border-border px-3 py-2 text-sm">
       <span>{label}</span>
-      <Switch checked={checked} onCheckedChange={onChange} />
+      <Switch checked={checked} disabled={disabled} onCheckedChange={onChange} />
     </label>
   );
 }
 
 export default function Channels() {
+  const role = useAuth((state) => state.role);
+  const canEdit = !role || role !== "VIEWER";
   const [items, setItems] = useState<any[]>([]);
   const [styles, setStyles] = useState<any[]>([]);
   const [form, setForm] = useState(EMPTY);
@@ -77,8 +80,8 @@ export default function Channels() {
           <Field label="یوزرنیم" htmlFor="username"><Input id="username" dir="ltr" value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} /></Field>
         </div>
         <div className="mt-4 flex flex-wrap gap-2">
-          <Button variant="brand" onClick={add}>افزودن</Button>
-          <Button variant="outline" onClick={async () => { if (!form.chat_id) return; await api.post("/api/channels/sync", { chat_id: Number(form.chat_id) }); load(); }}>خواندن از تلگرام</Button>
+          <Button variant="brand" disabled={!canEdit} onClick={add}>افزودن</Button>
+          <Button variant="outline" disabled={!canEdit} onClick={async () => { if (!form.chat_id) return; await api.post("/api/channels/sync", { chat_id: Number(form.chat_id) }); load(); }}>خواندن از تلگرام</Button>
         </div>
         {msg && <p className="mt-3 text-xs text-muted-foreground">{msg}</p>}
       </div>
@@ -110,8 +113,8 @@ export default function Channels() {
                 </TableCell>
                 <TableCell>
                   <div className="flex flex-wrap gap-2">
-                    <Button size="sm" variant="outline" onClick={() => setEdit({ ...channel, ai_rewrite: channel.ai_rewrite ?? "" })}>تنظیم</Button>
-                    <Button size="sm" variant="destructive" onClick={async () => { if (confirm("کانال حذف شود؟")) { await api.delete(`/api/channels/${channel.id}`); load(); } }}>حذف</Button>
+                    <Button size="sm" variant="outline" disabled={!canEdit} onClick={() => setEdit({ ...channel, ai_rewrite: channel.ai_rewrite ?? "" })}>تنظیم</Button>
+                    <Button size="sm" variant="destructive" disabled={!canEdit} onClick={async () => { if (confirm("کانال حذف شود؟")) { await api.delete(`/api/channels/${channel.id}`); load(); } }}>حذف</Button>
                   </div>
                 </TableCell>
               </TableRow>
@@ -140,10 +143,10 @@ export default function Channels() {
               <Field label="تأخیر ادیت (ثانیه، خالی = سراسری)"><Input value={edit.edit_delay_seconds ?? ""} onChange={(e) => setEdit({ ...edit, edit_delay_seconds: e.target.value })} /></Field>
             </div>
             <div className="grid gap-2 sm:grid-cols-2">
-              <Flag label="فعال" checked={!!edit.enabled} onChange={(v) => setEdit({ ...edit, enabled: v })} />
-              <Flag label="خوشگل‌سازی" checked={!!edit.auto_beautify} onChange={(v) => setEdit({ ...edit, auto_beautify: v })} />
-              <Flag label="ایموجی" checked={!!edit.emoji_replacement} onChange={(v) => setEdit({ ...edit, emoji_replacement: v })} />
-              <Flag label="حفظ دکمه‌ها" checked={!!edit.preserve_buttons} onChange={(v) => setEdit({ ...edit, preserve_buttons: v })} />
+              <Flag disabled={!canEdit} label="فعال" checked={!!edit.enabled} onChange={(v) => setEdit({ ...edit, enabled: v })} />
+              <Flag disabled={!canEdit} label="خوشگل‌سازی" checked={!!edit.auto_beautify} onChange={(v) => setEdit({ ...edit, auto_beautify: v })} />
+              <Flag disabled={!canEdit} label="ایموجی" checked={!!edit.emoji_replacement} onChange={(v) => setEdit({ ...edit, emoji_replacement: v })} />
+              <Flag disabled={!canEdit} label="حفظ دکمه‌ها" checked={!!edit.preserve_buttons} onChange={(v) => setEdit({ ...edit, preserve_buttons: v })} />
             </div>
             <Field label="هوش مصنوعی">
               <Select
@@ -156,7 +159,7 @@ export default function Channels() {
                 ]}
               />
             </Field>
-            <Button variant="brand" onClick={save}>ذخیره کانال</Button>
+            <Button variant="brand" disabled={!canEdit} onClick={save}>ذخیره کانال</Button>
           </div>
         )}
       </Dialog>

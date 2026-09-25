@@ -5,7 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.app.db.base import get_db
 from backend.app.models.channel import Channel
 from backend.app.schemas.channel import ChannelCreate, ChannelUpdate
-from backend.app.security.deps import get_current_admin
+from backend.app.security.deps import assert_editor, get_current_admin
 from backend.app.services.audit import write_audit
 from backend.app.telegram.bot import get_bot
 
@@ -49,6 +49,7 @@ async def list_channels(db: AsyncSession = Depends(get_db), admin=Depends(get_cu
 
 @router.post("")
 async def create_channel(payload: ChannelCreate, request: Request, db: AsyncSession = Depends(get_db), admin=Depends(get_current_admin)):
+    assert_editor(admin)
     existing = (await db.execute(select(Channel).where(Channel.chat_id == payload.chat_id))).scalar_one_or_none()
     if existing:
         raise HTTPException(status_code=400, detail="این کانال قبلاً ثبت شده")
@@ -61,6 +62,7 @@ async def create_channel(payload: ChannelCreate, request: Request, db: AsyncSess
 
 @router.patch("/{channel_id}")
 async def update_channel(channel_id: str, payload: ChannelUpdate, request: Request, db: AsyncSession = Depends(get_db), admin=Depends(get_current_admin)):
+    assert_editor(admin)
     channel = (await db.execute(select(Channel).where(Channel.id == channel_id))).scalar_one_or_none()
     if not channel:
         raise HTTPException(status_code=404, detail="کانال پیدا نشد")
@@ -73,6 +75,7 @@ async def update_channel(channel_id: str, payload: ChannelUpdate, request: Reque
 
 @router.delete("/{channel_id}")
 async def delete_channel(channel_id: str, request: Request, db: AsyncSession = Depends(get_db), admin=Depends(get_current_admin)):
+    assert_editor(admin)
     channel = (await db.execute(select(Channel).where(Channel.id == channel_id))).scalar_one_or_none()
     if not channel:
         raise HTTPException(status_code=404, detail="کانال پیدا نشد")
@@ -83,6 +86,7 @@ async def delete_channel(channel_id: str, request: Request, db: AsyncSession = D
 
 @router.post("/sync")
 async def sync_channel(payload: dict, db: AsyncSession = Depends(get_db), admin=Depends(get_current_admin)):
+    assert_editor(admin)
     chat_id = payload.get("chat_id")
     if chat_id is None:
         raise HTTPException(status_code=400, detail="chat_id لازم است")

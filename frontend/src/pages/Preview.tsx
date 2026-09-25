@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import api from "../services/api";
+import { useAuth } from "../stores/auth";
 import { Page } from "../components/page";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -13,6 +14,8 @@ import { DiffList, TelegramPreview } from "@/lib/telegram";
 const SAMPLE = "هر کتابی که معروفه لزوماً برای تو مناسب نیست.\nیکی از مهم‌ترین تصمیم‌ها توی مسیر کنکور، انتخاب منبعیه که با سطح، هدف و زمان مطالعه‌ات هماهنگ باشه.";
 
 export default function Preview() {
+  const role = useAuth((state) => state.role);
+  const canEdit = !role || role !== "VIEWER";
   const [text, setText] = useState(SAMPLE);
   const [channels, setChannels] = useState<any[]>([]);
   const [channelId, setChannelId] = useState("");
@@ -46,7 +49,7 @@ export default function Preview() {
           />
         </div>
         <Checkbox checked={isCaption} onCheckedChange={setIsCaption} label="کپشن" />
-        <Checkbox checked={useAi} onCheckedChange={setUseAi} label="بازنویسی هوشمند" />
+        <Checkbox checked={useAi && canEdit} disabled={!canEdit} onCheckedChange={setUseAi} label="بازنویسی هوشمند" />
       </div>
       <Textarea value={text} onChange={(e) => setText(e.target.value)} rows={8} />
       {result?.error && <Alert variant="destructive">{result.error}</Alert>}
