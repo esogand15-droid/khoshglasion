@@ -1,69 +1,127 @@
-/** Tehran clock and Jalali dates. Storage stays UTC; the panel never shows a Gregorian picker. */
+/**
+ * Jalali (شمسی) calendar conversion — Borkowski algorithm as used by jalaali-js.
+ * Valid for Jalali years 1 … 3177. Dependency-free.
+ * Date conversion stays local, matching the rest of the panel. Tehran helpers
+ * below are only for clocks that must show Asia/Tehran.
+ */
 
-const TEHRAN = "Asia/Tehran";
-const MONTHS = ["فروردین", "اردیبهشت", "خرداد", "تیر", "مرداد", "شهریور", "مهر", "آبان", "آذر", "دی", "بهمن", "اسفند"];
-const FA = ["۰", "۱", "۲", "۳", "۴", "۵", "۶", "۷", "۸", "۹"];
+export type JalaliDate = { jy: number; jm: number; jd: number };
 
-export function faDigits(value: string | number) {
-  return String(value).replace(/\d/g, (digit) => FA[Number(digit)]);
+const div = (a: number, b: number) => Math.trunc(a / b);
+const mod = (a: number, b: number) => a - Math.trunc(a / b) * b;
+
+const BREAKS = [-61, 9, 38, 199, 426, 686, 756, 818, 1111, 1181, 1210, 1635, 2060, 2097, 2192, 2262, 2324, 2394, 2456, 3178];
+
+function jalCal(jy: number) {
+  const bl = BREAKS.length;
+  const gy = jy + 621;
+  let leapJ = -14;
+  let jp = BREAKS[0];
+  if (jy < jp || jy >= BREAKS[bl - 1]) throw new RangeError(`Invalid Jalali year ${jy}`);
+  let jump = 0;
+  for (let i = 1; i < bl; i += 1) {
+    const jm = BREAKS[i];
+    jump = jm - jp;
+    if (jy < jm) break;
+    leapJ = leapJ + div(jump, 33) * 8 + div(mod(jump, 33), 4);
+    jp = jm;
+  }
+  let n = jy - jp;
+  leapJ = leapJ + div(n, 33) * 8 + div(mod(n, 33) + 3, 4);
+  if (mod(jump, 33) === 4 && jump - n === 4) leapJ += 1;
+  const leapG = div(gy, 4) - div((div(gy, 100) + 1) * 3, 4) - 150;
+  const march = 20 + leapJ - leapG;
+  if (jump - n < 6) n = n - jump + div(jump + 4, 33) * 33;
+  let leap = mod(mod(n + 1, 33) - 1, 4);
+  if (leap === -1) leap = 4;
+  return { leap, gy, march };
 }
 
-function div(value: number, by: number) {
-  return Math.trunc(value / by);
+function g2d(gy: number, gm: number, gd: number) {
+  let d = div((gy + div(gm - 8, 6) + 100100) * 1461, 4) + div(153 * mod(gm + 9, 12) + 2, 5) + gd - 34840408;
+  d = d - div(div(gy + 100100 + div(gm - 8, 6), 100) * 3, 4) + 752;
+  return d;
 }
 
-export function toJalali(gy: number, gm: number, gd: number) {
-  const gDay = [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334];
-  const gy2 = gm > 2 ? gy + 1 : gy;
-  let days = 355666 + 365 * gy + div(gy2 + 3, 4) - div(gy2 + 99, 100) + div(gy2 + 399, 400) + gd + gDay[gm - 1];
-  let jy = -1595 + 33 * div(days, 12053);
-  days %= 12053;
-  jy += 4 * div(days, 1461);
-  days %= 1461;
-  if (days > 365) {
-    jy += div(days - 1, 365);
-    days = (days - 1) % 365;
-  }
-  if (days < 186) return { jy, jm: 1 + div(days, 31), jd: 1 + (days % 31) };
-  return { jy, jm: 7 + div(days - 186, 30), jd: 1 + ((days - 186) % 30) };
-}
-
-export function toGregorian(jy: number, jm: number, jd: number) {
-  let year = jy + 1595;
-  let days = -355668 + 365 * year + div(year, 33) * 8 + div((year % 33) + 3, 4) + jd + (jm < 7 ? (jm - 1) * 31 : (jm - 7) * 30 + 186);
-  let gy = 400 * div(days, 146097);
-  days %= 146097;
-  if (days > 36524) {
-    gy += 100 * div(--days, 36524);
-    days %= 36524;
-    if (days >= 365) days += 1;
-  }
-  gy += 4 * div(days, 1461);
-  days %= 1461;
-  if (days > 365) {
-    gy += div(days - 1, 365);
-    days = (days - 1) % 365;
-  }
-  let gd = days + 1;
-  const leap = gy % 4 === 0 && (gy % 100 !== 0 || gy % 400 === 0);
-  const lengths = [0, 31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-  let gm = 1;
-  while (gm <= 12 && gd > lengths[gm]) {
-    gd -= lengths[gm];
-    gm += 1;
-  }
+function d2g(jdn: number) {
+  let j = 4 * jdn + 139361631;
+  j = j + div(div(4 * jdn + 183187720, 146097) * 3, 4) * 4 - 3908;
+  const i = div(mod(j, 1461), 4) * 5 + 308;
+  const gd = div(mod(i, 153), 5) + 1;
+  const gm = mod(div(i, 153), 12) + 1;
+  const gy = div(j, 1461) - 100100 + div(8 - gm, 6);
   return { gy, gm, gd };
 }
 
-export function isJalaliLeap(jy: number) {
-  return [1, 5, 9, 13, 17, 22, 26, 30].includes(jy % 33);
+function j2d(jy: number, jm: number, jd: number) {
+  const r = jalCal(jy);
+  return g2d(r.gy, 3, r.march) + (jm - 1) * 31 - div(jm, 7) * (jm - 7) + jd - 1;
+}
+
+function d2j(jdn: number): JalaliDate {
+  const gy = d2g(jdn).gy;
+  let jy = gy - 621;
+  const r = jalCal(jy);
+  const jdn1f = g2d(gy, 3, r.march);
+  let k = jdn - jdn1f;
+  if (k >= 0) {
+    if (k <= 185) return { jy, jm: 1 + div(k, 31), jd: mod(k, 31) + 1 };
+    k -= 186;
+  } else {
+    jy -= 1;
+    k += 179;
+    if (r.leap === 1) k += 1;
+  }
+  return { jy, jm: 7 + div(k, 30), jd: mod(k, 30) + 1 };
+}
+
+export function toJalali(date: Date): JalaliDate {
+  return d2j(g2d(date.getFullYear(), date.getMonth() + 1, date.getDate()));
+}
+
+export function toGregorian(jy: number, jm: number, jd: number): Date {
+  const { gy, gm, gd } = d2g(j2d(jy, jm, jd));
+  return new Date(gy, gm - 1, gd);
+}
+
+export function isLeapJalaliYear(jy: number) {
+  return jalCal(jy).leap === 0;
 }
 
 export function jalaliMonthLength(jy: number, jm: number) {
   if (jm <= 6) return 31;
   if (jm <= 11) return 30;
-  return isJalaliLeap(jy) ? 30 : 29;
+  return isLeapJalaliYear(jy) ? 30 : 29;
 }
+
+export const JALALI_MONTHS = ["فروردین", "اردیبهشت", "خرداد", "تیر", "مرداد", "شهریور", "مهر", "آبان", "آذر", "دی", "بهمن", "اسفند"];
+export const JALALI_WEEKDAYS = ["شنبه", "یکشنبه", "دوشنبه", "سه‌شنبه", "چهارشنبه", "پنجشنبه", "جمعه"];
+export const JALALI_WEEKDAYS_SHORT = ["ش", "ی", "د", "س", "چ", "پ", "ج"];
+export const MONTHS = JALALI_MONTHS;
+
+/** 0 = شنبه … 6 = جمعه */
+export function jalaliWeekday(date: Date) {
+  return (date.getDay() + 1) % 7;
+}
+
+const FA = ["۰", "۱", "۲", "۳", "۴", "۵", "۶", "۷", "۸", "۹"];
+const faDigits = (n: number | string) => String(n).replace(/\d/g, (d) => FA[Number(d)]);
+
+/** «چهارشنبه، ۲۵ شهریور ۱۴۰۵» */
+export function formatJalali(date: Date, opts: { weekday?: boolean; year?: boolean } = {}) {
+  const { jy, jm, jd } = toJalali(date);
+  const parts = [`${faDigits(jd)} ${JALALI_MONTHS[jm - 1]}`];
+  if (opts.year !== false) parts[0] += ` ${faDigits(jy)}`;
+  return (opts.weekday ? `${JALALI_WEEKDAYS[jalaliWeekday(date)]}، ` : "") + parts.join(" ");
+}
+
+/** Numeric form «۱۴۰۵/۰۶/۲۵» */
+export function formatJalaliNumeric(date: Date) {
+  const { jy, jm, jd } = toJalali(date);
+  return faDigits(`${jy}/${String(jm).padStart(2, "0")}/${String(jd).padStart(2, "0")}`);
+}
+
+const TEHRAN = "Asia/Tehran";
 
 export function tehranParts(value: Date) {
   const parts = new Intl.DateTimeFormat("en-US", {
@@ -83,26 +141,23 @@ export function shamsiParts(value: string | Date | null | undefined) {
   const date = value instanceof Date ? value : new Date(value || "");
   if (Number.isNaN(date.getTime())) return null;
   const clock = tehranParts(date);
-  const jalali = toJalali(clock.year, clock.month, clock.day);
+  const jalali = toJalali(new Date(clock.year, clock.month - 1, clock.day));
   return { ...jalali, hour: clock.hour, minute: clock.minute };
 }
 
 export function shamsiLabel(value: string | null | undefined) {
   const parts = shamsiParts(value);
   if (!parts) return "ثبت نشده";
-  const month = MONTHS[parts.jm - 1] || "";
-  return faDigits(`${parts.jd} ${month} ${parts.jy}، ${String(parts.hour).padStart(2, "0")}:${String(parts.minute).padStart(2, "0")}`);
+  return faDigits(`${parts.jd} ${JALALI_MONTHS[parts.jm - 1] || ""} ${parts.jy}، ${String(parts.hour).padStart(2, "0")}:${String(parts.minute).padStart(2, "0")}`);
 }
 
 export function tehranIso(jy: number, jm: number, jd: number, hour: number, minute: number) {
   const day = Math.min(Math.max(1, jd), jalaliMonthLength(jy, jm));
   const gregorian = toGregorian(jy, jm, day);
-  const utc = Date.UTC(gregorian.gy, gregorian.gm - 1, gregorian.gd, hour, minute) - 3.5 * 60 * 60 * 1000;
+  const utc = Date.UTC(gregorian.getFullYear(), gregorian.getMonth(), gregorian.getDate(), hour, minute) - 3.5 * 60 * 60 * 1000;
   return new Date(utc).toISOString();
 }
 
 export function tehranNowParts() {
   return shamsiParts(new Date()) || { jy: 1405, jm: 7, jd: 1, hour: 9, minute: 0 };
 }
-
-export { MONTHS };
