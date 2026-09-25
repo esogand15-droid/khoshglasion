@@ -61,6 +61,8 @@ async def capture_custom_emoji(db: AsyncSession, message: dict) -> int:
     text = message.get("text") or message.get("caption") or ""
     entities = message.get("entities") or message.get("caption_entities") or []
     saved = 0
+    moved: list[str] = []
+    fresh: list[EmojiMapping] = []
     for entity in entities:
         if entity.get("type") != "custom_emoji":
             continue
@@ -87,20 +89,25 @@ async def capture_custom_emoji(db: AsyncSession, message: dict) -> int:
             existing.source = existing.source or "capture"
             if category and not existing.category:
                 existing.category = category
-                existing.priority = max(existing.priority or 0, 90)
+                moved.append(existing.id)
             continue
-        db.add(EmojiMapping(
+        added = EmojiMapping(
             unicode_emoji=emoji,
             custom_emoji_id=custom_id,
             enabled=True,
             category=category,
-            priority=90 if category else 80,
+            priority=1,
             source="capture",
             label="گرفته‌شده از فوروارد",
-        ))
+        )
+        db.add(added)
+        fresh.append(added)
         saved += 1
-    if saved:
+    if saved or moved:
         await db.flush()
+        from backend.app.services.emoji_order import append_ids
+
+        await append_ids(db, [row.id for row in fresh] + moved)
     return saved
 
 

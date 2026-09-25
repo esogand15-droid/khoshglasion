@@ -11,6 +11,7 @@ from backend.app.schemas.emoji import EmojiCreate, EmojiUpdate
 from backend.app.security.deps import assert_editor, get_current_admin
 from backend.app.services.audit import write_audit
 from backend.app.formatting.spectrum import SPECTRA, guess_spectrum, parse_ai_spectra, spectrum_of
+from backend.app.services.emoji_order import BUCKETS, append_ids, apply_queue, bucket_of, order_key
 from backend.app.services.ai import complete_text
 from backend.app.core.runtime import load_runtime
 from backend.app.telegram.bot import get_bot
@@ -63,6 +64,7 @@ async def _classify_batch(runtime, batch: list[EmojiMapping]) -> tuple[dict[int,
 async def _classify_rows(db: AsyncSession, rows: list[EmojiMapping], *, force: bool, after_id: str = "") -> dict:
     # A manual spectrum stays. Force only retries rows the operator has not classified.
     pending = [row for row in rows if (row.source or "") != "manual" and (force or _needs_spectrum(row))]
+    before = {row.id: (row.category or "") for row in pending}
     skipped = len(rows) - len(pending)
     if after_id and not force:
         pending = [row for row in pending if (row.id or "") > after_id]
@@ -89,16 +91,20 @@ async def _classify_rows(db: AsyncSession, rows: list[EmojiMapping], *, force: b
         cursor += len(batch)
     last_id = pending[cursor - 1].id if cursor else after_id
     open_left = sum(1 for row in rows if _needs_spectrum(row))
+    moved = [row.id for row in pending if (row.category or "") != before.get(row.id)]
+    if moved:
+        await append_ids(db, moved)
     return {"changed": changed, "skipped": skipped, "by": by, "left": max(0, len(pending) - cursor), "open": open_left, "after_id": last_id or ""}
 
 
-def dump_emoji(row: EmojiMapping) -> dict:
-    return {
+def dump_emoji(row: EmojiMapping, rank: int | None = None) -> dict:
+    payload = {
         "id": row.id,
         "unicode_emoji": row.unicode_emoji,
         "custom_emoji_id": row.custom_emoji_id,
         "enabled": row.enabled,
         "category": row.category,
+        "bucket": bucket_of(row.category),
         "contexts": row.contexts,
         "priority": row.priority,
         "usage_count": row.usage_count,
@@ -106,6 +112,23 @@ def dump_emoji(row: EmojiMapping) -> dict:
         "source": row.source,
         "created_at": row.created_at.isoformat() if row.created_at else None,
     }
+    if rank is not None:
+        payload["rank"] = rank
+    return payload
+
+
+def ranked_dumps(rows: list[EmojiMapping]) -> list[dict]:
+    groups: dict[str, list[EmojiMapping]] = {}
+    for row in rows:
+        groups.setdefault(bucket_of(row.category), []).append(row)
+    ordered_keys = [key for key in (*BUCKETS, "") if key in groups]
+    ordered_keys.extend(key for key in groups if key not in ordered_keys)
+    out: list[dict] = []
+    for key in ordered_keys:
+        members = sorted(groups[key], key=order_key)
+        for index, row in enumerate(members, 1):
+            out.append(dump_emoji(row, index))
+    return out
 
 
 @router.get("/export")
@@ -280,6 +303,7 @@ async def bulk_emojis(payload: dict, db: AsyncSession = Depends(get_db), admin=D
             else:
                 row.category = None
                 row.source = "manual"
+        await append_ids(db, [row.id for row in rows])
     elif action == "priority":
         try:
             priority = int(payload.get("priority"))
@@ -336,10 +360,29 @@ async def cleanup_fake(db: AsyncSession = Depends(get_db), admin=Depends(get_cur
     return {"removed": len(rows)}
 
 
+@router.post("/reorder")
+async def reorder_emojis(payload: dict, db: AsyncSession = Depends(get_db), admin=Depends(get_current_admin)):
+    assert_editor(admin)
+    raw = str(payload.get("category") if payload.get("category") is not None else payload.get("bucket") or "").strip()
+    if raw and raw not in set(SPECTRA) | {"divider", "membership", "support"}:
+        raise HTTPException(status_code=400, detail="این طیف شناخته نشد")
+    ids: list[str] = []
+    for item in payload.get("ids") or []:
+        key = str(item or "").strip()
+        if key and key not in ids:
+            ids.append(key)
+        if len(ids) >= 2000:
+            break
+    if not ids:
+        raise HTTPException(status_code=400, detail="ترتیبی فرستاده نشده")
+    rows = await apply_queue(db, raw, ids)
+    return {"ok": True, "items": ranked_dumps(rows)}
+
+
 @router.get("")
 async def list_emojis(db: AsyncSession = Depends(get_db), admin=Depends(get_current_admin)):
-    rows = (await db.execute(select(EmojiMapping).order_by(EmojiMapping.priority.desc(), EmojiMapping.usage_count.desc()))).scalars().all()
-    return [dump_emoji(row) for row in rows]
+    rows = (await db.execute(select(EmojiMapping))).scalars().all()
+    return ranked_dumps(list(rows))
 
 
 @router.post("")
@@ -353,11 +396,12 @@ async def create_emoji(payload: EmojiCreate, request: Request, db: AsyncSession 
         enabled=payload.enabled,
         category=spectrum_of(payload.category) if payload.category else None,
         contexts=json.dumps([spectrum_of(payload.category)], ensure_ascii=False) if payload.category else (json.dumps(payload.contexts, ensure_ascii=False) if payload.contexts else None),
-        priority=payload.priority,
+        priority=1,
         source="manual" if payload.category else "panel",
     )
     db.add(row)
     await db.flush()
+    await append_ids(db, [row.id])
     await write_audit(db, admin=admin, action="create", resource="emoji", resource_id=row.id, ip_address=request.client.host if request.client else None)
     return dump_emoji(row)
 
@@ -369,6 +413,7 @@ async def update_emoji(emoji_id: str, payload: EmojiUpdate, db: AsyncSession = D
     if not row:
         raise HTTPException(status_code=404, detail="ایموجی پیدا نشد")
     data = payload.model_dump(exclude_unset=True)
+    moved = "category" in data
     if "priority" in data:
         priority = data["priority"]
         if priority is None or not isinstance(priority, int) or not 0 <= priority <= 1000:
@@ -387,6 +432,8 @@ async def update_emoji(emoji_id: str, payload: EmojiUpdate, db: AsyncSession = D
         data["contexts"] = json.dumps(data["contexts"], ensure_ascii=False)
     for key, value in data.items():
         setattr(row, key, value)
+    if moved:
+        await append_ids(db, [row.id])
     return dump_emoji(row)
 
 

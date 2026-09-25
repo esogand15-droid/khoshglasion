@@ -28,7 +28,6 @@ _KEYCAP_RE = re.compile(r"[0-9#*]\ufe0f?\u20e3")
 _MODIFIERS = {"\ufe0f", "\ufe0e", "\u200d"}
 MAX_PACKS = 3
 MAX_STICKERS = 200
-PACK_PRIORITY = 85
 
 
 def parse_pack_names(text: str, *, allow_bare: bool = False) -> list[str]:
@@ -118,6 +117,7 @@ async def store_pack_stickers(db: AsyncSession, name: str, sticker_set) -> dict:
     duplicate = 0
     unsafe = 0
     custom = 0
+    fresh: list[EmojiMapping] = []
     for sticker in stickers:
         emoji = str(_field(sticker, "emoji") or "")
         custom_id = str(_field(sticker, "custom_emoji_id", "customEmojiId") or "")
@@ -138,19 +138,20 @@ async def store_pack_stickers(db: AsyncSession, name: str, sticker_set) -> dict:
         if existing:
             existing.enabled = True
             if (existing.source or "") == "seed":
-                existing.priority = max(existing.priority or 0, PACK_PRIORITY)
                 existing.source = "pack"
             duplicate += 1
             continue
-        db.add(EmojiMapping(
+        added = EmojiMapping(
             unicode_emoji=emoji,
             custom_emoji_id=custom_id,
             enabled=True,
             category=fallback_category(emoji),
-            priority=PACK_PRIORITY,
+            priority=1,
             source="pack",
             label=(title or name)[:120],
-        ))
+        )
+        db.add(added)
+        fresh.append(added)
         imported += 1
     if custom == 0:
         error = "not_custom" if kind and kind != "custom_emoji" else "empty"
@@ -162,8 +163,11 @@ async def store_pack_stickers(db: AsyncSession, name: str, sticker_set) -> dict:
             "unsafe": 0,
             "error": error,
         }
-    if imported:
+    if fresh:
         await db.flush()
+        from backend.app.services.emoji_order import append_ids
+
+        await append_ids(db, [row.id for row in fresh])
     return {
         "name": name,
         "title": title or name,

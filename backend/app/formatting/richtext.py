@@ -860,20 +860,6 @@ def strip_custom_emoji_html(html_text: str) -> str:
     return re.sub(r"<tg-emoji\b[^>]*>(.*?)</tg-emoji>", r"\1", html_text or "", flags=re.DOTALL)
 
 
-ACCENT_CHOICES = {
-    "announcement": ("📢", "🚨", "🔔", "❗", "🔥"),
-    "news": ("📌", "ℹ️", "📢", "🔔"),
-    "registration": ("✅", "🆕", "📌", "🎓"),
-    "exam": ("🎯", "📝", "📚"),
-    "rank": ("🏆", "📈", "⭐", "👑"),
-    "resource": ("📚", "💡", "📝", "🔖"),
-    "lesson": ("📚", "💡", "✏️"),
-    "motivational": ("✨", "💪", "🔥", "⭐"),
-    "consulting": ("💡", "📌", "✨", "💬"),
-    "discount": ("🎁", "🔥", "✅"),
-    "planning": ("📅", "📝", "📌"),
-    "general": ("✨", "📌", "💡", "🔥", "⭐", "✅"),
-}
 _LISTISH = re.compile(r"^\s*(?:[•▪·🔹🔶\-–—]|[0-9۰-۹]{1,2}[).．]|[الفبجد]\))")
 
 
@@ -905,16 +891,18 @@ def accent_pool(mappings: list[EmojiMapping] | None, category: str, avoid_ids: s
         usable.append(mapping)
     if not usable:
         return []
-    preferred = set(ACCENT_CHOICES.get(wanted) or ACCENT_CHOICES.get(category) or ())
-    usable.sort(key=lambda item: (str(item.custom_emoji_id) in avoided, item.unicode_emoji not in preferred, -(item.priority or 0)))
+    # The panel queue is the order. A recently used id waits at the back, so
+    # the next card in that spectrum is the one a new post picks up.
+    usable.sort(key=lambda item: (str(item.custom_emoji_id) in avoided, -(int(item.priority or 0)), str(getattr(item, "id", "") or "")))
     unique: list[EmojiMapping] = []
     seen: set[str] = set()
     for item in usable:
-        if item.unicode_emoji in seen:
+        custom_id = str(item.custom_emoji_id)
+        if custom_id in seen:
             continue
-        seen.add(item.unicode_emoji)
+        seen.add(custom_id)
         unique.append(item)
-    return unique[:8]
+    return unique
 
 
 def _protected_line(start: int, end: int, marks: list[Mark]) -> bool:
@@ -984,16 +972,16 @@ def decorate_body(
     placed = plan_placements(content_indexes, layout, max_insert)
     targets = [index for index, _role in placed]
     roles = {index: role for index, role in placed}
+    order_at = {index: position for position, (index, _role) in enumerate(placed)}
     updated = text
     current = list(marks)
     applied: list[str] = []
-    for offset, index in enumerate(reversed(targets)):
+    for _offset, index in enumerate(reversed(targets)):
         start, end, content, _sep = rows[index]
         role = roles.get(index, "point")
         if _line_starts_with_emoji(content) and role != "close":
             continue
-        shift = sum(ord(char) for char in text[:48]) % len(pool)
-        accent = pool[(shift + len(targets) - 1 - offset) % len(pool)]
+        accent = pool[order_at.get(index, 0) % len(pool)]
         emoji = first_emoji_grapheme(accent.unicode_emoji or "") or ""
         if not emoji:
             continue
