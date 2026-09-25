@@ -304,16 +304,27 @@ async def session_public_status(db: AsyncSession) -> dict:
     if step not in {"code", "password"}:
         step = None
     length_raw = values.get(LOGIN_CODE_LENGTH, "")
+    accounts = await public_accounts(db)
+    enabled = [item for item in accounts if item.get("enabled")]
+    emoji = next((item for item in enabled if "emoji" in (item.get("roles") or [])), None)
+    news = next((item for item in enabled if "news" in (item.get("roles") or [])), None)
+    lead = emoji or news or (enabled[0] if enabled else None)
+    profile = _profile(values)
+    configured = bool(enabled) or session_configured()
     return {
-        "configured": session_configured(),
-        "source": "panel" if values.get(SOURCE_KEY) == "panel" else ("env" if session_configured() else None),
+        "configured": configured,
+        "source": "accounts" if enabled else ("panel" if values.get(SOURCE_KEY) == "panel" else ("env" if session_configured() else None)),
         "pending_step": step,
         "phone_masked": mask_phone(values.get(LOGIN_PHONE, "")) if step else "",
         "delivery": values.get(LOGIN_DELIVERY) or None if step else None,
         "code_length": int(length_raw) if step and length_raw.isdigit() else None,
-        "api_id_set": bool(values.get(API_ID_KEY) or values.get(LOGIN_API_ID)),
-        "accounts": await public_accounts(db),
-        **_profile(values),
+        "api_id_set": bool(values.get(API_ID_KEY) or values.get(LOGIN_API_ID) or enabled),
+        "accounts": accounts,
+        "emoji": emoji,
+        "news": news,
+        "user_id": (lead or {}).get("user_id") or profile.get("user_id"),
+        "username": (lead or {}).get("username") or profile.get("username"),
+        "premium": lead.get("premium") if lead is not None else profile.get("premium"),
     }
 
 
@@ -638,14 +649,12 @@ async def disconnect_session(db: AsyncSession) -> dict:
     await refresh_user_credentials(db)
     if pick_emoji() is None and not (await _values(db)).get(SESSION_KEY):
         set_credential_override("", "", "")
-    from backend.app.telegram.user_editor import session_configured
-
-    return {"ok": True, "configured": session_configured(), "step": None, "accounts": await public_accounts(db)}
+    status = await session_public_status(db)
+    return {"ok": True, "configured": status["configured"], "step": None, "accounts": status["accounts"]}
 
 
 async def disconnect_account(db: AsyncSession, account_id: str) -> dict:
     from backend.app.telegram.accounts import get_account
-    from backend.app.telegram.user_editor import session_configured
 
     row = await get_account(db, account_id)
     session = row.session_string
@@ -665,8 +674,8 @@ async def disconnect_account(db: AsyncSession, account_id: str) -> dict:
         await _put(db, USERNAME_KEY, "")
         await _put(db, PREMIUM_KEY, "")
     await close_user_client()
-    await refresh_user_credentials(db)
-    return {"ok": True, "configured": session_configured(), "accounts": await public_accounts(db)}
+    status = await session_public_status(db)
+    return {"ok": True, "configured": status["configured"], "accounts": status["accounts"]}
 
 
 async def check_account(db: AsyncSession, account_id: str) -> dict:

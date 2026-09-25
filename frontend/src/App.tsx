@@ -1,17 +1,20 @@
+import { lazy, Suspense } from "react";
 import { Navigate, Route, Routes } from "react-router-dom";
 import Layout from "./layouts/Layout";
-import Audit from "./pages/Audit";
-import Automation from "./pages/Automation";
-import Channels from "./pages/Channels";
-import Dashboard from "./pages/Dashboard";
-import Emojis from "./pages/Emojis";
-import Health from "./pages/Health";
 import Login from "./pages/Login";
-import Messages from "./pages/Messages";
-import Preview from "./pages/Preview";
-import Settings from "./pages/Settings";
-import Styles from "./pages/Styles";
+import { PageSkeleton } from "@/components/ui/page-state";
 import { useAuth } from "./stores/auth";
+
+const Audit = lazy(() => import("./pages/Audit"));
+const Automation = lazy(() => import("./pages/Automation"));
+const Channels = lazy(() => import("./pages/Channels"));
+const Dashboard = lazy(() => import("./pages/Dashboard"));
+const Emojis = lazy(() => import("./pages/Emojis"));
+const Health = lazy(() => import("./pages/Health"));
+const Messages = lazy(() => import("./pages/Messages"));
+const Preview = lazy(() => import("./pages/Preview"));
+const Settings = lazy(() => import("./pages/Settings"));
+const Styles = lazy(() => import("./pages/Styles"));
 
 function Protected({ children }: { children: React.ReactNode }) {
   const token = useAuth((s) => s.token);
@@ -24,16 +27,16 @@ export default function App() {
     <Routes>
       <Route path="/login" element={<Login />} />
       <Route path="/" element={<Protected><Layout /></Protected>}>
-        <Route index element={<Dashboard />} />
-        <Route path="channels" element={<Channels />} />
-        <Route path="automation" element={<Automation />} />
-        <Route path="messages" element={<Messages />} />
-        <Route path="emojis" element={<Emojis />} />
-        <Route path="styles" element={<Styles />} />
-        <Route path="preview" element={<Preview />} />
-        <Route path="settings" element={<Settings />} />
-        <Route path="health" element={<Health />} />
-        <Route path="audit" element={<Audit />} />
+        <Route index element={<Suspense fallback={<PageSkeleton />}><Dashboard /></Suspense>} />
+        <Route path="channels" element={<Suspense fallback={<PageSkeleton variant="form" />}><Channels /></Suspense>} />
+        <Route path="automation" element={<Suspense fallback={<PageSkeleton />}><Automation /></Suspense>} />
+        <Route path="messages" element={<Suspense fallback={<PageSkeleton variant="table" />}><Messages /></Suspense>} />
+        <Route path="emojis" element={<Suspense fallback={<PageSkeleton variant="form" />}><Emojis /></Suspense>} />
+        <Route path="styles" element={<Suspense fallback={<PageSkeleton variant="form" />}><Styles /></Suspense>} />
+        <Route path="preview" element={<Suspense fallback={<PageSkeleton variant="form" />}><Preview /></Suspense>} />
+        <Route path="settings" element={<Suspense fallback={<PageSkeleton variant="form" />}><Settings /></Suspense>} />
+        <Route path="health" element={<Suspense fallback={<PageSkeleton />}><Health /></Suspense>} />
+        <Route path="audit" element={<Suspense fallback={<PageSkeleton variant="table" />}><Audit /></Suspense>} />
       </Route>
     </Routes>
   );

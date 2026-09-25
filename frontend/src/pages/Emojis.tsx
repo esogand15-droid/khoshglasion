@@ -16,7 +16,6 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Field, Input } from "@/components/ui/input";
 import { SearchInput } from "@/components/ui/search-input";
 import { Select } from "@/components/ui/select";
-import { prefetchEmojiMeta } from "@/lib/emojiMedia";
 import { fa } from "@/lib/utils";
 
 const SPECTRA = [
@@ -118,22 +117,6 @@ export default function Emojis() {
     }
   }
   useEffect(() => { load(); }, []);
-  useEffect(() => {
-    const ids = items.map((item) => item.custom_emoji_id).filter(Boolean);
-    if (!ids.length) return;
-    let cancelled = false;
-    const chunks: string[][] = [];
-    for (let offset = 0; offset < ids.length; offset += 36) chunks.push(ids.slice(offset, offset + 36));
-    (async () => {
-      for (const chunk of chunks) {
-        if (cancelled) return;
-        const error = await prefetchEmojiMeta(chunk);
-        if (error) setMsg(error);
-        await new Promise((resolve) => window.setTimeout(resolve, 400));
-      }
-    })().catch(() => {});
-    return () => { cancelled = true; };
-  }, [items]);
 
   const shown = items.filter((item) => (!spectrum || bucketOf(item) === spectrum) && (!q || `${item.unicode_emoji} ${item.custom_emoji_id} ${item.category || ""} ${item.label || ""}`.includes(q)));
   const selectedSet = new Set(selected);

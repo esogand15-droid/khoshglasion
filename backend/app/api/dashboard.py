@@ -42,6 +42,42 @@ def template_usage(rules_list: list[str | None]) -> list[dict]:
     return [{"name": name, "count": count} for name, count in sorted(counts.items(), key=lambda item: -item[1])]
 
 
+async def _week_chart(db: AsyncSession, today_start: datetime) -> list[dict]:
+    """One grouped read for seven days, not fourteen separate counts."""
+    week_start = today_start - timedelta(days=6)
+    connection = await db.connection()
+    if connection.dialect.name == "postgresql":
+        day = func.date(func.timezone("Asia/Tehran", MessageLog.created_at))
+    else:
+        day = func.date(MessageLog.created_at)
+    rows = (
+        await db.execute(
+            select(day, MessageLog.status, func.count())
+            .where(MessageLog.created_at >= week_start)
+            .group_by(day, MessageLog.status)
+        )
+    ).all()
+    buckets: dict[str, dict[str, int]] = {}
+    for stamp, status, total in rows:
+        key = str(stamp)
+        slot = buckets.setdefault(key, {})
+        slot[status or ""] = slot.get(status or "", 0) + int(total or 0)
+    chart = []
+    for offset in range(6, -1, -1):
+        start = today_start - timedelta(days=offset)
+        key = start.astimezone(timezone.utc).date().isoformat()
+        # SQLite date() is UTC; Tehran midnight is the bucket we asked for.
+        matched = buckets.get(key) or buckets.get(start.date().isoformat()) or {}
+        count = sum(matched.values())
+        chart.append({
+            "date": start.isoformat(),
+            "start": start.isoformat(),
+            "count": count,
+            "edited": int(matched.get("edited") or 0),
+        })
+    return chart
+
+
 async def _automation_queue(db: AsyncSession) -> dict:
     config = await get_config(db)
     counts = dict((await db.execute(select(DraftPost.status, func.count()).group_by(DraftPost.status))).all())
@@ -93,16 +129,7 @@ async def dashboard(db: AsyncSession = Depends(get_db), admin=Depends(get_curren
     channels_count = (await db.execute(select(func.count()).select_from(Channel))).scalar() or 0
     emojis_count = (await db.execute(select(func.count()).select_from(EmojiMapping).where(EmojiMapping.enabled == True))).scalar() or 0  # noqa: E712
 
-    per_day = []
-    for i in range(6, -1, -1):
-        day = today_start - timedelta(days=i)
-        nxt = day + timedelta(days=1)
-        per_day.append({
-            "date": day.astimezone(timezone.utc).isoformat(),
-            "start": day.astimezone(timezone.utc).isoformat(),
-            "count": await count(MessageLog.created_at >= day, MessageLog.created_at < nxt),
-            "edited": await count(MessageLog.status == "edited", MessageLog.created_at >= day, MessageLog.created_at < nxt),
-        })
+    per_day = await _week_chart(db, today_start)
 
     categories = (
         await db.execute(

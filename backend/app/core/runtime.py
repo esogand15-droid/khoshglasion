@@ -15,6 +15,7 @@ RUNTIME_KEYS = (
     "dry_run",
     "kill_switch",
     "safe_mode",
+    "panel_light",
     "ai_enabled",
     "ai_base_url",
     "ai_model",
@@ -101,6 +102,7 @@ class RuntimeState:
     footer_url: str = "https://t.me/Rotbeland1"
     support_username: str = "Rotbeland_support"
     ai_models: tuple = field(default_factory=tuple)
+    panel_light: bool = False
 
     @property
     def admin_ids(self) -> list[int]:
@@ -164,6 +166,7 @@ def runtime_from_mapping(settings: Settings, mapping: dict[str, str | None]) -> 
         footer_url=(raw("footer_url") or "https://t.me/Rotbeland1"),
         support_username=(raw("support_username") or "Rotbeland_support").lstrip("@"),
         ai_models=tuple(parse_models(raw("ai_models"))),
+        panel_light=_as_bool(raw("panel_light"), False),
     )
 
 

@@ -2,6 +2,7 @@ from contextlib import asynccontextmanager
 import asyncio
 import hmac
 import logging
+import time
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
@@ -124,6 +125,18 @@ app = FastAPI(
     description="رتبه‌لند channel beautifier",
     lifespan=lifespan,
 )
+
+@app.middleware("http")
+async def time_api(request: Request, call_next):
+    started = time.perf_counter()
+    response = await call_next(request)
+    elapsed = (time.perf_counter() - started) * 1000
+    if request.url.path.startswith("/api"):
+        response.headers["X-Response-Time"] = f"{elapsed:.0f}"
+        if elapsed >= 500:
+            logger.warning("slow %s %s %.0fms", request.method, request.url.path, elapsed)
+    return response
+
 
 app.add_middleware(
     CORSMiddleware,

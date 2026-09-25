@@ -883,6 +883,9 @@ async def automation_loop(stop) -> None:
                 if not await claim_job(db):
                     await db.rollback()
                 else:
+                    from backend.app.api.automation import _settle_published
+
+                    await _settle_published(db)
                     await publish_due(db)
                     await collect_sources(db)
                     await db.commit()

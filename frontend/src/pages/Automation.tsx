@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import api from "../services/api";
 import { useAuth } from "../stores/auth";
 import { Page } from "../components/page";
@@ -21,6 +21,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { ShamsiDateTime } from "@/components/ui/shamsi-datetime";
 import { shamsiLabel } from "@/lib/jalali";
 import { DiffList, TelegramPreview } from "@/lib/telegram";
+import { isPanelLight } from "@/lib/pace";
 import { apiDetail, en, fa } from "@/lib/utils";
 
 const STATUS: Record<string, string> = {
@@ -161,10 +162,13 @@ export default function Automation() {
   useEffect(() => { load().catch(() => setLoadError("صف اتوماسیون خوانده نشد")); }, [statusFilter, categoryFilter]);
 
   async function saveConfig(patch: Record<string, unknown>) {
+    const previous = data;
+    setData((current: any) => ({ ...(current || {}), ...patch }));
     try {
-      await api.patch("/api/automation", patch);
-      await load();
+      const { data: saved } = await api.patch("/api/automation", patch, { timeout: 8000 });
+      setData((current: any) => ({ ...(current || {}), ...saved }));
     } catch (error: any) {
+      setData(previous);
       setMsg(apiDetail(error, "ذخیره نشد"));
     }
   }
@@ -514,12 +518,7 @@ export default function Automation() {
                       {edit?.id === draft.id ? (
                         <Textarea value={edit.body} onChange={(event) => setEdit({ ...edit, body: event.target.value })} />
                       ) : draft.body ? <DraftFace id={draft.id} body={draft.body} /> : <p className="text-sm text-muted-foreground">برای این منبع هنوز متنی ساخته نشده. منبع پایین جدا از پیش‌نویس است.</p>}
-                      {draft.source_content && (
-                        <details className="text-xs text-muted-foreground">
-                          <summary>متن منبع، جدا از پیش‌نویس</summary>
-                          <p className="mt-2 whitespace-pre-wrap">{draft.source_content}</p>
-                        </details>
-                      )}
+                      <SourceFold id={draft.id} canEdit={canEdit} onRestore={(version) => run(async () => { await api.post(`/api/automation/drafts/${draft.id}/restore-version?version=${version}`); setMsg("نسخه برگردانده شد"); await load(); }, "برگردانده نشد")} />
                       {draft.image_note && <p className="text-xs text-muted-foreground">از روی عکس: {draft.image_note}</p>}
                       {(draft.writer_model || draft.vision_model) && <p className="text-xs text-muted-foreground">مدل نویسنده: {draft.writer_model || "—"}{draft.vision_model ? ` · مدل عکس: ${draft.vision_model}` : ""}</p>}
                       {(draft.reading || draft.tone || draft.analysis_summary) && (
@@ -633,6 +632,8 @@ export default function Automation() {
         </TabsContent>
 
         <TabsContent value="finetune">
+          <FinetuneFetch apply={(pack) => setData((current: any) => current ? { ...current, finetune: pack } : current)} />
+          {data.finetune?.deferred && <p className="mb-3 text-sm text-muted-foreground">پوشه‌ها جدا خوانده می‌شوند تا خودِ صفحه معطل نماند.</p>}
           <div className="space-y-3">
             <Card>
               <CardHeader><CardTitle>پوشهٔ سبک کانال‌های کنکور</CardTitle></CardHeader>
@@ -732,27 +733,100 @@ export default function Automation() {
   );
 }
 
+const previewSlots = { active: 0, wait: [] as Array<() => void> };
+
+function whenVisible(node: Element | null, onVisible: () => void) {
+  if (!node || typeof IntersectionObserver === "undefined") {
+    onVisible();
+    return () => {};
+  }
+  const observer = new IntersectionObserver(([entry]) => {
+    if (!entry?.isIntersecting) return;
+    observer.disconnect();
+    onVisible();
+  }, { rootMargin: "120px" });
+  observer.observe(node);
+  return () => observer.disconnect();
+}
+
 function DraftFace({ id, body }: { id: string; body: string }) {
   const [html, setHtml] = useState("");
   const [label, setLabel] = useState("");
+  const seen = useRef<HTMLDivElement>(null);
   useEffect(() => {
     let live = true;
-    api.get(`/api/automation/drafts/${id}/preview`, { timeout: 12000 }).then((response) => {
-      if (!live) return;
-      setHtml(response.data.html_text || "");
-      setLabel(response.data.spectrum_label || "");
-    }).catch(() => {
-      if (live) setHtml("");
+    const stop = whenVisible(seen.current, () => {
+      const run = () => {
+        previewSlots.active += 1;
+        api.get(`/api/automation/drafts/${id}/preview`, { timeout: 12000 }).then((response) => {
+          if (!live) return;
+          setHtml(response.data.html_text || "");
+          setLabel(response.data.spectrum_label || "");
+        }).catch(() => {
+          if (live) setHtml("");
+        }).finally(() => {
+          previewSlots.active -= 1;
+          const next = previewSlots.wait.shift();
+          if (next) next();
+        });
+      };
+      if (previewSlots.active < 2) run();
+      else previewSlots.wait.push(run);
     });
-    return () => { live = false; };
+    return () => {
+      live = false;
+      stop();
+    };
   }, [id, body]);
   return (
-    <div className="space-y-1">
+    <div ref={seen} className="space-y-1">
       {label && <p className="text-xs text-muted-foreground">ایموجی متحرک طیف {label}، قبل از ارسال</p>}
       {html ? <TelegramPreview html={html} plain={body} /> : <p className="whitespace-pre-wrap text-sm">{body}</p>}
       {html && !html.includes("tg-emoji") && <p className="text-xs text-muted-foreground">برای این طیف هنوز ایموجی طبقه‌بندی‌شده‌ای نیست. از کتابخانه طیف را بگذار.</p>}
     </div>
   );
+}
+
+function SourceFold({ id, canEdit, onRestore }: { id: string; canEdit: boolean; onRestore: (version: number) => void }) {
+  const [text, setText] = useState("");
+  const [versions, setVersions] = useState<any[]>([]);
+  const [loaded, setLoaded] = useState(false);
+  return (
+    <details className="text-xs text-muted-foreground" onToggle={(event) => {
+      const node = event.currentTarget;
+      if (!node.open || loaded) return;
+      setLoaded(true);
+      api.get(`/api/automation/drafts/${id}/source`, { timeout: 12000 }).then((response) => {
+        setText(response.data.source_content || "");
+        setVersions(response.data.versions || []);
+      }).catch(() => setText(""));
+    }}>
+      <summary>متن منبع و نسخه‌های قبلی</summary>
+      <p className="mt-2 whitespace-pre-wrap">{loaded ? (text || "متنی از منبع نمانده.") : "در حال خواندن…"}</p>
+      {versions.map((item) => (
+        <div key={`${item.version}-${item.reason}`} className="mt-2 space-y-1">
+          <p>نسخه {fa(item.version)} · {item.reason}</p>
+          <p className="whitespace-pre-wrap">{item.body}</p>
+          {canEdit && <Button size="sm" variant="outline" onClick={() => onRestore(item.version)}>برگرداندن این نسخه</Button>}
+        </div>
+      ))}
+    </details>
+  );
+}
+
+function FinetuneFetch({ apply }: { apply: (pack: any) => void }) {
+  const applyRef = useRef(apply);
+  applyRef.current = apply;
+  useEffect(() => {
+    let live = true;
+    api.get("/api/automation/finetune", { timeout: 20000 }).then((response) => {
+      if (live) applyRef.current(response.data);
+    }).catch(() => {
+      if (live) applyRef.current({ total: 0, card: "", folders: [], deferred: false });
+    });
+    return () => { live = false; };
+  }, []);
+  return null;
 }
 
 function DraftAlbum({ id, count }: { id: string; count: number }) {
@@ -802,44 +876,48 @@ function DraftPhoto({ id, index = 0 }: { id: string; index?: number }) {
   const [url, setUrl] = useState<string>("");
   const [failed, setFailed] = useState(false);
   const [open, setOpen] = useState(false);
+  const seen = useRef<HTMLDivElement>(null);
   useEffect(() => {
     let live = true;
     let objectUrl = "";
-    const load = async (attempt: number) => {
-      try {
-        const response = await api.get(`/api/automation/drafts/${id}/photo`, { params: { index }, responseType: "blob", timeout: 45000 });
-        if (!live) return;
-        const blob = response.data as Blob;
-        const bytes = new Uint8Array(await blob.arrayBuffer());
-        if (!live) return;
-        if (!blob || bytes.length < 32 || !looksLikeImage(bytes, blob.type || "")) {
-          if (attempt < 2) {
-            window.setTimeout(() => { if (live) void load(attempt + 1); }, 700);
+    const stop = whenVisible(seen.current, () => {
+      const load = async (attempt: number) => {
+        try {
+          const response = await api.get(`/api/automation/drafts/${id}/photo`, { params: { index, recover: isPanelLight() ? 0 : attempt > 0 ? 1 : 0 }, responseType: "blob", timeout: attempt > 0 ? 20000 : 8000 });
+          if (!live) return;
+          const blob = response.data as Blob;
+          const bytes = new Uint8Array(await blob.arrayBuffer());
+          if (!live) return;
+          if (!blob || bytes.length < 32 || !looksLikeImage(bytes, blob.type || "")) {
+            if (attempt < 1 && !isPanelLight()) {
+              void load(attempt + 1);
+              return;
+            }
+            setFailed(true);
+            return;
+          }
+          const typed = new Blob([bytes], { type: blob.type?.startsWith("image/") ? blob.type : "image/jpeg" });
+          objectUrl = URL.createObjectURL(typed);
+          setUrl(objectUrl);
+        } catch {
+          if (!live) return;
+          if (attempt < 1 && !isPanelLight()) {
+            void load(attempt + 1);
             return;
           }
           setFailed(true);
-          return;
         }
-        const typed = new Blob([bytes], { type: blob.type?.startsWith("image/") ? blob.type : "image/jpeg" });
-        objectUrl = URL.createObjectURL(typed);
-        setUrl(objectUrl);
-      } catch {
-        if (!live) return;
-        if (attempt < 2) {
-          window.setTimeout(() => { if (live) void load(attempt + 1); }, 700);
-          return;
-        }
-        setFailed(true);
-      }
-    };
-    void load(0);
+      };
+      void load(0);
+    });
     return () => {
       live = false;
+      stop();
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
   }, [id, index]);
   if (failed) return <p className="rounded-xl border border-destructive/40 px-3 py-2 text-xs text-destructive">عکس این پست باز نشد. اگر تلگرام در دسترس باشد، یک بار دیگر صفحه را تازه کن.</p>;
-  if (!url) return <div className="flex h-48 items-center justify-center rounded-xl border border-border bg-muted text-xs text-muted-foreground" aria-label="در حال خواندن عکس">در حال آوردن عکس پست…</div>;
+  if (!url) return <div ref={seen} className="flex h-48 items-center justify-center rounded-xl border border-border bg-muted text-xs text-muted-foreground" aria-label="در حال خواندن عکس">در حال آوردن عکس پست…</div>;
   return (
     <>
       <button type="button" className="block w-full cursor-pointer overflow-hidden rounded-xl border border-border bg-white/5 p-2" onClick={() => setOpen(true)} aria-label="بزرگ‌نمایی عکس">

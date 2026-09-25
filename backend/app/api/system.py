@@ -47,6 +47,7 @@ from backend.app.telegram.user_editor import session_configured, user_session_st
 
 router = APIRouter(prefix="/api/system", tags=["system"])
 logger = logging.getLogger(__name__)
+_telegram_probe = {"ts": 0.0, "me": None, "webhook": None}
 
 SECRET_TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{1,256}$")
 
@@ -228,6 +229,75 @@ async def _alerts(db: AsyncSession, runtime, settings) -> list[dict]:
     return alerts
 
 
+async def _cached_telegram_probe() -> tuple[dict | None, dict | None]:
+    """Bot identity does not change every click. A fresh getMe on each page saturates Telegram."""
+    import time
+
+    now = time.monotonic()
+    if now - float(_telegram_probe["ts"]) < 20 and _telegram_probe["me"] is not None:
+        return _telegram_probe["me"], _telegram_probe["webhook"]
+    bot = get_bot()
+    me = None
+    webhook = None
+    if bot:
+        try:
+            raw = await bot.get_me()
+            me = {"id": raw.id, "username": raw.username, "name": raw.full_name}
+        except Exception as exc:
+            me = {"error": type(exc).__name__}
+        try:
+            info = await bot.get_webhook_info()
+            webhook = {
+                "url": info.url,
+                "pending_update_count": info.pending_update_count,
+                "last_error_message": info.last_error_message,
+                "last_error_date": info.last_error_date.isoformat() if info.last_error_date else None,
+                "max_connections": info.max_connections,
+            }
+        except Exception as exc:
+            webhook = {"error": type(exc).__name__}
+    _telegram_probe["ts"] = now
+    _telegram_probe["me"] = me
+    _telegram_probe["webhook"] = webhook
+    return me, webhook
+
+
+@router.get("/pulse")
+async def system_pulse(db: AsyncSession = Depends(get_db), admin=Depends(get_current_admin)):
+    """Header status. Database and the shared session list only — no Telegram round trip."""
+    runtime = await load_runtime(db)
+    session = await session_public_status(db)
+    db_ok = True
+    try:
+        await db.execute(text("SELECT 1"))
+    except Exception:
+        db_ok = False
+    return {
+        "database": "connected" if db_ok else "disconnected",
+        "bot_configured": bool(peek("bot_token")),
+        "safe_mode": runtime.safe_mode,
+        "panel_light": bool(getattr(runtime, "panel_light", False)),
+        "kill_switch": runtime.kill_switch,
+        "dry_run": runtime.dry_run,
+        "premium_mode": runtime.premium_mode,
+        "user_session_configured": session["configured"],
+        "user_session_username": session.get("username"),
+        "accounts": session.get("accounts") or [],
+    }
+
+
+class PaceIn(BaseModel):
+    panel_light: bool
+
+
+@router.post("/pace")
+async def set_pace(payload: PaceIn, db: AsyncSession = Depends(get_db), admin=Depends(get_current_admin)):
+    """Turn heavy panel work off without reloading the page or restarting the bot."""
+    assert_editor(admin)
+    runtime = await save_runtime_values(db, {"panel_light": str(payload.panel_light).lower()})
+    return {"panel_light": bool(runtime.panel_light)}
+
+
 @router.get("/health")
 async def system_health(db: AsyncSession = Depends(get_db), admin=Depends(get_current_admin)):
     settings = get_settings()
@@ -241,26 +311,7 @@ async def system_health(db: AsyncSession = Depends(get_db), admin=Depends(get_cu
         db_ok = False
         db_error = "پایگاه داده پاسخ نداد"
         logger.exception("health database check failed")
-    bot = get_bot()
-    me = None
-    webhook = None
-    if bot:
-        try:
-            raw = await bot.get_me()
-            me = {"id": raw.id, "username": raw.username, "name": raw.full_name}
-        except Exception as exc:
-            me = {"error": str(exc)}
-        try:
-            info = await bot.get_webhook_info()
-            webhook = {
-                "url": info.url,
-                "pending_update_count": info.pending_update_count,
-                "last_error_message": info.last_error_message,
-                "last_error_date": info.last_error_date.isoformat() if info.last_error_date else None,
-                "max_connections": info.max_connections,
-            }
-        except Exception as exc:
-            webhook = {"error": str(exc)}
+    me, webhook = await _cached_telegram_probe()
     return {
         "database": "connected" if db_ok else "disconnected",
         "database_error": db_error,
@@ -309,7 +360,7 @@ async def get_settings_api(db: AsyncSession = Depends(get_db), admin=Depends(get
         "version": settings.app_version,
         "driver": driver_name(settings.database_url),
         "external_database": is_external_database(settings.database_url),
-        "user_session_configured": session_configured(),
+        "user_session_configured": (await session_public_status(db))["configured"],
         "bot_configured": bool(peek("bot_token")),
     })
     return _annotate_ai(data, runtime.ai_base_url)

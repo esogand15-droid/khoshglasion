@@ -15,6 +15,8 @@ import {
   SwatchBook,
 } from "lucide-react";
 import api from "../services/api";
+import { setPanelLight } from "../lib/pace";
+import { fa } from "@/lib/utils";
 import { useAuth } from "../stores/auth";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -113,10 +115,33 @@ export default function Layout() {
   const navigate = useNavigate();
   const [status, setStatus] = useState<any>(null);
   const [open, setOpen] = useState(false);
+  const [lightBusy, setLightBusy] = useState(false);
+  const canToggle = role !== "VIEWER";
 
   useEffect(() => {
-    api.get("/api/system/health").then((r) => setStatus(r.data)).catch(() => {});
+    api.get("/api/system/pulse", { timeout: 8000 }).then((r) => {
+      setStatus(r.data);
+      setPanelLight(!!r.data.panel_light);
+    }).catch(() => {});
   }, []);
+
+  async function toggleLight() {
+    if (!canToggle || lightBusy) return;
+    const next = !status?.panel_light;
+    setStatus((current: any) => ({ ...(current || {}), panel_light: next }));
+    setPanelLight(next);
+    setLightBusy(true);
+    try {
+      const { data } = await api.post("/api/system/pace", { panel_light: next }, { timeout: 8000 });
+      setStatus((current: any) => ({ ...(current || {}), panel_light: !!data.panel_light }));
+      setPanelLight(!!data.panel_light);
+    } catch {
+      setStatus((current: any) => ({ ...(current || {}), panel_light: !next }));
+      setPanelLight(!next);
+    } finally {
+      setLightBusy(false);
+    }
+  }
 
   return (
     <div className="flex min-h-dvh bg-background text-foreground">
@@ -157,13 +182,16 @@ export default function Layout() {
             <span className="text-sm font-bold lg:hidden">خوشگلاسیون</span>
           </div>
           <div className="flex flex-wrap items-center justify-end gap-1.5">
-            <Badge variant={status?.bot === "connected" ? "success" : "destructive"}>{status?.bot === "connected" ? "بات زنده" : "بات قطع"}</Badge>
-            <Badge variant={status?.database === "connected" ? "success" : "destructive"}>{status?.external_database ? "Postgres" : "دیتابیس"}</Badge>
-            {status && status.premium_mode !== "off" && status.premium_mode !== "bot" && (
-              <Badge variant={status.user_session_configured ? "success" : "warning"}>{status.user_session_configured ? "نشست وصل" : "نشست قطع"}</Badge>
-            )}
+            <Badge variant={status?.bot_configured ? "success" : "destructive"}>{status?.bot_configured ? "بات وصل" : "بات قطع"}</Badge>
+            <Badge variant={status?.database === "connected" ? "success" : "destructive"}>{status?.database === "connected" ? "دیتابیس" : "دیتابیس قطع"}</Badge>
+            <Badge variant={status?.user_session_configured ? "success" : "warning"}>
+              {status?.user_session_configured ? `${fa((status.accounts || []).filter((item: any) => item.enabled).length)} نشست فعال` : "نشست قطع"}
+            </Badge>
             {status?.dry_run && <Badge variant="warning">آزمایشی</Badge>}
             {status?.kill_switch && <Badge variant="destructive">توقف</Badge>}
+            <Button size="sm" variant={status?.panel_light ? "brand" : "outline"} disabled={!canToggle || lightBusy} onClick={toggleLight}>
+              {status?.panel_light ? "حالت سبک روشن" : "حالت سبک"}
+            </Button>
           </div>
         </header>
         <main className="flex-1 p-4 sm:p-6">

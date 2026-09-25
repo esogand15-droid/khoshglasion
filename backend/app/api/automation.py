@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 from sqlalchemy import and_, desc, func, not_, nulls_last, or_, select
+from sqlalchemy.orm import defer
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -102,7 +103,21 @@ def _analysis_flag(raw: str | None, key: str):
     return data.get(key) if isinstance(data, dict) else None
 
 
-def dump_draft(row: DraftPost, username: str | None = None) -> dict:
+def _analysis_dict(raw: str | None) -> dict:
+    try:
+        data = json.loads(raw or "")
+    except json.JSONDecodeError:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def dump_draft(row: DraftPost, username: str | None = None, *, brief: bool = False) -> dict:
+    analysis = _analysis_dict(row.analysis_json)
+    paths = analysis.get("photo_paths") if isinstance(analysis.get("photo_paths"), list) else []
+    photo_count = len(paths) or (1 if analysis.get("photo_path") else 0)
+    # A list must not touch deferred text columns. Accessing them loads one row at a time.
+    source = "" if brief else row.source_content
+    versions = [] if brief else _versions(row.versions_json)
     return {
         "id": row.id,
         "status": row.status,
@@ -114,7 +129,8 @@ def dump_draft(row: DraftPost, username: str | None = None) -> dict:
         "target_chat_id": row.target_chat_id,
         "message_id": row.message_id,
         "error": row.error,
-        "source_content": row.source_content,
+        "source_content": source or "",
+        "has_source": bool(source) or brief,
         "hashtags": row.hashtags,
         "confidence": row.confidence,
         "importance": row.importance,
@@ -123,23 +139,23 @@ def dump_draft(row: DraftPost, username: str | None = None) -> dict:
         "next_retry_at": _iso(row.next_retry_at),
         "template_id": row.template_id,
         "emoji_signature": row.emoji_signature,
-        "analysis_summary": _summary(row.analysis_json),
-        "style_label": _analysis_flag(row.analysis_json, "style_label"),
-        "tone": _analysis_flag(row.analysis_json, "tone") or "",
-        "reading": _analysis_flag(row.analysis_json, "reading") or "",
+        "analysis_summary": "" if brief else _summary(row.analysis_json),
+        "style_label": analysis.get("style_label"),
+        "tone": analysis.get("tone") or "",
+        "reading": analysis.get("reading") or "",
         "source_url": row.source_url,
         "published_url": channel_message_url(row.target_chat_id, row.message_id, username),
-        "has_media": bool(_analysis_flag(row.analysis_json, "has_media")),
-        "has_photo": _draft_photo(row) is not None or bool(_analysis_flag(row.analysis_json, "photo_path")) or bool(_analysis_flag(row.analysis_json, "image_note")),
-        "has_video": bool(_analysis_flag(row.analysis_json, "video_path")),
-        "media_kind": _analysis_flag(row.analysis_json, "media_kind") or "",
-        "photo_count": _photo_count(row),
-        "image_note": _analysis_flag(row.analysis_json, "image_note") or "",
-        "rewrite": _analysis_flag(row.analysis_json, "rewrite") or "",
-        "writer_model": _analysis_flag(row.analysis_json, "writer_model") or "",
-        "vision_model": _analysis_flag(row.analysis_json, "vision_model") or "",
-        "versions": _versions(row.versions_json),
-        "source_at": _analysis_flag(row.analysis_json, "source_at") or None,
+        "has_media": bool(analysis.get("has_media")),
+        "has_photo": photo_count > 0 or bool(analysis.get("image_note")),
+        "has_video": bool(analysis.get("video_path")),
+        "media_kind": analysis.get("media_kind") or "",
+        "photo_count": photo_count,
+        "image_note": analysis.get("image_note") or "",
+        "rewrite": analysis.get("rewrite") or "",
+        "writer_model": analysis.get("writer_model") or "",
+        "vision_model": analysis.get("vision_model") or "",
+        "versions": versions,
+        "source_at": analysis.get("source_at") or None,
         "created_at": _iso(row.created_at),
     }
 
@@ -290,7 +306,6 @@ async def _read_automation_state(
 ):
     # Read only. Do not SET LOCAL here: on asyncpg a failed SET aborts the
     # transaction and every later query becomes the 503 the panel shows.
-    await _settle_published(db)
     config = await get_config(db)
     sources = (await db.execute(select(NewsSource).order_by(NewsSource.created_at))).scalars().all()
     slots = (await db.execute(select(PublishSlot).order_by(PublishSlot.hour, PublishSlot.minute))).scalars().all()
@@ -303,7 +318,8 @@ async def _read_automation_state(
         DraftPost.message_id.is_not(None),
         DraftPost.status.notin_(["recalled", "rejected"]),
     )
-    draft_query = select(DraftPost).where(
+    light = (defer(DraftPost.source_content), defer(DraftPost.versions_json))
+    draft_query = select(DraftPost).options(*light).where(
         DraftPost.status.notin_(["rejected", "published"]),
         not_(already_sent),
         not_(hidden_repeat),
@@ -311,9 +327,10 @@ async def _read_automation_state(
     if not draft_status:
         draft_query = draft_query.where(not_(hidden_ads))
     draft_query = draft_query.order_by(DraftPost.created_at.desc()).limit(80)
-    archive_query = select(DraftPost).where(DraftPost.status == "rejected").order_by(DraftPost.created_at.desc()).limit(80)
+    archive_query = select(DraftPost).options(*light).where(DraftPost.status == "rejected").order_by(DraftPost.created_at.desc()).limit(80)
     published_query = (
         select(DraftPost)
+        .options(*light)
         .where(or_(DraftPost.status == "published", already_sent))
         .order_by(nulls_last(desc(DraftPost.published_at)), desc(DraftPost.created_at))
         .limit(80)
@@ -336,7 +353,7 @@ async def _read_automation_state(
         (await db.execute(select(DraftPost.status, func.count()).group_by(DraftPost.status))).all()
     )
     today = await published_today(db)
-    finetune = await _finetune_snapshot(db)
+    finetune = {"total": 0, "card": "", "folders": [], "deferred": True}
     return {
         "enabled": config.enabled,
         "auto_publish": config.auto_publish,
@@ -378,9 +395,9 @@ async def _read_automation_state(
         "next_slot": _iso(next_slot_time(list(slots))),
         "sources": [dump_source(row) for row in sources],
         "slots": [dump_slot(row) for row in slots],
-        "drafts": [dump_draft(row, names.get(int(row.target_chat_id)) if row.target_chat_id else None) for row in drafts],
-        "published": [dump_draft(row, names.get(int(row.target_chat_id)) if row.target_chat_id else None) for row in published],
-        "archive": [dump_draft(row, names.get(int(row.target_chat_id)) if row.target_chat_id else None) for row in archived],
+        "drafts": [dump_draft(row, names.get(int(row.target_chat_id)) if row.target_chat_id else None, brief=True) for row in drafts],
+        "published": [dump_draft(row, names.get(int(row.target_chat_id)) if row.target_chat_id else None, brief=True) for row in published],
+        "archive": [dump_draft(row, names.get(int(row.target_chat_id)) if row.target_chat_id else None, brief=True) for row in archived],
         "finetune": finetune,
         "lessons": _lessons(getattr(config, "lessons_json", None)),
     }
@@ -404,7 +421,18 @@ async def update_config(payload: ConfigIn, request: Request, db: AsyncSession = 
     for key, value in data.items():
         setattr(config, key, value)
     await write_audit(db, admin=admin, action="update", resource="automation", new_value=data, ip_address=request.client.host if request.client else None)
-    return {"ok": True, "enabled": config.enabled, "auto_publish": config.auto_publish, "target_chat_id": config.target_chat_id}
+    return {
+        "ok": True,
+        "enabled": config.enabled,
+        "auto_publish": config.auto_publish,
+        "paused": config.paused,
+        "attribution_mode": config.attribution_mode,
+        "target_chat_id": config.target_chat_id,
+        "daily_cap": config.daily_cap,
+        "balance_categories": config.balance_categories,
+        "collect_interval_minutes": config.collect_interval_minutes,
+        "footer_text": configured_footer(getattr(config, "footer_text", None)),
+    }
 
 
 @router.post("/sources")
@@ -638,7 +666,7 @@ def _draft_media_paths(row: DraftPost) -> list[str]:
     return photo_paths_of(row.analysis_json)
 
 
-async def _photo_bytes(db: AsyncSession, row: DraftPost, index: int) -> bytes | None:
+async def _photo_bytes(db: AsyncSession, row: DraftPost, index: int, *, recover: bool = False) -> bytes | None:
     import asyncio
 
     from backend.app.content.media_store import load_photo, read_image, remember_slot
@@ -692,6 +720,11 @@ async def _photo_bytes(db: AsyncSession, row: DraftPost, index: int) -> bytes | 
             data = read_image(paths[index])
             if data:
                 return data
+        if not recover:
+            return None
+        runtime = await load_runtime(db)
+        if getattr(runtime, "panel_light", False):
+            return None
         recovered = await _recover_photos(db, row)
         if 0 <= index < len(recovered):
             data = read_image(recovered[index])
@@ -707,12 +740,23 @@ async def _photo_bytes(db: AsyncSession, row: DraftPost, index: int) -> bytes | 
     return None
 
 
+@router.get("/finetune")
+async def automation_finetune(db: AsyncSession = Depends(get_db), admin=Depends(get_current_admin)):
+    return await _finetune_snapshot(db)
+
+
+@router.get("/drafts/{draft_id}/source")
+async def draft_source(draft_id: str, db: AsyncSession = Depends(get_db), admin=Depends(get_current_admin)):
+    row = await _draft(db, draft_id)
+    return {"source_content": row.source_content or "", "versions": _versions(row.versions_json)}
+
+
 @router.get("/drafts/{draft_id}/photo")
-async def draft_photo(draft_id: str, index: int = 0, db: AsyncSession = Depends(get_db), admin=Depends(get_current_admin)):
+async def draft_photo(draft_id: str, index: int = 0, recover: int = 0, db: AsyncSession = Depends(get_db), admin=Depends(get_current_admin)):
     from backend.app.content.intake import image_mime
 
     row = await _draft(db, draft_id)
-    data = await _photo_bytes(db, row, index)
+    data = await _photo_bytes(db, row, index, recover=bool(recover))
     if not data:
         raise HTTPException(status_code=404, detail="عکس این پست پیدا نشد")
     return Response(content=data, media_type=image_mime(data), headers={"Cache-Control": "private, max-age=300"})
