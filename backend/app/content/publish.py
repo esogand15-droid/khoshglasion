@@ -18,7 +18,7 @@ def prepare_publish_payload(
     is_caption: bool = False,
 ) -> dict:
     chosen = layout if layout in LAYOUTS else "title"
-    if (category or "news") in {"news", "announcement", "registration"} and chosen in {"list", "scatter"}:
+    if chosen != "quiet":
         chosen = "title"
     quiet = chosen == "quiet"
     result = format_message(

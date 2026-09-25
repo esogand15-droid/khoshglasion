@@ -905,18 +905,16 @@ def accent_pool(mappings: list[EmojiMapping] | None, category: str, avoid_ids: s
         usable.append(mapping)
     if not usable:
         return []
-    preferred = ACCENT_CHOICES.get(wanted) or ACCENT_CHOICES.get(category) or ()
-    preferred_rows = [item for item in usable if item.unicode_emoji in preferred]
-    pool = preferred_rows or usable
-    pool.sort(key=lambda item: (str(item.custom_emoji_id) in avoided, -(item.priority or 0)))
+    preferred = set(ACCENT_CHOICES.get(wanted) or ACCENT_CHOICES.get(category) or ())
+    usable.sort(key=lambda item: (str(item.custom_emoji_id) in avoided, item.unicode_emoji not in preferred, -(item.priority or 0)))
     unique: list[EmojiMapping] = []
     seen: set[str] = set()
-    for item in pool:
+    for item in usable:
         if item.unicode_emoji in seen:
             continue
         seen.add(item.unicode_emoji)
         unique.append(item)
-    return unique[:2]
+    return unique[:8]
 
 
 def _protected_line(start: int, end: int, marks: list[Mark]) -> bool:
@@ -994,7 +992,8 @@ def decorate_body(
         role = roles.get(index, "point")
         if _line_starts_with_emoji(content) and role != "close":
             continue
-        accent = pool[(len(targets) - 1 - offset) % len(pool)]
+        shift = sum(ord(char) for char in text[:48]) % len(pool)
+        accent = pool[(shift + len(targets) - 1 - offset) % len(pool)]
         emoji = first_emoji_grapheme(accent.unicode_emoji or "") or ""
         if not emoji:
             continue

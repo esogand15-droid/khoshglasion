@@ -2,7 +2,7 @@ import json
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import Response
-from sqlalchemy import or_, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.db.base import get_db
@@ -26,49 +26,69 @@ def _stamp_spectrum(row: EmojiMapping, spectrum: str, source: str) -> None:
     row.source = source
 
 
-async def _classify_rows(db: AsyncSession, rows: list[EmojiMapping], *, force: bool) -> dict:
-    pending = [row for row in rows if force or row.source != "manual"]
-    pending.sort(key=lambda row: (0 if not row.category else 1, row.id or ""))
-    skipped = len(rows) - len(pending)
-    if not pending:
-        return {"changed": 0, "skipped_manual": skipped, "by": "none"}
-    batch = pending[:40]
-    assigned: dict[int, str] = {}
-    runtime = await load_runtime(db)
-    prompt_lines = [f"{index} {row.unicode_emoji or row.label or row.custom_emoji_id}" for index, row in enumerate(batch, 1)]
+def _needs_spectrum(row: EmojiMapping) -> bool:
+    return not (row.category or "").strip()
+
+
+async def _classify_batch(runtime, batch: list[EmojiMapping]) -> tuple[dict[int, tuple[str, str]], str]:
+    prompt_lines = [f"{index}={row.unicode_emoji or row.label or '?'}" for index, row in enumerate(batch, 1)]
     answer = await complete_text(
         runtime,
         [
             {
                 "role": "system",
                 "content": (
-                    "هر خط را دقیقاً این‌طور برگردان: شماره=کلید. "
-                    "کلید فقط یکی از news announcement fun guide alert consulting general است. توضیح ننویس."
+                    "هر ایموجی را با حال‌وهوایش در یکی از این طیف‌ها بگذار: "
+                    "news خبر، announcement اطلاعیه، fun فان، guide راهنما، alert هشدار، consulting مشاوره، general عمومی. "
+                    "فقط خط‌هایی به شکل شماره=کلید برگردان. توضیح ننویس."
                 ),
             },
             {"role": "user", "content": "\n".join(prompt_lines)},
         ],
     )
     parsed = parse_ai_spectra(answer or "")
-    by = "ai" if parsed else "guess"
+    assigned: dict[int, tuple[str, str]] = {}
     for index, row in enumerate(batch, 1):
-        key = parsed.get(str(index))
+        glyph = (row.unicode_emoji or "").strip()
+        key = parsed.get(str(index)) or parsed.get(glyph)
         if key in SPECTRA:
-            assigned[index] = key
+            assigned[index] = (key, "ai")
             continue
-        guessed = guess_spectrum(row.unicode_emoji or "")
+        guessed = guess_spectrum(glyph)
         if guessed:
-            assigned[index] = guessed
-            if not parsed:
-                by = "guess"
+            assigned[index] = (guessed, "guess")
+    return assigned, "ai" if parsed else "guess"
+
+
+async def _classify_rows(db: AsyncSession, rows: list[EmojiMapping], *, force: bool, after_id: str = "") -> dict:
+    pending = list(rows) if force else [row for row in rows if _needs_spectrum(row)]
+    skipped = len(rows) - len(pending)
+    if after_id and not force:
+        pending = [row for row in pending if (row.id or "") > after_id]
+    if not pending:
+        return {"changed": 0, "skipped": skipped, "by": "none", "left": 0, "after_id": after_id}
+    runtime = await load_runtime(db)
     changed = 0
-    for index, row in enumerate(batch, 1):
-        key = assigned.get(index)
-        if not key:
-            continue
-        _stamp_spectrum(row, key, "ai" if parsed.get(str(index)) else "guess")
-        changed += 1
-    return {"changed": changed, "skipped_manual": skipped, "by": by, "left": max(0, len(pending) - 40)}
+    by = "none"
+    cursor = 0
+    rounds = 0
+    while cursor < len(pending) and rounds < 4:
+        batch = pending[cursor:cursor + 30]
+        rounds += 1
+        assigned, batch_by = await _classify_batch(runtime, batch)
+        if batch_by == "ai" or by == "none":
+            by = batch_by
+        for index, row in enumerate(batch, 1):
+            item = assigned.get(index)
+            if not item:
+                continue
+            key, source = item
+            _stamp_spectrum(row, key, source)
+            changed += 1
+        cursor += len(batch)
+    last_id = pending[cursor - 1].id if cursor else after_id
+    open_left = sum(1 for row in rows if _needs_spectrum(row))
+    return {"changed": changed, "skipped": skipped, "by": by, "left": max(0, len(pending) - cursor), "open": open_left, "after_id": last_id or ""}
 
 
 def dump_emoji(row: EmojiMapping) -> dict:
@@ -277,14 +297,13 @@ async def bulk_emojis(payload: dict, db: AsyncSession = Depends(get_db), admin=D
 async def classify_emojis(payload: dict, db: AsyncSession = Depends(get_db), admin=Depends(get_current_admin)):
     assert_editor(admin)
     ids = [str(item).strip() for item in (payload.get("ids") or []) if str(item).strip()][:80]
-    force = bool(payload.get("force"))
-    query = select(EmojiMapping)
-    if ids:
+    force = bool(payload.get("force")) and bool(ids)
+    after_id = "" if force else str(payload.get("after_id") or "")
+    query = select(EmojiMapping).order_by(EmojiMapping.id)
+    if force:
         query = query.where(EmojiMapping.id.in_(ids))
-    else:
-        query = query.where(or_(EmojiMapping.source.is_(None), EmojiMapping.source != "manual"))
     rows = (await db.execute(query)).scalars().all()
-    result = await _classify_rows(db, list(rows), force=force)
+    result = await _classify_rows(db, list(rows), force=force, after_id=after_id)
     return {"ok": True, **result}
 
 

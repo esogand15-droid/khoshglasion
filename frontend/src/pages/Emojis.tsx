@@ -94,11 +94,27 @@ export default function Emojis() {
 
   async function classify(force = false) {
     setClassifyBusy(true);
+    let changed = 0;
+    let left = 0;
+    let open = 0;
+    let by = "none";
     try {
-      const { data } = await api.post("/api/emojis/classify", { ids: selected.length ? selected : undefined, force }, { timeout: 70000 });
-      const how = data.by === "ai" ? "هوش مصنوعی" : data.by === "guess" ? "حدس از شکل، چون مدل آماده نبود" : "بدون تغییر";
-      setMsg(`طبقه‌بندی: ${fa(data.changed || 0)} · ${how}${data.skipped_manual ? ` · ${fa(data.skipped_manual)} اصلاح دستی ماند` : ""}`);
+      let after = "";
+      for (let round = 0; round < (force ? 1 : 40); round += 1) {
+        const { data } = await api.post("/api/emojis/classify", force ? { ids: selected, force: true } : { after_id: after }, { timeout: 90000 });
+        changed += data.changed || 0;
+        left = data.left || 0;
+        open = data.open || 0;
+        after = data.after_id || after;
+        if (data.by && data.by !== "none") by = data.by;
+        if (!force) setMsg(`اسکن کتابخانه… ${fa(changed)} طبقه شد${left ? ` · ${fa(left)} مانده` : ""}`);
+        if (force || !left) break;
+      }
       await load();
+      const how = by === "ai" ? "هوش مصنوعی" : by === "guess" ? "حدس از شکل" : "";
+      setMsg(force
+        ? `انتخاب‌شده‌ها دوباره طبقه شد: ${fa(changed)}`
+        : `کل کتابخانه اسکن شد. ${fa(changed)} بدون طیف طبقه شد. طیف‌دارها دست نخوردند.${open ? ` ${fa(open)} تا هنوز شکل مشخصی برای طیف نداشت.` : ""}`);
     } catch (error: any) {
       setMsg(error.response?.data?.detail || "طبقه‌بندی انجام نشد");
     } finally {
@@ -138,7 +154,7 @@ export default function Emojis() {
     <Page
       kicker="کتابخانه متحرک"
       title="ایموجی پرمیوم"
-      description="هوش مصنوعی طیف را می‌گذارد. اگر اشتباه بود، خودت عوضش کن؛ اصلاح دستی تا وقتی دوباره نخواهی پاک نمی‌شود."
+      description="یک کلیک کل کتابخانه را اسکن می‌کند و فقط ایموجی‌های بدون طیف را طبقه می‌کند. طیف‌دارها دوباره چک نمی‌شوند."
       actions={<Button variant="outline" onClick={async () => { const { data } = await api.get("/api/emojis/export"); const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" }); const url = URL.createObjectURL(blob); const a = document.createElement("a"); a.href = url; a.download = "khoshgelasion-emojis.json"; a.click(); }}>خروجی</Button>}
     >
       {dialog}
@@ -188,12 +204,9 @@ export default function Emojis() {
       <div className="flex flex-wrap items-center gap-2">
         <div className="w-full max-w-xs"><SearchInput value={q} onChange={setQ} placeholder="جست‌وجوی ایموجی یا ID" /></div>
         <Select className="h-9 w-36" value={spectrum} onChange={(event) => setSpectrum(event.target.value)} options={[{ value: "", label: "همه طیف‌ها" }, ...SPECTRA.map(([value, label]) => ({ value, label }))]} />
-        <Button variant="brand" disabled={!canEdit || classifyBusy} onClick={() => classify(false)}>{classifyBusy ? "در حال طبقه‌بندی…" : "طبقه‌بندی با هوش مصنوعی"}</Button>
+        <Button variant="brand" disabled={!canEdit || classifyBusy} onClick={() => classify(false)}>{classifyBusy ? "در حال اسکن کتابخانه…" : "طبقه‌بندی با هوش مصنوعی"}</Button>
         {canEdit && selected.length > 0 && <Button variant="outline" disabled={classifyBusy} onClick={() => classify(true)}>دوباره، حتی اصلاح دستی</Button>}
-        <Button variant="outline" onClick={async () => { const ids = shown.slice(0, 20).map((item) => item.custom_emoji_id); const { data } = await api.post("/api/emojis/validate", { custom_emoji_ids: ids }); setMsg(`معتبر: ${data.valid?.length || 0} / نامعتبر: ${data.invalid?.length || 0}${data.error ? " · " + data.error : ""}`); }}>اعتبارسنجی ۲۰ تای اول</Button>
-        <Button variant="outline" disabled={!canEdit} onClick={async () => { await api.post("/api/emojis/cleanup-fake"); load(); }}>حذف IDهای فیک</Button>
         {canEdit && <Button variant="outline" onClick={() => setSelected(shown.map((item) => item.id))}>انتخاب همین فهرست</Button>}
-        {canEdit && <Button variant="outline" onClick={() => setSelected(items.filter((item) => item.custom_emoji_id?.startsWith("53683241")).map((item) => item.id))}>انتخاب فیک‌ها</Button>}
         {canEdit && selected.length > 0 && <Button variant="outline" onClick={() => setSelected([])}>لغو انتخاب</Button>}
       </div>
       {canEdit && selected.length > 0 && (

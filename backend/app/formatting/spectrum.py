@@ -60,6 +60,20 @@ _GUESS = {
     "✨": "general",
     "⭐": "general",
     "💪": "general",
+    "🌴": "fun",
+    "❤️": "fun",
+    "❤": "fun",
+    "😍": "fun",
+    "😭": "fun",
+    "😱": "fun",
+    "⚡": "alert",
+    "📍": "news",
+    "💻": "guide",
+    "🎓": "guide",
+    "🏆": "news",
+    "💰": "announcement",
+    "🤔": "consulting",
+    "🙏": "consulting",
 }
 
 
@@ -89,11 +103,11 @@ def guess_spectrum(emoji: str) -> str | None:
 def parse_ai_spectra(text: str) -> dict[str, str]:
     found: dict[str, str] = {}
     for raw in (text or "").splitlines():
-        line = raw.strip().strip("-").strip()
+        line = raw.strip().strip("-").strip().replace(":", "=", 1)
         if "=" not in line:
             continue
         left, right = line.split("=", 1)
-        key = right.strip().lower().split()[0]
+        key = right.strip().lower().split()[0].strip(".,")
         if key in SPECTRA and left.strip():
             found[left.strip()] = key
     return found
