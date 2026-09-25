@@ -100,19 +100,47 @@ def _shingles(text: str, size: int = 4) -> set[str]:
     return {" ".join(words[index:index + size]) for index in range(0, len(words) - size + 1)}
 
 
-def choose_hashtags(category: str, text: str, *, enabled: set[str] | None = None, forbidden: set[str] | None = None) -> list[str]:
+def normalize_hashtag(raw: str) -> str | None:
+    text = (raw or "").strip().lstrip("#").replace(" ", "_").replace("\u200c", "")
+    text = re.sub(r"_+", "_", text).strip("_")
+    if not text or text.isdigit() or not re.fullmatch(r"[\w\u0600-\u06FF]{2,32}", text):
+        return None
+    return text
+
+
+def choose_hashtags(
+    category: str,
+    text: str,
+    *,
+    enabled: set[str] | None = None,
+    forbidden: set[str] | None = None,
+    catalog: list[tuple[str, str]] | None = None,
+) -> list[str]:
     blocked = forbidden or set()
-    primary = CATEGORY_TAG.get(category, "نکته")
-    chosen: list[str] = []
-    if primary not in blocked and (enabled is None or primary in enabled):
-        chosen.append(primary)
+    pairs = list(catalog) if catalog is not None else list(OFFICIAL_HASHTAGS)
     folded = text or ""
-    for tag, _mapped in OFFICIAL_HASHTAGS:
-        if tag in blocked or tag in chosen:
-            continue
+    chosen: list[str] = []
+
+    def allowed(tag: str) -> bool:
+        if not tag or tag in blocked or tag in chosen:
+            return False
         if enabled is not None and tag not in enabled:
+            return False
+        return True
+
+    for tag, mapped in pairs:
+        if mapped == category and allowed(tag):
+            chosen.append(tag)
+            break
+    if not chosen:
+        fallback = CATEGORY_TAG.get(category, "نکته")
+        if allowed(fallback):
+            chosen.append(fallback)
+    for tag, _mapped in pairs:
+        if not allowed(tag):
             continue
-        if tag.replace("_", " ") in folded or f"#{tag}" in folded:
+        plain = tag.replace("_", " ")
+        if plain and (plain in folded or f"#{tag}" in folded):
             chosen.append(tag)
         if len(chosen) >= 3:
             break

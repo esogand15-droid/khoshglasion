@@ -13,7 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.content.pipeline import extra_long_numbers, extract_facts, invented_quotes
-from backend.app.content.prompts import MODE_PROMPT, PROMPTS
+from backend.app.content.prompts import FACT_LOCK, LEGACY_PROMPTS, MODE_PROMPT, PROMPTS, WRITER_STAGES
 from backend.app.formatting.editor import analyze_post
 from backend.app.formatting.textutil import missing_long_numbers
 from backend.app.models.automation import AutomationConfig, DraftPost, HashtagRule, NewsSource, PromptVersion, PublishSlot
@@ -127,6 +127,28 @@ async def active_prompt(db: AsyncSession, name: str) -> str:
     return PROMPTS.get(name) or PROMPTS["generator"]
 
 
+async def extra_prompts(db: AsyncSession) -> list[str]:
+    rows = (
+        await db.execute(
+            select(PromptVersion)
+            .where(PromptVersion.active == True, PromptVersion.name.startswith("extra:"))  # noqa: E712
+            .order_by(PromptVersion.created_at)
+        )
+    ).scalars().all()
+    return [row.body.strip() for row in rows if (row.body or "").strip()]
+
+
+async def compose_prompt(db: AsyncSession, name: str) -> str:
+    """Stage text, then operator extras, then the code lock the panel cannot delete."""
+    parts = [await active_prompt(db, name)]
+    if name in WRITER_STAGES:
+        extras = await extra_prompts(db)
+        if extras:
+            parts.append("دستورهای اضافهٔ پنل:\n" + "\n".join(f"- {item}" for item in extras))
+        parts.append(FACT_LOCK)
+    return "\n\n".join(part for part in parts if part)
+
+
 async def ensure_content_defaults(db: AsyncSession) -> None:
     from backend.app.content.pipeline import OFFICIAL_HASHTAGS
 
@@ -134,10 +156,20 @@ async def ensure_content_defaults(db: AsyncSession) -> None:
     if existing is None:
         for index, (tag, category) in enumerate(OFFICIAL_HASHTAGS):
             db.add(HashtagRule(tag=tag, category=category, priority=100 - index))
-    present = set((await db.execute(select(PromptVersion.name))).scalars().all())
+    rows = (await db.execute(select(PromptVersion))).scalars().all()
+    by_name: dict[str, list[PromptVersion]] = {}
+    for row in rows:
+        by_name.setdefault(row.name, []).append(row)
     for name, body in PROMPTS.items():
-        if name not in present:
+        versions = by_name.get(name) or []
+        active = next((row for row in versions if row.active and row.body), None)
+        legacy = (LEGACY_PROMPTS.get(name) or "").strip()
+        if active is None:
             db.add(PromptVersion(name=name, version=1, body=body, active=True))
+        elif legacy and active.body.strip() == legacy and active.body.strip() != body.strip():
+            active.active = False
+            nxt = max(int(row.version or 1) for row in versions) + 1
+            db.add(PromptVersion(name=name, version=nxt, body=body, active=True))
     await db.flush()
 
 

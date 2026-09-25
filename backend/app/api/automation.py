@@ -1,9 +1,11 @@
 from datetime import datetime, timezone
 import json
+import re
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.content.links import channel_message_url
@@ -19,8 +21,10 @@ from backend.app.services.automation_runner import collect_sources, deliver_draf
 from backend.app.telegram.collector import probe_channel
 from backend.app.telegram.pipeline import load_emoji_maps
 from backend.app.telegram.publisher import delete_published, publish_rendered
+from backend.app.content.pipeline import normalize_hashtag
+from backend.app.content.prompts import PROMPTS
 from backend.app.services.autopost import (
-    active_prompt,
+    compose_prompt,
     draft_from_source,
     ensure_content_defaults,
     get_config,
@@ -146,6 +150,21 @@ class ConfigIn(BaseModel):
 class HashtagIn(BaseModel):
     enabled: bool | None = None
     forbidden: bool | None = None
+    category: str | None = None
+    priority: int | None = Field(default=None, ge=1, le=200)
+
+
+class HashtagCreate(BaseModel):
+    tag: str
+    category: str = "general"
+    priority: int = Field(default=60, ge=1, le=200)
+    enabled: bool = True
+
+
+class PromptIn(BaseModel):
+    name: str
+    body: str = Field(min_length=24, max_length=4000)
+    kind: str = "stage"
 
 
 class DraftIn(BaseModel):
@@ -202,15 +221,12 @@ async def automation_state(
             "published_today": sum(today.values()),
             "daily_cap": config.daily_cap,
         },
-        "hashtags": [
-            {"id": row.id, "tag": row.tag, "category": row.category, "enabled": row.enabled, "forbidden": row.forbidden}
-            for row in hashtags
-        ],
+        "hashtags": [_dump_hashtag(row) for row in hashtags],
         "logs": [
             {"event": row.event, "level": row.level, "detail": row.detail, "created_at": row.created_at.isoformat() if row.created_at else None}
             for row in logs
         ],
-        "prompts": [{"name": row.name, "version": row.version, "body": row.body} for row in prompts],
+        "prompts": [_dump_prompt(row) for row in prompts],
         "alerts": [config.last_error] if config.last_error else [],
         "role": admin.role,
         "last_collect_at": config.last_collect_at.isoformat() if config.last_collect_at else None,
@@ -469,7 +485,7 @@ async def regenerate_draft(draft_id: str, request: Request, mode: str = "fresh",
     if mode not in {"fresh", "shorter", "rewrite"}:
         raise HTTPException(status_code=400, detail="حالت بازنویسی معتبر نیست")
     runtime = await load_runtime(db)
-    prompt = await active_prompt(db, f"regenerator_{mode}")
+    prompt = await compose_prompt(db, f"regenerator_{mode}")
     body, category, reason = await draft_from_source(
         source,
         row.source_label or "",
@@ -513,11 +529,62 @@ async def restore_version(draft_id: str, version: int, request: Request, db: Asy
     return dump_draft(row)
 
 
+def _dump_hashtag(row: HashtagRule) -> dict:
+    return {
+        "id": row.id,
+        "tag": row.tag,
+        "category": row.category,
+        "enabled": row.enabled,
+        "forbidden": row.forbidden,
+        "priority": row.priority,
+    }
+
+
+def _dump_prompt(row: PromptVersion) -> dict:
+    name = row.name or ""
+    return {
+        "id": row.id,
+        "name": name,
+        "version": row.version,
+        "body": row.body,
+        "kind": "extra" if name.startswith("extra:") else "stage",
+        "label": name.removeprefix("extra:"),
+    }
+
+
+def _clean_category(value: str | None) -> str:
+    text = (value or "general").strip()[:64]
+    if not re.fullmatch(r"[a-z_]{2,32}", text):
+        raise HTTPException(status_code=400, detail="دسته هشتگ معتبر نیست")
+    return text
+
+
 @router.get("/hashtags")
 async def list_hashtags(db: AsyncSession = Depends(get_db), admin=Depends(get_current_admin)):
     await ensure_content_defaults(db)
-    rows = (await db.execute(select(HashtagRule).order_by(HashtagRule.priority.desc()))).scalars().all()
-    return [{"id": row.id, "tag": row.tag, "category": row.category, "enabled": row.enabled, "forbidden": row.forbidden} for row in rows]
+    rows = (await db.execute(select(HashtagRule).order_by(HashtagRule.priority.desc(), HashtagRule.tag))).scalars().all()
+    return [_dump_hashtag(row) for row in rows]
+
+
+@router.post("/hashtags")
+async def create_hashtag(payload: HashtagCreate, db: AsyncSession = Depends(get_db), admin=Depends(get_current_admin)):
+    assert_editor(admin)
+    tag = normalize_hashtag(payload.tag)
+    if not tag:
+        raise HTTPException(status_code=400, detail="هشتگ باید ۲ تا ۳۲ حرف باشد، بدون فاصله و بدون عددِ تنها")
+    row = HashtagRule(
+        tag=tag,
+        category=_clean_category(payload.category),
+        priority=payload.priority,
+        enabled=payload.enabled,
+        forbidden=False,
+    )
+    db.add(row)
+    try:
+        await db.flush()
+    except IntegrityError:
+        raise HTTPException(status_code=400, detail="این هشتگ قبلاً هست")
+    return _dump_hashtag(row)
 
 
 @router.patch("/hashtags/{tag_id}")
@@ -527,9 +594,84 @@ async def update_hashtag(tag_id: str, payload: HashtagIn, db: AsyncSession = Dep
     if not row:
         raise HTTPException(status_code=404, detail="هشتگ پیدا نشد")
     data = payload.model_dump(exclude_unset=True)
+    if "category" in data:
+        data["category"] = _clean_category(data["category"])
     for key, value in data.items():
         setattr(row, key, value)
-    return {"id": row.id, "tag": row.tag, "enabled": row.enabled, "forbidden": row.forbidden}
+    return _dump_hashtag(row)
+
+
+@router.delete("/hashtags/{tag_id}")
+async def delete_hashtag(tag_id: str, db: AsyncSession = Depends(get_db), admin=Depends(get_current_admin)):
+    assert_editor(admin)
+    row = (await db.execute(select(HashtagRule).where(HashtagRule.id == tag_id))).scalar_one_or_none()
+    if not row:
+        raise HTTPException(status_code=404, detail="هشتگ پیدا نشد")
+    await db.delete(row)
+    return {"ok": True}
+
+
+@router.post("/prompts")
+async def save_prompt(payload: PromptIn, db: AsyncSession = Depends(get_db), admin=Depends(get_current_admin)):
+    assert_editor(admin)
+    await ensure_content_defaults(db)
+    kind = (payload.kind or "stage").strip()
+    body = payload.body.strip()
+    if kind == "extra":
+        label = normalize_hashtag(payload.name.replace("extra:", "", 1))
+        if not label:
+            raise HTTPException(status_code=400, detail="نام دستور اضافه معتبر نیست")
+        name = f"extra:{label}"
+    elif kind == "stage" and payload.name in PROMPTS:
+        name = payload.name
+    else:
+        raise HTTPException(status_code=400, detail="مرحله ناشناخته است. دستور تازه را به‌صورت افزوده بساز")
+    current = (
+        await db.execute(select(PromptVersion).where(PromptVersion.name == name, PromptVersion.active == True))  # noqa: E712
+    ).scalars().all()
+    version = 1
+    for row in current:
+        version = max(version, int(row.version or 1) + 1)
+        row.active = False
+    if not current:
+        previous = (await db.execute(select(func.max(PromptVersion.version)).where(PromptVersion.name == name))).scalar()
+        version = int(previous or 0) + 1
+    created = PromptVersion(name=name, version=version, body=body, active=True)
+    db.add(created)
+    await db.flush()
+    return _dump_prompt(created)
+
+
+@router.post("/prompts/{name}/restore")
+async def restore_prompt(name: str, db: AsyncSession = Depends(get_db), admin=Depends(get_current_admin)):
+    assert_editor(admin)
+    if name not in PROMPTS:
+        raise HTTPException(status_code=400, detail="فقط مرحله‌های اصلی متن پایه دارند")
+    current = (
+        await db.execute(select(PromptVersion).where(PromptVersion.name == name))
+    ).scalars().all()
+    version = max((int(row.version or 1) for row in current), default=0) + 1
+    for row in current:
+        if row.active:
+            row.active = False
+    created = PromptVersion(name=name, version=version, body=PROMPTS[name], active=True)
+    db.add(created)
+    await db.flush()
+    return _dump_prompt(created)
+
+
+@router.delete("/prompts/{prompt_id}")
+async def delete_prompt(prompt_id: str, db: AsyncSession = Depends(get_db), admin=Depends(get_current_admin)):
+    assert_editor(admin)
+    row = (await db.execute(select(PromptVersion).where(PromptVersion.id == prompt_id))).scalar_one_or_none()
+    if not row:
+        raise HTTPException(status_code=404, detail="پرامپت پیدا نشد")
+    if not (row.name or "").startswith("extra:"):
+        raise HTTPException(status_code=400, detail="مرحله اصلی حذف نمی‌شود؛ متن پایه را برگردان")
+    siblings = (await db.execute(select(PromptVersion).where(PromptVersion.name == row.name))).scalars().all()
+    for item in siblings:
+        await db.delete(item)
+    return {"ok": True}
 
 
 @router.post("/drafts/{draft_id}/reject")

@@ -42,6 +42,7 @@ from backend.app.models.automation import (
 from backend.app.services.ai import complete_text
 from backend.app.services.autopost import (
     active_prompt,
+    compose_prompt,
     append_hashtags,
     draft_from_source,
     ensure_content_defaults,
@@ -128,12 +129,13 @@ def _priority(source: NewsSource) -> int:
 
 
 async def _hashtags(db: AsyncSession, category: str, text: str) -> list[str]:
-    rules = (await db.execute(select(HashtagRule))).scalars().all()
+    rules = (await db.execute(select(HashtagRule).order_by(HashtagRule.priority.desc(), HashtagRule.tag))).scalars().all()
     if not rules:
         return choose_hashtags(category, text)
     enabled = {rule.tag for rule in rules if rule.enabled and not rule.forbidden}
     forbidden = {rule.tag for rule in rules if rule.forbidden}
-    return choose_hashtags(category, text, enabled=enabled, forbidden=forbidden)
+    catalog = [(rule.tag, rule.category or "general") for rule in rules]
+    return choose_hashtags(category, text, enabled=enabled, forbidden=forbidden, catalog=catalog)
 
 
 async def _analyze(db: AsyncSession, text: str, created_at, runtime) -> dict:
@@ -255,7 +257,7 @@ async def collect_sources(db: AsyncSession, *, force: bool = False) -> dict:
             choice = choose_template(decision, channel_style=None, recent_emoji_styles=recent_emoji)
             angle_key, angle_label = pick_angle(recent_angles)
             openings = [opening_signature(body) for body in recent[-6:]]
-            prompt = await active_prompt(db, "generator")
+            prompt = await compose_prompt(db, "generator")
             body, _category, reason = await draft_from_source(
                 item["text"],
                 item.get("title") or source.username,
@@ -267,7 +269,7 @@ async def collect_sources(db: AsyncSession, *, force: bool = False) -> dict:
             )
             similar = False
             if body and too_similar(body, recent):
-                fresh_prompt = await active_prompt(db, "regenerator_fresh")
+                fresh_prompt = await compose_prompt(db, "regenerator_fresh")
                 alt, _alt_category, alt_reason = await draft_from_source(
                     item["text"],
                     item.get("title") or source.username,
