@@ -101,11 +101,22 @@ def tehran_now(now: datetime | None = None) -> datetime:
     return current.astimezone(TEHRAN)
 
 
+def _clock(slot: PublishSlot) -> tuple[int, int] | None:
+    try:
+        hour = int(slot.hour)
+        minute = int(slot.minute or 0)
+    except (TypeError, ValueError):
+        return None
+    if not (0 <= hour <= 23 and 0 <= minute <= 59):
+        return None
+    return hour, minute
+
+
 def next_slot_time(slots: list[PublishSlot], now: datetime | None = None, category: str | None = None) -> datetime | None:
     local = tehran_now(now)
     enabled = [
         slot for slot in slots
-        if slot.enabled and (not category or not slot.category or slot.category == category)
+        if slot.enabled and (not category or not slot.category or slot.category == category) and _clock(slot)
     ]
     if not enabled:
         return None
@@ -113,7 +124,8 @@ def next_slot_time(slots: list[PublishSlot], now: datetime | None = None, catego
     for day in range(0, 8):
         base = (local + timedelta(days=day)).replace(second=0, microsecond=0)
         for slot in enabled:
-            candidate = base.replace(hour=int(slot.hour), minute=int(slot.minute))
+            hour, minute = _clock(slot) or (0, 0)
+            candidate = base.replace(hour=hour, minute=minute)
             if candidate <= local:
                 continue
             if best is None or candidate < best:
@@ -125,7 +137,11 @@ def slot_is_due(slot: PublishSlot, now: datetime | None = None, used_keys: set[s
     if not slot.enabled:
         return False
     local = tehran_now(now)
-    if int(slot.hour) != local.hour or not (int(slot.minute) <= local.minute < int(slot.minute) + 5):
+    clock = _clock(slot)
+    if clock is None:
+        return False
+    hour, minute = clock
+    if hour != local.hour or not (minute <= local.minute < minute + 5):
         return False
     key = f"{slot.id}:{local.date().isoformat()}"
     return key not in (used_keys or set())

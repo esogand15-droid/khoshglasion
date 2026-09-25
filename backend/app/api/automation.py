@@ -5,7 +5,7 @@ import re
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
-from sqlalchemy import func, select, text
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -190,18 +190,6 @@ def _iso(value) -> str | None:
     return iso() if callable(iso) else str(value)
 
 
-async def _fail_fast(db: AsyncSession) -> None:
-    """A panel read must fail in seconds, not wait behind a collector lock."""
-    try:
-        conn = await db.connection()
-        if conn.dialect.name != "postgresql":
-            return
-        await db.execute(text("SET LOCAL lock_timeout = '3s'"))
-        await db.execute(text("SET LOCAL statement_timeout = '8s'"))
-    except Exception:
-        logger.exception("automation read timeout was not set")
-
-
 async def _finetune_snapshot(db: AsyncSession) -> dict:
     empty = {"total": 0, "card": "", "folders": []}
     try:
@@ -210,7 +198,13 @@ async def _finetune_snapshot(db: AsyncSession) -> dict:
 
             return await snapshot(db)
     except Exception:
+        # A failed Postgres statement aborts the transaction. Roll it back or
+        # the page read, which already succeeded, dies on commit.
         logger.exception("finetune snapshot skipped")
+        try:
+            await db.rollback()
+        except Exception:
+            logger.exception("finetune rollback failed")
         return empty
 
 
@@ -236,9 +230,8 @@ async def _read_automation_state(
     db: AsyncSession = Depends(get_db),
     admin=Depends(get_current_admin),
 ):
-    # This view must stay a read. Writing defaults here waits behind the
-    # collector's open transaction and the page never leaves its loading line.
-    await _fail_fast(db)
+    # Read only. Do not SET LOCAL here: on asyncpg a failed SET aborts the
+    # transaction and every later query becomes the 503 the panel shows.
     config = await get_config(db)
     sources = (await db.execute(select(NewsSource).order_by(NewsSource.created_at))).scalars().all()
     slots = (await db.execute(select(PublishSlot).order_by(PublishSlot.hour, PublishSlot.minute))).scalars().all()
@@ -282,9 +275,9 @@ async def _read_automation_state(
         "prompts": [_dump_prompt(row) for row in prompts],
         "alerts": [config.last_error] if config.last_error else [],
         "role": admin.role,
-        "last_collect_at": config.last_collect_at.isoformat() if config.last_collect_at else None,
+        "last_collect_at": _iso(config.last_collect_at),
         "last_error": config.last_error,
-        "next_slot": next_slot_time(list(slots)).isoformat() if next_slot_time(list(slots)) else None,
+        "next_slot": _iso(next_slot_time(list(slots))),
         "sources": [dump_source(row) for row in sources],
         "slots": [dump_slot(row) for row in slots],
         "drafts": [dump_draft(row, names.get(int(row.target_chat_id)) if row.target_chat_id else None) for row in drafts],

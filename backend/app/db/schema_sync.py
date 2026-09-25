@@ -152,6 +152,49 @@ def _dedupe_message_logs(connection: Connection) -> None:
         logger.warning("Could not enforce message uniqueness yet: %s", exc)
 
 
+def _nullable_ddl(connection: Connection, column) -> str | None:
+    from sqlalchemy import BigInteger, Boolean, DateTime, Float, Integer, String, Text
+
+    kind = column.type
+    if isinstance(kind, BigInteger):
+        return "BIGINT"
+    if isinstance(kind, Integer):
+        return "INTEGER"
+    if isinstance(kind, Boolean):
+        return "BOOLEAN" if connection.dialect.name == "postgresql" else "INTEGER"
+    if isinstance(kind, DateTime):
+        return "TIMESTAMP"
+    if isinstance(kind, Float):
+        return "DOUBLE PRECISION" if connection.dialect.name == "postgresql" else "REAL"
+    if isinstance(kind, Text):
+        return "TEXT"
+    if isinstance(kind, String):
+        return f"VARCHAR({int(kind.length or 255)})"
+    return None
+
+
+def _sync_model_columns(connection: Connection) -> None:
+    """Add columns the models select but an older production table never got."""
+    import backend.app.models  # noqa: F401
+
+    insp = inspect(connection)
+    tables = set(insp.get_table_names())
+    for table in Base.metadata.sorted_tables:
+        if table.name not in tables:
+            continue
+        have = {col["name"] for col in insp.get_columns(table.name)}
+        for column in table.columns:
+            if column.name in have or column.primary_key:
+                continue
+            ddl = _nullable_ddl(connection, column)
+            if not ddl:
+                logger.warning("No DDL for %s.%s", table.name, column.name)
+                continue
+            connection.execute(text(f'ALTER TABLE "{table.name}" ADD COLUMN "{column.name}" {ddl}'))
+            logger.info("Added missing column %s.%s", table.name, column.name)
+            have.add(column.name)
+
+
 def _ensure_indexes(connection: Connection) -> None:
     statements = (
         "CREATE INDEX IF NOT EXISTS ix_draft_posts_due ON draft_posts (status, scheduled_at)",
@@ -179,6 +222,7 @@ def sync_schema(connection: Connection) -> None:
             logger.info("Added column %s.%s", table, name)
     _widen_postgres_ids(connection)
     _dedupe_message_logs(connection)
+    _sync_model_columns(connection)
     _ensure_indexes(connection)
 
 
