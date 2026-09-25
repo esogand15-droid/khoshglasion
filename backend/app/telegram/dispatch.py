@@ -27,6 +27,14 @@ def spawn(coro) -> None:
     task.add_done_callback(_tasks.discard)
 
 
+async def drain(timeout: float = 8) -> None:
+    if not _tasks:
+        return
+    _done, pending = await asyncio.wait(set(_tasks), timeout=timeout)
+    for task in pending:
+        task.cancel()
+
+
 def _summary(data: dict) -> str:
     post = data.get("channel_post") or data.get("edited_channel_post") or data.get("message") or {}
     chat = post.get("chat") or {}

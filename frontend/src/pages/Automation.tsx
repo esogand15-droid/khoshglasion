@@ -21,6 +21,7 @@ import { fa } from "@/lib/utils";
 
 const STATUS: Record<string, string> = {
   preview: "بازبینی",
+  sending: "در حال ارسال",
   scheduled: "زمان‌بندی‌شده",
   published: "منتشر شد",
   rejected: "رد شد",

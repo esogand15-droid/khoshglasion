@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -20,7 +21,7 @@ from backend.app.models.emoji import EmojiMapping
 from backend.app.models.message_log import MessageLog
 from backend.app.models.style import StylePreset
 from backend.app.models.system import SystemSetting
-from backend.app.security.auth import create_token, hash_password, verify_password
+from backend.app.security.auth import hash_password, issue_token, verify_password
 from backend.app.security.deps import assert_editor, get_current_admin, require_role
 from backend.app.services.ai import test_ai_connection
 from backend.app.services.ai_models import as_models, submitted_key
@@ -45,6 +46,7 @@ from backend.app.telegram.session_login import (
 from backend.app.telegram.user_editor import session_configured, user_session_status
 
 router = APIRouter(prefix="/api/system", tags=["system"])
+logger = logging.getLogger(__name__)
 
 SECRET_TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{1,256}$")
 
@@ -235,9 +237,10 @@ async def system_health(db: AsyncSession = Depends(get_db), admin=Depends(get_cu
     db_error = None
     try:
         await db.execute(text("SELECT 1"))
-    except Exception as exc:
+    except Exception:
         db_ok = False
-        db_error = str(exc)
+        db_error = "پایگاه داده پاسخ نداد"
+        logger.exception("health database check failed")
     bot = get_bot()
     me = None
     webhook = None
@@ -456,7 +459,7 @@ async def repair_problem(payload: RepairIn, request: Request, db: AsyncSession =
         import secrets as pysecrets
         fresh = pysecrets.token_urlsafe(32)
         await save_secret(db, "jwt_secret", fresh)
-        token = create_token({"sub": admin.username, "role": admin.role})
+        token = issue_token(admin)
         await write_audit(db, admin=admin, action="rotate_jwt", resource="secret", ip_address=ip)
         return {"ok": True, "token": token, "message": "کلید تازه شد. این نشست می‌ماند و بقیه خارج می‌شوند."}
     if action == "webhook":

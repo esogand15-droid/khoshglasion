@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 import uuid
 
-from sqlalchemy import BigInteger, DateTime, String
+from sqlalchemy import BigInteger, DateTime, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from backend.app.db.base import Base
@@ -19,5 +19,6 @@ class Admin(Base):
     role: Mapped[str] = mapped_column(String(32), default="ADMIN")
     display_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
     telegram_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True, unique=True)
+    token_version: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

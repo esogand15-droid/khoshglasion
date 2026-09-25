@@ -26,6 +26,7 @@ def _columns_for(connection: Connection) -> dict[str, dict[str, str]]:
     return {
         "admins": {
             "telegram_id": "BIGINT",
+            "token_version": "INTEGER DEFAULT 0",
         },
         "channels": {
             "ai_rewrite": "BOOLEAN",
@@ -66,6 +67,8 @@ def _columns_for(connection: Connection) -> dict[str, dict[str, str]]:
             "interval_minutes": "INTEGER DEFAULT 20",
             "source_type": "VARCHAR(32) DEFAULT 'channel'",
             "last_collect_at": "TIMESTAMP",
+            "access_hash": "BIGINT",
+            "invite_hash": "VARCHAR(128)",
         },
         "draft_posts": {
             "source_content": "TEXT",
@@ -149,6 +152,19 @@ def _dedupe_message_logs(connection: Connection) -> None:
         logger.warning("Could not enforce message uniqueness yet: %s", exc)
 
 
+def _ensure_indexes(connection: Connection) -> None:
+    statements = (
+        "CREATE INDEX IF NOT EXISTS ix_draft_posts_due ON draft_posts (status, scheduled_at)",
+        "CREATE INDEX IF NOT EXISTS ix_message_logs_created ON message_logs (created_at)",
+        "CREATE INDEX IF NOT EXISTS ix_automation_logs_created ON automation_logs (created_at)",
+    )
+    for sql in statements:
+        try:
+            connection.execute(text(sql))
+        except Exception as exc:
+            logger.warning("Index skipped: %s", exc)
+
+
 def sync_schema(connection: Connection) -> None:
     insp = inspect(connection)
     tables = set(insp.get_table_names())
@@ -163,6 +179,7 @@ def sync_schema(connection: Connection) -> None:
             logger.info("Added column %s.%s", table, name)
     _widen_postgres_ids(connection)
     _dedupe_message_logs(connection)
+    _ensure_indexes(connection)
 
 
 async def ensure_schema() -> None:

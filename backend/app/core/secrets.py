@@ -41,6 +41,16 @@ async def refresh_secrets(db: AsyncSession) -> None:
             _overrides.pop(key, None)
 
 
+async def ensure_webhook_secret(db: AsyncSession) -> bool:
+    """Create a webhook secret once. Never log or return the value."""
+    if peek("webhook_secret"):
+        return False
+    import secrets
+
+    await save_secret(db, "webhook_secret", secrets.token_urlsafe(24))
+    return True
+
+
 async def save_secret(db: AsyncSession, key: str, value: str) -> None:
     if key not in PANEL_SECRET_KEYS:
         raise ValueError("unknown secret")

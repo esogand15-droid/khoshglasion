@@ -40,12 +40,12 @@ ALLOWED_UPDATES = [
 ]
 
 
-async def setup_webhook() -> None:
+async def setup_webhook() -> bool:
     bot = get_bot()
     url = resolved_webhook_url()
     if not bot or not url:
         logger.warning("Webhook skipped: bot token or public URL is missing")
-        return
+        return False
     secret = peek("webhook_secret") or None
     try:
         await bot.set_webhook(
@@ -55,8 +55,10 @@ async def setup_webhook() -> None:
             allowed_updates=ALLOWED_UPDATES,
         )
         logger.info("Webhook set: %s", url)
+        return True
     except Exception as exc:
-        logger.warning("Set webhook failed: %s", exc)
+        logger.warning("Set webhook failed: %s", type(exc).__name__)
+        return False
 
 
 @asynccontextmanager
@@ -72,13 +74,44 @@ async def lifespan(_app: FastAPI):
             await refresh_secrets(session)
     except Exception:
         logger.exception("Panel secret load failed")
-    await setup_webhook()
+    created_secret = False
+    try:
+        from backend.app.core.secrets import ensure_webhook_secret
+        from backend.app.db.base import get_session_factory
+
+        async with get_session_factory()() as session:
+            created_secret = await ensure_webhook_secret(session)
+            if created_secret:
+                await session.commit()
+    except Exception:
+        logger.exception("Webhook secret setup failed")
+        created_secret = False
+    webhook_ok = await setup_webhook()
+    if created_secret and not webhook_ok:
+        try:
+            from backend.app.core.secrets import save_secret
+            from backend.app.db.base import get_session_factory
+
+            async with get_session_factory()() as session:
+                await save_secret(session, "webhook_secret", "")
+                await session.commit()
+            logger.warning("Webhook secret removed because Telegram did not accept the webhook")
+        except Exception:
+            logger.exception("Could not roll back the new webhook secret")
+    elif created_secret:
+        logger.info("Webhook secret created")
     stop_automation = asyncio.Event()
     from backend.app.services.automation_runner import automation_loop
     automation_task = asyncio.create_task(automation_loop(stop_automation))
     yield
     stop_automation.set()
     automation_task.cancel()
+    try:
+        await asyncio.wait_for(automation_task, timeout=8)
+    except (asyncio.CancelledError, asyncio.TimeoutError):
+        pass
+    from backend.app.telegram.dispatch import drain
+    await drain(8)
     from backend.app.telegram.session_login import close_pending_login
     await close_pending_login()
     await close_user_client()
@@ -125,8 +158,9 @@ async def ready():
         async with get_session_factory()() as session:
             await session.execute(text("SELECT 1"))
         return {"status": "ready"}
-    except Exception as exc:
-        return JSONResponse(status_code=503, content={"status": "not_ready", "error": str(exc)})
+    except Exception:
+        logger.exception("readiness check failed")
+        return JSONResponse(status_code=503, content={"status": "not_ready"})
 
 
 @app.post("/telegram/webhook")

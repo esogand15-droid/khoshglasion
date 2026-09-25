@@ -113,6 +113,33 @@ def _remember_skip(db: AsyncSession, source: NewsSource, item: dict, reason: str
     ))
 
 
+PUBLISHABLE = ("preview", "scheduled", "failed")
+
+
+async def claim_for_publish(db: AsyncSession, draft_id: str) -> bool:
+    """One sender wins. A second click or the loop cannot send the same draft."""
+    now = datetime.now(timezone.utc)
+    result = await db.execute(
+        update(DraftPost)
+        .where(DraftPost.id == draft_id, DraftPost.status.in_(PUBLISHABLE))
+        .values(status="sending", updated_at=now, error=None)
+    )
+    return (result.rowcount or 0) == 1
+
+
+async def recover_stuck_sends(db: AsyncSession, now: datetime | None = None) -> None:
+    moment = now or datetime.now(timezone.utc)
+    await db.execute(
+        update(DraftPost)
+        .where(
+            DraftPost.status == "sending",
+            DraftPost.updated_at.is_not(None),
+            DraftPost.updated_at < moment - timedelta(minutes=3),
+        )
+        .values(status="failed", error="ارسال ناتمام ماند. اگر پیام در کانال رفته، دوباره منتشر نکن.")
+    )
+
+
 async def claim_job(db: AsyncSession, name: str = "automation", seconds: int = 50) -> bool:
     now = datetime.now(timezone.utc)
     until = now + timedelta(seconds=seconds)
@@ -470,6 +497,7 @@ async def publish_due(db: AsyncSession) -> dict:
         return {"published": 0, "error": "کانال مقصد انتخاب نشده"}
     now = datetime.now(timezone.utc)
     published = 0
+    await recover_stuck_sends(db, now)
     counts = await published_today(db, now)
     cap = int(getattr(config, "daily_cap", None) or 6)
     balance = bool(getattr(config, "balance_categories", True))
@@ -479,7 +507,7 @@ async def publish_due(db: AsyncSession) -> dict:
                 DraftPost.status == "scheduled",
                 DraftPost.scheduled_at.is_not(None),
                 DraftPost.scheduled_at <= now,
-            )
+            ).limit(20)
         )
     ).scalars().all()
     due = [row for row in due if (retry := as_utc(row.next_retry_at)) is None or retry <= now]
@@ -488,6 +516,10 @@ async def publish_due(db: AsyncSession) -> dict:
         if not pick_balanced([draft], None, counts, cap, balance):
             await write_log(db, "publish_held", f"{draft.id} cap_or_balance")
             continue
+        if not await claim_for_publish(db, draft.id):
+            continue
+        await db.commit()
+        draft.status = "sending"
         message_id, error = await deliver_draft(db, draft, int(config.target_chat_id))
         draft.target_chat_id = config.target_chat_id
         job = (
@@ -525,7 +557,9 @@ async def publish_due(db: AsyncSession) -> dict:
             if key
         }
         waiting = (
-            await db.execute(select(DraftPost).where(DraftPost.status == "preview").order_by(DraftPost.created_at))
+            await db.execute(
+                select(DraftPost).where(DraftPost.status == "preview").order_by(DraftPost.created_at).limit(80)
+            )
         ).scalars().all()
         for slot in slots:
             if not slot_is_due(slot, used_keys=used):
@@ -534,6 +568,12 @@ async def publish_due(db: AsyncSession) -> dict:
             if draft is None:
                 await write_log(db, "slot_empty", slot.category or "any")
                 continue
+            if not await claim_for_publish(db, draft.id):
+                waiting = [item for item in waiting if item.id != draft.id]
+                continue
+            await db.commit()
+            draft.status = "sending"
+            waiting = [item for item in waiting if item.id != draft.id]
             message_id, error = await deliver_draft(db, draft, int(config.target_chat_id))
             draft.target_chat_id = config.target_chat_id
             waiting = [item for item in waiting if item.id != draft.id]

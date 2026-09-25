@@ -34,7 +34,7 @@ https://t.me/addemoji/نام‌پک
 /pack نام‌پک
 /sessions فهرست نشست‌های وصل‌شده
 /session 1 both نقش ایموجی و خبر
-/join @channel عضویت در کانال عمومی خبر
+/join @channel عضویت در کانال عمومی خبر. لینک خصوصی جوین نمی‌شود؛ اگر اکانت خبر از قبل عضو است، همان لینک را در منابع پنل بگذار
 اول در پنل، آیدی عددی‌ات را در «ادمین‌های تلگرام» بگذار تا دستورهای حساس قفل شود."""
 
 
@@ -115,7 +115,8 @@ async def handle_private_message(db: AsyncSession, message: dict, runtime: Runti
     text = (message.get("text") or "").strip()
     command = text.split()[0].split("@")[0].lower() if text.startswith("/") else ""
 
-    captured = await capture_custom_emoji(db, message)
+    may_capture = _allowed(user_id, runtime, sensitive=bool(runtime.admin_ids))
+    captured = await capture_custom_emoji(db, message) if may_capture else 0
     pack_names = parse_pack_names(text, allow_bare=command == "/pack")
     if pack_names and command in {"", "/pack"}:
         if not _allowed(user_id, runtime, sensitive=bool(runtime.admin_ids)):

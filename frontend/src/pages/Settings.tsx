@@ -39,6 +39,8 @@ export default function Settings() {
   const [adminForm, setAdminForm] = useState({ username: "", password: "", role: "ADMIN" });
   const [params, setParams] = useSearchParams();
   const role = useAuth((state) => state.role);
+  const username = useAuth((state) => state.username);
+  const setAuth = useAuth((state) => state.setAuth);
   const canEdit = !role || role !== "VIEWER";
   const canOwn = !role || role === "OWNER";
   const canConnect = !role || role === "OWNER" || role === "ADMIN";
@@ -282,7 +284,7 @@ export default function Settings() {
               <CardContent className="space-y-3">
                 <Field label="رمز فعلی"><PasswordInput autoComplete="current-password" value={password.current_password} onChange={(e) => setPassword({ ...password, current_password: e.target.value })} /></Field>
                 <Field label="رمز جدید، حداقل ۸ کاراکتر"><PasswordInput strength autoComplete="new-password" value={password.new_password} onChange={(e) => setPassword({ ...password, new_password: e.target.value })} /></Field>
-                <Button variant="outline" onClick={async () => { try { await api.post("/api/auth/password", password); setMsg("رمز عوض شد"); } catch (e: any) { setMsg(e.response?.data?.detail || "عوض نشد"); } }}>تغییر رمز</Button>
+                <Button variant="outline" onClick={async () => { try { const { data } = await api.post("/api/auth/password", password); if (data.access_token && username && role) setAuth(data.access_token, username, role); setMsg("رمز عوض شد. نشست‌های دیگر خارج شدند."); } catch (e: any) { setMsg(e.response?.data?.detail || "عوض نشد"); } }}>تغییر رمز</Button>
               </CardContent>
             </Card>
             <Card>
@@ -393,9 +395,10 @@ function ProblemsTab({ canEdit, canOwn, canConnect, onDone }: { canEdit: boolean
             <Button variant="brand" disabled={!!busy || password.new_password.length < 8} onClick={async () => {
               setBusy("password");
               try {
-                await api.post("/api/auth/password", password);
+                const { data } = await api.post("/api/auth/password", password);
+                if (data.access_token && username && role) setAuth(data.access_token, username, role);
                 setPassword({ current_password: "", new_password: "" });
-                onDone("رمز پنل عوض شد");
+                onDone("رمز پنل عوض شد. نشست‌های دیگر خارج شدند.");
               } catch (error: any) {
                 onDone(error.response?.data?.detail || "رمز عوض نشد");
               } finally {

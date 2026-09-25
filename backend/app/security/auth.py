@@ -42,6 +42,15 @@ def create_token(data: dict, expires_minutes: int | None = None) -> str:
     to_encode = {**data, "exp": exp}
     return jwt.encode(to_encode, peek("jwt_secret"), algorithm="HS256")
 
+
+def issue_token(admin) -> str:
+    """Bind the token to the password generation so a change logs other sessions out."""
+    return create_token({
+        "sub": admin.username,
+        "role": admin.role,
+        "tv": int(getattr(admin, "token_version", 0) or 0),
+    })
+
 def decode_token(token: str) -> dict | None:
     s = get_settings()
     try:

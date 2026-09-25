@@ -18,7 +18,7 @@ from backend.app.models.automation import AutomationLog, DraftPost, HashtagRule,
 from backend.app.models.channel import Channel
 from backend.app.security.deps import assert_editor, assert_publisher, get_current_admin
 from backend.app.services.audit import write_audit
-from backend.app.services.automation_runner import collect_sources, deliver_draft, publish_due, published_today
+from backend.app.services.automation_runner import claim_for_publish, collect_sources, deliver_draft, publish_due, published_today
 from backend.app.telegram.collector import probe_channel, register_joined_invite
 from backend.app.telegram.pipeline import load_emoji_maps
 from backend.app.telegram.publisher import delete_published, publish_rendered
@@ -508,11 +508,16 @@ async def publish_draft(draft_id: str, request: Request, db: AsyncSession = Depe
     chat_id = row.target_chat_id or config.target_chat_id
     if not chat_id:
         raise HTTPException(status_code=400, detail="اول کانال مقصد را انتخاب کن")
+    if not await claim_for_publish(db, row.id):
+        raise HTTPException(status_code=409, detail="این پیش‌نویس در حال ارسال است یا وضعیتش اجازه انتشار نمی‌دهد")
+    await db.commit()
+    row.status = "sending"
     message_id, error = await deliver_draft(db, row, int(chat_id))
     if error:
         row.status = "failed"
         row.error = error
         await write_audit(db, admin=admin, action="publish_failed", resource="draft", resource_id=row.id, new_value=error, ip_address=request.client.host if request.client else None)
+        await db.commit()
         raise HTTPException(status_code=400, detail=error)
     row.status = "published"
     row.published_at = datetime.now(timezone.utc)
@@ -541,6 +546,8 @@ async def unsend_draft(draft_id: str, request: Request, db: AsyncSession = Depen
 async def approve_draft(draft_id: str, request: Request, db: AsyncSession = Depends(get_db), admin=Depends(get_current_admin)):
     assert_publisher(admin)
     row = await _draft(db, draft_id)
+    if row.status not in {"preview", "failed", "scheduled"}:
+        raise HTTPException(status_code=400, detail="فقط پیش‌نویس بازبینی، ناموفق یا زمان‌بندی‌شده تأیید می‌شود")
     if len((row.body or "").strip()) < 8:
         raise HTTPException(status_code=400, detail="اول متن پیش‌نویس را کامل کن")
     slots = (await db.execute(select(PublishSlot).where(PublishSlot.enabled == True))).scalars().all()  # noqa: E712
@@ -762,6 +769,8 @@ async def delete_prompt(prompt_id: str, db: AsyncSession = Depends(get_db), admi
 async def reject_draft(draft_id: str, request: Request, db: AsyncSession = Depends(get_db), admin=Depends(get_current_admin)):
     assert_editor(admin)
     row = await _draft(db, draft_id)
+    if row.status in {"published", "sending"}:
+        raise HTTPException(status_code=400, detail="پست منتشرشده یا در حال ارسال را رد نکن. اول از کانال پس بگیر")
     row.status = "rejected"
     await write_audit(db, admin=admin, action="reject", resource="draft", resource_id=row.id, ip_address=request.client.host if request.client else None)
     return dump_draft(row)

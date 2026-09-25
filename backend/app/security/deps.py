@@ -5,6 +5,10 @@ from backend.app.db.base import get_db
 from backend.app.security.auth import decode_token
 from backend.app.models.admin import Admin
 
+def token_is_current(payload: dict, admin: Admin) -> bool:
+    return int(payload.get("tv") or 0) == int(getattr(admin, "token_version", 0) or 0)
+
+
 async def get_current_admin(
     authorization: str | None = Header(default=None),
     db: AsyncSession = Depends(get_db),
@@ -20,6 +24,8 @@ async def get_current_admin(
     admin = res.scalar_one_or_none()
     if not admin:
         raise HTTPException(status_code=401, detail="Admin not found")
+    if not token_is_current(payload, admin):
+        raise HTTPException(status_code=401, detail="Session expired")
     return admin
 
 def require_role(*roles):

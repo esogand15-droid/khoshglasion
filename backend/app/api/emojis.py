@@ -42,6 +42,8 @@ async def export_emojis(db: AsyncSession = Depends(get_db), admin=Depends(get_cu
 @router.post("/import")
 async def import_emojis(payload: list[dict], db: AsyncSession = Depends(get_db), admin=Depends(get_current_admin)):
     assert_editor(admin)
+    if len(payload) > 2000:
+        raise HTTPException(status_code=400, detail="هر بار حداکثر ۲۰۰۰ ایموجی")
     imported = 0
     for item in payload:
         emoji = item.get("unicode_emoji")

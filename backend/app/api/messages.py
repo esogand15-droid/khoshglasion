@@ -55,7 +55,7 @@ def dump_message(row: MessageLog, full: bool = False) -> dict:
 @router.get("")
 async def list_messages(
     limit: int = Query(40, le=200),
-    offset: int = 0,
+    offset: int = Query(0, ge=0, le=100000),
     status: str | None = None,
     category: str | None = None,
     q: str | None = None,
