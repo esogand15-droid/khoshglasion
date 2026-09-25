@@ -1,9 +1,10 @@
-"""Read public news channels through the news session, oldest first.
+"""Read news channels through the news session, oldest first.
 
 A public username may be joined with JoinChannelRequest so the account can
-read it. Invite links and private channels are refused. A full page means
-older unread ids may still remain, so the caller must not jump the cursor
-to the newest id.
+read it. A private invite is accepted only when that same news account is
+already a member: CheckChatInviteRequest returns the chat, and the channel id
+is stored. The invite is never used to join. A full page means older unread
+ids may still remain, so the caller must not jump the cursor to the newest id.
 """
 from __future__ import annotations
 
@@ -14,6 +15,8 @@ import time
 logger = logging.getLogger(__name__)
 _PUBLIC = re.compile(r"^[A-Za-z][A-Za-z0-9_]{3,31}$")
 _joins: list[float] = []
+_NO_SESSION = "نشست خبر یا پرمیوم وصل نیست. از تنظیمات، تب نشست، یک اکانت با نقش خبر یا هر دو وصل کن"
+_READ_FAILED = "خواندن پیام‌های کانال انجام نشد"
 
 
 def _public_name(username: str) -> bool:
@@ -29,16 +32,136 @@ def _allow_join() -> bool:
     return True
 
 
+def _news_who() -> str:
+    try:
+        from backend.app.telegram.accounts import pick_news
+
+        username = ((pick_news() or {}).get("username") or "").lstrip("@")
+    except Exception:
+        return ""
+    return f"@{username}" if username else ""
+
+
+def _not_member() -> str:
+    who = _news_who()
+    label = f" ({who})" if who else ""
+    return (
+        f"این اکانت خبری{label} هنوز عضو این کانال خصوصی نیست. "
+        "اول با همان اکانت در تلگرام عضو شو، بعد لینک را دوباره بگذار. جوین خودکار انجام نمی‌شود."
+    )
+
+
+def _marked_id(chat) -> int | None:
+    raw = getattr(chat, "id", None)
+    if raw is None:
+        return None
+    try:
+        from telethon import utils
+
+        return int(utils.get_peer_id(chat))
+    except Exception:
+        raw = int(raw)
+        kind = type(chat).__name__
+        channel = (
+            kind == "Channel"
+            or bool(getattr(chat, "broadcast", False))
+            or bool(getattr(chat, "megagroup", False))
+            or getattr(chat, "access_hash", None) is not None
+        )
+        if channel:
+            return raw if raw < 0 else -(1_000_000_000_000 + raw)
+        return raw if raw < 0 else -raw
+
+
+def _stored_peer(username: str, access_hash: int | None):
+    try:
+        marked = int(str(username))
+    except (TypeError, ValueError):
+        return None
+    from telethon import utils
+    from telethon.tl.types import InputPeerChannel, InputPeerChat, PeerChannel, PeerChat
+
+    bare, kind = utils.resolve_id(marked)
+    if kind is PeerChannel:
+        if access_hash is None:
+            return None
+        return InputPeerChannel(int(bare), int(access_hash))
+    if kind is PeerChat:
+        return InputPeerChat(int(bare))
+    return None
+
+
+def _apply_updates(updates: dict | None, resolved: dict) -> None:
+    if updates is None:
+        return
+    if resolved.get("access_hash") is not None:
+        updates["access_hash"] = int(resolved["access_hash"])
+    if resolved.get("title"):
+        updates["title"] = resolved["title"]
+
+
+def _cache_invite(client, result) -> None:
+    session = getattr(client, "session", None)
+    process = getattr(session, "process_entities", None)
+    if not process:
+        return
+    try:
+        process(result)
+    except Exception as exc:
+        logger.info("invite cache skipped: %s", type(exc).__name__)
+
+
 async def _news_client():
     from backend.app.telegram.user_editor import get_news_client
 
     return await get_news_client()
 
 
+async def resolve_joined_invite(client, invite_hash: str) -> tuple[dict | None, str | None]:
+    """Resolve a private invite only if the news account is already inside.
+
+    Never joins. A link the account has not accepted is refused.
+    """
+    from telethon.tl.functions.messages import CheckChatInviteRequest
+
+    try:
+        result = await client(CheckChatInviteRequest(invite_hash))
+    except Exception as exc:
+        name = type(exc).__name__
+        logger.info("invite check failed: %s", name)
+        if name in {"InviteHashExpiredError", "InviteHashInvalidError", "InviteHashEmptyError"}:
+            return None, "این لینک دعوت معتبر نیست یا منقضی شده. اگر اکانت خبر هنوز عضو است، یک لینک تازه بگذار."
+        if name == "FloodWaitError":
+            seconds = getattr(exc, "seconds", None)
+            if isinstance(seconds, int) and 0 < seconds < 3600:
+                return None, f"تلگرام گفته {seconds} ثانیه صبر کن، بعد لینک را دوباره بگذار."
+            return None, "تلگرام بررسی لینک را موقتاً محدود کرده."
+        return None, "بررسی لینک دعوت انجام نشد."
+    chat = getattr(result, "chat", None)
+    kind = type(chat).__name__ if chat is not None else ""
+    if type(result).__name__ != "ChatInviteAlready" or chat is None or kind in {"ChannelForbidden", "ChatForbidden"}:
+        return None, _not_member()
+    marked = _marked_id(chat)
+    if marked is None:
+        return None, "این لینک به کانال قابل خواندن وصل نشد."
+    _cache_invite(client, result)
+    public = getattr(chat, "username", None)
+    if not isinstance(public, str) or not _public_name(public):
+        public = None
+    access = getattr(chat, "access_hash", None)
+    return {
+        "username": public or str(marked),
+        "title": getattr(chat, "title", None),
+        "access_hash": None if access is None else int(access),
+        "public": public is not None,
+        "chat": chat,
+    }, None
+
+
 async def join_public_channel(client, username: str) -> str | None:
     """Join a public channel. Returns a Persian error, or None on success."""
     if not _public_name(username):
-        return "فقط یوزرنیم کانال عمومی قابل عضویت است. لینک دعوت خصوصی قبول نیست"
+        return "فقط یوزرنیم کانال عمومی قابل عضویت است. لینک خصوصی جوین نمی‌شود"
     if not _allow_join():
         return "برای جلوگیری از محدودیت تلگرام، بقیهٔ عضویت‌ها را کمی بعد تکرار کن."
     try:
@@ -47,7 +170,7 @@ async def join_public_channel(client, username: str) -> str | None:
         logger.info("public resolve failed: %s", type(exc).__name__)
         return "این یوزرنیم عمومی پیدا نشد"
     if not getattr(entity, "username", None):
-        return "این کانال عمومی نیست. لینک دعوت خصوصی قبول نیست"
+        return "این کانال عمومی نیست. لینک خصوصی جوین نمی‌شود؛ اگر از قبل عضوی، لینک را در منابع بگذار"
     try:
         from telethon.tl.functions.channels import JoinChannelRequest
 
@@ -63,7 +186,7 @@ async def join_public_channel(client, username: str) -> str | None:
                 return f"تلگرام گفته {seconds} ثانیه صبر کن، بعد دوباره عضو شو."
             return "تلگرام عضویت را موقتاً محدود کرده."
         if name in {"ChannelPrivateError", "ChannelInvalidError"}:
-            return "این کانال عمومی نیست. لینک دعوت خصوصی قبول نیست"
+            return "این کانال عمومی نیست. لینک خصوصی جوین نمی‌شود؛ اگر از قبل عضوی، لینک را در منابع بگذار"
         if name == "ChannelsTooMuchError":
             return "این اکانت به سقف کانال‌های تلگرام رسیده."
         if name == "InviteRequestSentError":
@@ -80,7 +203,7 @@ async def _entity(client, username: str):
     except Exception as exc:
         logger.info("source resolve failed: %s", type(exc).__name__)
         if not (_public_name(username) and news_may_join()):
-            return None, "این کانال با اکانت خبر باز نشد. کانال باید عمومی باشد یا اکانت از قبل عضو آن باشد"
+            return None, "این کانال با اکانت خبر باز نشد. اگر خصوصی است و از قبل عضوی، لینک دعوت را در منابع بگذار"
         joined = await join_public_channel(client, username)
         if joined:
             return None, joined
@@ -91,8 +214,23 @@ async def _entity(client, username: str):
             return None, "بعد از عضویت هم این کانال عمومی باز نشد"
 
 
-async def _messages(client, entity, username: str, *, min_id: int, limit: int):
+async def _open_source(client, username: str, *, access_hash: int | None = None, invite_hash: str | None = None, updates: dict | None = None):
+    peer = _stored_peer(username, access_hash)
+    if peer is not None:
+        return peer, None
+    if invite_hash and not _public_name(username):
+        resolved, error = await resolve_joined_invite(client, invite_hash)
+        if error or not resolved:
+            return None, error or "این کانال خصوصی باز نشد"
+        _apply_updates(updates, resolved)
+        return resolved["chat"], None
+    return await _entity(client, username)
+
+
+async def _messages(client, entity, username: str, *, min_id: int, limit: int, title: str | None = None):
     from backend.app.telegram.accounts import news_may_join
+
+    label = title or getattr(entity, "title", None) or username
 
     async def collect():
         found: list[dict] = []
@@ -109,7 +247,7 @@ async def _messages(client, entity, username: str, *, min_id: int, limit: int):
             found.append({
                 "id": int(message.id),
                 "text": text[:1800],
-                "title": getattr(entity, "title", None) or username,
+                "title": label,
                 "date": getattr(message, "date", None),
                 "has_media": has_media,
                 "usable": len(text) >= 40 or (has_media and len(text) >= 20),
@@ -130,56 +268,185 @@ async def _messages(client, entity, username: str, *, min_id: int, limit: int):
                     return found, None, scanned >= limit
                 except Exception as nested:
                     logger.info("source reread failed: %s", type(nested).__name__)
-        return [], "خواندن پیام‌های کانال انجام نشد", True
+        if not _public_name(username):
+            return [], "خواندن پیام‌های این کانال خصوصی انجام نشد. اگر اکانت خبر هنوز عضو است، لینک دعوت را دوباره در منابع بگذار.", True
+        return [], _READ_FAILED, True
 
 
-async def read_channel_posts(username: str, *, min_id: int = 0, limit: int = 40) -> tuple[list[dict], str | None, bool]:
+async def _reread_joined(client, username: str, invite_hash: str | None, access_hash: int | None, updates: dict | None):
+    if not invite_hash or _public_name(username) or _stored_peer(username, access_hash) is None:
+        return None, None
+    resolved, error = await resolve_joined_invite(client, invite_hash)
+    if error or not resolved:
+        return None, error or "این کانال خصوصی باز نشد"
+    _apply_updates(updates, resolved)
+    return resolved, None
+
+
+async def read_channel_posts(
+    username: str,
+    *,
+    min_id: int = 0,
+    limit: int = 40,
+    access_hash: int | None = None,
+    invite_hash: str | None = None,
+    updates: dict | None = None,
+    title: str | None = None,
+) -> tuple[list[dict], str | None, bool]:
     client = await _news_client()
     if client is None:
-        return [], "نشست خبر یا پرمیوم وصل نیست. از تنظیمات، تب نشست، یک اکانت با نقش خبر یا هر دو وصل کن", False
-    entity, error = await _entity(client, username)
+        return [], _NO_SESSION, False
+    entity, error = await _open_source(
+        client,
+        username,
+        access_hash=access_hash,
+        invite_hash=invite_hash,
+        updates=updates,
+    )
     if error or entity is None:
         return [], error or "این کانال باز نشد", False
-    return await _messages(client, entity, username, min_id=min_id, limit=limit)
+    found, read_error, truncated = await _messages(
+        client, entity, username, min_id=min_id, limit=limit, title=title,
+    )
+    if not read_error:
+        return found, None, truncated
+    resolved, resolve_error = await _reread_joined(client, username, invite_hash, access_hash, updates)
+    if resolved:
+        return await _messages(
+            client,
+            resolved["chat"],
+            resolved["username"],
+            min_id=min_id,
+            limit=limit,
+            title=resolved.get("title") or title,
+        )
+    return [], resolve_error or read_error, truncated
 
 
-async def probe_channel(username: str) -> tuple[dict, str | None]:
-    """Open a public source. Joins a public username when the news account is allowed to."""
-    client = await _news_client()
-    if client is None:
-        return {}, "نشست خبر یا پرمیوم وصل نیست. از تنظیمات، تب نشست، یک اکانت با نقش خبر یا هر دو وصل کن"
-    entity, error = await _entity(client, username)
-    if error or entity is None:
-        return {}, error or "این کانال باز نشد"
-    latest = None
+async def _latest_id(client, entity) -> tuple[int | None, str | None]:
     try:
         async for message in client.iter_messages(entity, limit=1):
-            latest = int(message.id)
-            break
+            return int(message.id), None
     except Exception as exc:
         logger.info("source probe read failed: %s", type(exc).__name__)
-        if _public_name(username):
-            joined = await join_public_channel(client, username)
-            if joined:
-                return {"title": getattr(entity, "title", None), "username": getattr(entity, "username", None)}, joined
-        return {"title": getattr(entity, "title", None), "username": getattr(entity, "username", None)}, "خواندن پیام آزمایشی انجام نشد"
-    return {
-        "title": getattr(entity, "title", None),
-        "username": getattr(entity, "username", None),
-        "latest_id": latest,
-    }, None
+        return None, "خواندن پیام آزمایشی انجام نشد"
+    return None, None
+
+
+async def probe_channel(
+    username: str,
+    *,
+    access_hash: int | None = None,
+    invite_hash: str | None = None,
+    updates: dict | None = None,
+) -> tuple[dict, str | None]:
+    """Open a source. Joins a public username when the news account is allowed to."""
+    client = await _news_client()
+    if client is None:
+        return {}, _NO_SESSION
+    entity, error = await _open_source(
+        client,
+        username,
+        access_hash=access_hash,
+        invite_hash=invite_hash,
+        updates=updates,
+    )
+    if error or entity is None:
+        return {}, error or "این کانال باز نشد"
+    latest, read_error = await _latest_id(client, entity)
+    if read_error:
+        resolved, resolve_error = await _reread_joined(client, username, invite_hash, access_hash, updates)
+        if resolved:
+            entity = resolved["chat"]
+            username = resolved["username"]
+            latest, read_error = await _latest_id(client, entity)
+        elif resolve_error:
+            read_error = resolve_error
+    if read_error and _public_name(username):
+        joined = await join_public_channel(client, username)
+        if joined:
+            return {"title": getattr(entity, "title", None), "username": getattr(entity, "username", None)}, joined
+        latest, read_error = await _latest_id(client, entity)
+    info = {
+        "title": getattr(entity, "title", None) or (updates or {}).get("title"),
+        "username": getattr(entity, "username", None) or username,
+    }
+    if read_error:
+        return info, read_error
+    if latest:
+        info["latest_id"] = latest
+    return info, None
+
+
+async def register_joined_invite(
+    db,
+    raw: str,
+    *,
+    category_hint: str | None = None,
+    priority: str | None = None,
+    interval_minutes: int | None = None,
+):
+    """Store a private channel the news account can already read. Never joins."""
+    from sqlalchemy import select
+
+    from backend.app.models.automation import NewsSource
+    from backend.app.services.autopost import parse_invite_hash
+    from backend.app.telegram.session_login import refresh_user_credentials
+
+    invite_hash = parse_invite_hash(raw or "")
+    if not invite_hash:
+        return "لینک دعوت خصوصی شناخته نشد."
+    await refresh_user_credentials(db)
+    client = await _news_client()
+    if client is None:
+        return _NO_SESSION
+    resolved, error = await resolve_joined_invite(client, invite_hash)
+    if error or not resolved:
+        return error or "این کانال خصوصی باز نشد"
+    username = resolved["username"]
+    row = (await db.execute(select(NewsSource).where(NewsSource.username == username))).scalar_one_or_none()
+    if row is None:
+        row = NewsSource(username=username, enabled=True)
+        db.add(row)
+    else:
+        row.enabled = True
+    row.title = resolved.get("title") or row.title
+    row.access_hash = resolved.get("access_hash")
+    row.invite_hash = invite_hash
+    if not resolved.get("public"):
+        row.source_type = "private"
+    if category_hint:
+        row.category_hint = category_hint
+    if priority:
+        row.priority = priority
+    if interval_minutes:
+        row.interval_minutes = interval_minutes
+    latest, read_error = await _latest_id(client, resolved["chat"])
+    row.last_error = read_error
+    if latest and not read_error:
+        row.last_message_id = latest
+    await db.flush()
+    return row
 
 
 async def subscribe_public(db, raw: str) -> str:
     from sqlalchemy import select
 
     from backend.app.models.automation import NewsSource
-    from backend.app.services.autopost import normalize_source
+    from backend.app.services.autopost import normalize_source, parse_invite_hash
     from backend.app.telegram.session_login import refresh_user_credentials
 
+    if parse_invite_hash(raw or ""):
+        result = await register_joined_invite(db, raw)
+        if isinstance(result, str):
+            return result
+        if result.last_error:
+            return f"منبع ثبت شد ولی خوانده نشد: {result.last_error}"
+        title = result.title or result.username
+        return f"منبع خصوصی ثبت شد، چون اکانت خبر از قبل عضو بود: {title}"
     username = normalize_source(raw or "")
     if not username:
-        return "فقط یوزرنیم کانال عمومی. لینک دعوت خصوصی قبول نیست."
+        return "فقط یوزرنیم کانال عمومی، یا لینک دعوتی که اکانت خبر از قبل عضو آن است."
     if username.lstrip("-").isdigit():
         return "برای عضویت خودکار یوزرنیم عمومی لازم است، نه آیدی عددی."
     await refresh_user_credentials(db)
