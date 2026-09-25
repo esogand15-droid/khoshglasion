@@ -11,7 +11,7 @@ from dataclasses import dataclass, replace
 import html
 import re
 
-from backend.app.formatting.emoji import EmojiMapping, find_emoji_spans
+from backend.app.formatting.emoji import EmojiMapping, emoji_graphemes, find_emoji_spans, first_emoji_grapheme
 from backend.app.formatting.templates import (
     DEFAULT_CHANNEL_URL,
     LONG_RULE,
@@ -27,6 +27,9 @@ GLUED_MENTION = re.compile(
 )
 MENTION_LINE = re.compile(r"^[\u200e\u200f]*@[A-Za-z0-9_]{3,}$")
 LIGHTNING = {"⚡", "\ufe0f"}
+FULL_GOLD_COUNT = 10
+MAX_GOLD_COUNT = 18
+MAX_CUSTOM_EMOJI = 90
 _OPTION_LINE = re.compile(r"(?m)^[ \t]*(?:[1-4۱-۴][).．]|[الفبجد]\))")
 _PROTECTED_MARKS = {"blockquote", "expandable_blockquote", "code", "pre"}
 
@@ -126,9 +129,34 @@ def is_divider_line(line: str) -> bool:
     return True
 
 
+_BIDI = set("\u200c\u200e\u200f\u200d\ufe0f\ufe0e")
+
+
+def _symbol_core(line: str) -> str:
+    return "".join(ch for ch in line.strip() if not ch.isspace() and ch not in _BIDI)
+
+
+def _has_word_char(core: str) -> bool:
+    return any(ch.isalnum() or "\u0600" <= ch <= "\u06FF" for ch in core)
+
+
 def is_lightning_line(line: str) -> bool:
-    core = "".join(ch for ch in line.strip() if not ch.isspace())
+    core = _symbol_core(line)
     return bool(core) and set(core) <= LIGHTNING
+
+
+def is_lightning_heavy(line: str) -> bool:
+    """A broken gold-line row is often many ⚡ plus one leftover symbol."""
+    core = _symbol_core(line)
+    if not core or _has_word_char(core):
+        return False
+    bolts = core.count("⚡")
+    return bolts >= 2 or (bolts >= 1 and bolts >= len(core) - 1)
+
+
+def is_symbol_only_line(line: str) -> bool:
+    core = _symbol_core(line)
+    return bool(core) and len(core) <= 16 and not _has_word_char(core)
 
 
 def is_membership_line(line: str) -> bool:
@@ -224,9 +252,9 @@ def _isolate_line(line: str) -> str:
 
 
 def _collapse_lightning(line: str, covered: bool) -> str:
-    if covered or not is_lightning_line(line):
+    if covered or not (is_lightning_line(line) or is_lightning_heavy(line)):
         return line
-    return f"{LONG_RULE}\n{SHORT_RULE}"
+    return LONG_RULE
 
 
 def _covered_by_custom_emoji(start: int, end: int, marks: list[Mark]) -> bool:
@@ -265,7 +293,12 @@ def _rebuild(text: str, marks: list[Mark], segments: list[tuple[int, int, str]])
     return new_text, kept
 
 
-def tidy_existing_chrome(text: str, marks: list[Mark]) -> tuple[str, list[Mark], list[str]]:
+def tidy_existing_chrome(
+    text: str,
+    marks: list[Mark],
+    *,
+    keep_lightning: bool = False,
+) -> tuple[str, list[Mark], list[str]]:
     """Drop a duplicated footer and stop a glued @ from flipping. Body stays."""
     applied: list[str] = []
     rows = _line_segments(text)
@@ -283,7 +316,7 @@ def tidy_existing_chrome(text: str, marks: list[Mark]) -> tuple[str, list[Mark],
         if chrome != contents[-trailing:]:
             applied.append("dedupe_footer")
         contents = head + chrome
-    return _rebuild_from_kept(text, marks, rows, contents, applied)
+    return _rebuild_from_kept(text, marks, rows, contents, applied, keep_lightning=keep_lightning)
 
 
 def _rebuild_from_kept(
@@ -292,6 +325,8 @@ def _rebuild_from_kept(
     rows: list[tuple[int, int, str, str]],
     kept_contents: list[str],
     applied: list[str],
+    *,
+    keep_lightning: bool = False,
 ) -> tuple[str, list[Mark], list[str]]:
     # Map original lines to kept lines by walking and skipping dropped footer duplicates.
     original = [row[2] for row in rows]
@@ -318,7 +353,11 @@ def _rebuild_from_kept(
         consumed.add(row_index)
         new_content = match[1]
         covered = _covered_by_custom_emoji(rows[row_index][0], rows[row_index][1], marks)
-        if is_lightning_line(content) and not covered:
+        if (
+            not keep_lightning
+            and (is_lightning_line(content) or is_lightning_heavy(content))
+            and not covered
+        ):
             new_content = _collapse_lightning(content, False)
             if "restore_divider" not in applied:
                 applied.append("restore_divider")
@@ -338,19 +377,117 @@ def _is_plain_rule(line: str) -> bool:
     return len(core) >= 2 and set(core) <= set("━─▬")
 
 
-def infer_dividers(mappings: list[EmojiMapping] | None) -> list[tuple[str, str]]:
-    tagged = _divider_ids(mappings)
-    if tagged:
-        return tagged
-    inferred: list[tuple[str, str]] = []
+def _is_rule_line(content: str) -> bool:
+    return is_lightning_line(content) or is_lightning_heavy(content) or _is_plain_rule(content) or is_divider_line(content)
+
+
+def _is_collapsible_line(content: str) -> bool:
+    return _is_rule_line(content) or is_symbol_only_line(content)
+
+
+def _whole_line_custom(start: int, end: int, marks: list[Mark]) -> bool:
+    return any(
+        mark.type == "custom_emoji" and mark.custom_emoji_id and mark.start <= start and mark.end >= end
+        for mark in marks
+    )
+
+
+def _line_custom(start: int, end: int, marks: list[Mark]) -> Mark | None:
+    for mark in marks:
+        if mark.type == "custom_emoji" and mark.custom_emoji_id and start <= mark.start < end:
+            return mark
+    return None
+
+
+def _is_gold_line(content: str) -> bool:
+    return is_lightning_line(content) or is_lightning_heavy(content) or _is_plain_rule(content)
+
+
+def gold_spark_count(line: str) -> int:
+    """A short or broken bar becomes a full row. A long bar keeps its own length."""
+    count = len(emoji_graphemes(line or ""))
+    if count >= 4:
+        return min(count, MAX_GOLD_COUNT)
+    return FULL_GOLD_COUNT
+
+
+def _spark_entities_valid(line: str, line_start: int, marks: list[Mark]) -> bool:
+    graphemes = emoji_graphemes(line)
+    if len(graphemes) < 4:
+        return False
+    if any(ch.isalnum() or "\u0600" <= ch <= "\u06FF" for ch in line):
+        return False
+    line_end = line_start + len(line)
+    expected = {(line_start + start, line_start + end) for start, end, _glyph in graphemes}
+    seen: set[tuple[int, int]] = set()
+    for mark in marks:
+        if mark.type != "custom_emoji" or not mark.custom_emoji_id:
+            continue
+        if mark.end <= line_start or mark.start >= line_end:
+            continue
+        key = (mark.start, mark.end)
+        if key not in expected or not str(mark.custom_emoji_id).isdigit():
+            return False
+        if utf16_len(line[mark.start - line_start:mark.end - line_start]) > 16:
+            return False
+        seen.add(key)
+    return seen == expected
+
+
+def _best_divider(mappings: list[EmojiMapping] | None) -> tuple[str, str] | None:
+    ranked: list[tuple[int, int, int, str, str]] = []
     for mapping in mappings or []:
         if not mapping.enabled or not str(mapping.custom_emoji_id).isdigit() or not mapping.unicode_emoji:
             continue
-        if is_lightning_line(mapping.unicode_emoji) or _is_plain_rule(mapping.unicode_emoji):
-            item = (mapping.unicode_emoji, str(mapping.custom_emoji_id))
-            if item not in inferred:
-                inferred.append(item)
-    return inferred[:2]
+        tagged = (mapping.category or "") == "divider"
+        glyph = first_emoji_grapheme(mapping.unicode_emoji)
+        inferred = is_lightning_line(mapping.unicode_emoji) or _is_plain_rule(mapping.unicode_emoji)
+        if glyph and is_lightning_line(glyph):
+            inferred = True
+        if not tagged and not inferred:
+            continue
+        ranked.append((
+            2 if glyph else 0,
+            1 if tagged else 0,
+            int(mapping.priority or 0),
+            mapping.unicode_emoji,
+            str(mapping.custom_emoji_id),
+        ))
+    if not ranked:
+        return None
+    ranked.sort(key=lambda item: (item[0], item[1], item[2]), reverse=True)
+    return ranked[0][3], ranked[0][4]
+
+
+def _best_spark(mappings: list[EmojiMapping] | None) -> tuple[str, str] | None:
+    chosen = _best_divider(mappings)
+    if not chosen:
+        return None
+    glyph = first_emoji_grapheme(chosen[0])
+    if not glyph:
+        return None
+    return glyph, chosen[1]
+
+
+def _spark_from_line(content: str, marks: list[Mark], start: int, end: int) -> tuple[str, str] | None:
+    """Reuse a document id already on the line. Never invent one."""
+    glyph = first_emoji_grapheme(content)
+    if not glyph:
+        return None
+    for mark in marks:
+        if (
+            mark.type == "custom_emoji"
+            and mark.custom_emoji_id
+            and str(mark.custom_emoji_id).isdigit()
+            and start <= mark.start < end
+        ):
+            return glyph, str(mark.custom_emoji_id)
+    return None
+
+
+def infer_dividers(mappings: list[EmojiMapping] | None) -> list[tuple[str, str]]:
+    chosen = _best_divider(mappings)
+    return [chosen] if chosen else []
 
 
 def apply_divider_library(
@@ -358,48 +495,57 @@ def apply_divider_library(
     marks: list[Mark],
     mappings: list[EmojiMapping] | None,
 ) -> tuple[str, list[Mark], list[str]]:
-    """Turn a degraded ⚡ row, or a plain ━ rule, into the captured gold-line emoji.
+    """Turn a gold line into separate premium sparks.
 
-    A forwarded divider is often one custom emoji whose fallback is ⚡. Leaving
-    the fallback in place is why the test post showed a lightning row.
+    One custom-emoji entity must cover one spark. A single entity over
+    ⚡⚡⚡ is what leaves two sparks premium and the rest broken. Consecutive
+    gold bars still collapse to one row, not two.
     """
-    dividers = infer_dividers(mappings)
-    if not dividers or not text:
+    if not text:
         return text, marks, []
     rows = _line_segments(text)
     if not rows:
         return text, marks, []
+    library = _best_spark(mappings)
     skip_rows: set[int] = set()
-    replacements: dict[int, str] = {}
+    replacements: dict[int, tuple[str, str | None, int]] = {}
     applied: list[str] = []
     index = 0
     while index < len(rows):
-        content = rows[index][2]
-        covered = _covered_by_custom_emoji(rows[index][0], rows[index][1], marks)
-        degraded = not covered and (is_lightning_line(content) or _is_plain_rule(content))
-        if not degraded:
+        if not _is_gold_line(rows[index][2]):
             index += 1
             continue
         end = index + 1
-        while end < len(rows):
-            nxt = rows[end][2]
-            nxt_covered = _covered_by_custom_emoji(rows[end][0], rows[end][1], marks)
-            if nxt_covered or not (is_lightning_line(nxt) or _is_plain_rule(nxt) or not nxt.strip()):
-                break
+        while end < len(rows) and (_is_gold_line(rows[end][2]) or not rows[end][2].strip()):
             end += 1
         while end > index + 1 and not rows[end - 1][2].strip():
             end -= 1
-        block = "\n".join(fallback for fallback, _cid in dividers)
-        replacements[index] = block
-        for row_index in range(index + 1, end):
+        rule_indexes = [i for i in range(index, end) if rows[i][2].strip()]
+        first = rule_indexes[0]
+        content = rows[first][2]
+        if len(rule_indexes) == 1 and _spark_entities_valid(content, rows[first][0], marks):
+            index = end
+            continue
+        spark = library or _spark_from_line(content, marks, rows[first][0], rows[first][1])
+        if spark:
+            glyph, custom_id = spark
+            count = max(gold_spark_count(rows[i][2]) for i in rule_indexes)
+            fallback = glyph * count
+            glyph_len = len(glyph)
+        else:
+            fallback, custom_id, glyph_len = LONG_RULE, None, 0
+        replacements[first] = (fallback, custom_id, glyph_len)
+        for row_index in range(first + 1, end):
             skip_rows.add(row_index)
-        applied.append("apply_divider_emoji")
+        applied.append("apply_divider_emoji" if custom_id else "collapse_divider")
+        if custom_id:
+            applied.append(f"gold_row:{fallback.count(glyph) if spark else 0}")
         index = end
     if not replacements:
         return text, marks, []
 
     segments: list[tuple[int, int, str]] = []
-    inserted: list[tuple[int, list[tuple[str, str]]]] = []
+    inserted: list[tuple[int, str, str | None, int]] = []
     new_cursor = 0
     for row_index, (old_start, old_end, content, sep) in enumerate(rows):
         old_limit = old_end + len(sep)
@@ -407,53 +553,43 @@ def apply_divider_library(
             segments.append((old_start, old_limit, ""))
             continue
         if row_index in replacements:
-            block = replacements[row_index]
-            last = row_index == len(rows) - 1 and not skip_rows
-            suffix = "" if last else "\n"
-            segments.append((old_start, old_limit, block + suffix))
-            inserted.append((new_cursor, dividers))
-            new_cursor += len(block + suffix)
+            fallback, custom_id, glyph_len = replacements[row_index]
+            following = any(i > row_index and i not in skip_rows for i in range(len(rows)))
+            suffix = "\n" if following else ""
+            segments.append((old_start, old_limit, fallback + suffix))
+            if custom_id and glyph_len:
+                inserted.append((new_cursor, fallback, custom_id, glyph_len))
+            new_cursor += len(fallback + suffix)
             continue
         piece = content + sep
         segments.append((old_start, old_limit, piece))
         new_cursor += len(piece)
     updated, kept = _rebuild(text, marks, segments)
-    # Marks for the inserted emoji are computed against the rebuilt string.
     extra: list[Mark] = []
-    for start, pairs in inserted:
-        # The recorded cursor was an estimate; locate the block we just wrote.
-        block = "\n".join(fallback for fallback, _cid in pairs)
-        pos = updated.find(block, max(0, start - 4))
-        if pos < 0:
-            pos = updated.find(block)
-        if pos < 0:
+    for start, fallback, custom_id, glyph_len in inserted:
+        if not custom_id or glyph_len <= 0:
             continue
-        cursor = pos
-        for fallback, custom_id in pairs:
-            extra.append(Mark("custom_emoji", cursor, cursor + len(fallback), custom_emoji_id=custom_id))
-            cursor += len(fallback) + 1
+        if start < 0 or start + len(fallback) > len(updated) or updated[start:start + len(fallback)] != fallback:
+            continue
+        if len(fallback) % glyph_len != 0:
+            continue
+        for offset in range(0, len(fallback), glyph_len):
+            extra.append(Mark("custom_emoji", start + offset, start + offset + glyph_len, custom_emoji_id=custom_id))
+    if extra:
+        kept = [
+            mark for mark in kept
+            if mark.type != "custom_emoji" or not any(not (mark.end <= item.start or mark.start >= item.end) for item in extra)
+        ]
     return updated, kept + extra, applied
-
-
-def _divider_ids(mappings: list[EmojiMapping] | None) -> list[tuple[str, str]]:
-    found: list[tuple[str, str]] = []
-    for mapping in mappings or []:
-        if (mapping.category or "") != "divider":
-            continue
-        if not mapping.enabled or not str(mapping.custom_emoji_id).isdigit():
-            continue
-        item = (mapping.unicode_emoji, str(mapping.custom_emoji_id))
-        if item not in found:
-            found.append(item)
-    return found[:2]
 
 
 def _role_emoji(mappings: list[EmojiMapping] | None, role: str) -> tuple[str, str] | None:
     for mapping in sorted(mappings or [], key=lambda item: -item.priority):
         if (mapping.category or "") != role or not mapping.enabled:
             continue
-        if str(mapping.custom_emoji_id).isdigit() and mapping.unicode_emoji:
-            return mapping.unicode_emoji, str(mapping.custom_emoji_id)
+        glyph = first_emoji_grapheme(mapping.unicode_emoji or "")
+        if str(mapping.custom_emoji_id).isdigit() and glyph:
+            return glyph, str(mapping.custom_emoji_id)
     return None
 
 
@@ -471,27 +607,26 @@ def append_missing_chrome(
     applied: list[str] = []
     updated = text.rstrip()
     mark_list = list(marks)
-    trailing = [line for line in updated.split("\n")[-6:]]
-    has_divider = any(is_divider_line(line) or is_lightning_line(line) for line in trailing)
+    has_divider = any(is_divider_line(line) or is_lightning_line(line) for line in updated.split("\n"))
     has_footer = has_channel_footer(updated)
     if add_divider and not has_divider:
-        dividers = infer_dividers(mappings)
-        if dividers:
-            lines = []
-            for fallback, custom_id in (dividers if len(dividers) > 1 else dividers * 2):
-                start = len(updated) + 2 + sum(len(line) + 1 for line in lines)
-                # recompute after join below
-                lines.append((fallback, custom_id))
-            block = "\n".join(item[0] for item in lines)
+        spark = _best_spark(mappings)
+        if spark:
+            glyph, custom_id = spark
+            row = glyph * FULL_GOLD_COUNT
             prefix = updated + "\n\n"
-            updated = prefix + block
-            cursor = len(prefix)
-            for fallback, custom_id in lines:
-                mark_list.append(Mark("custom_emoji", cursor, cursor + len(fallback), custom_emoji_id=custom_id))
-                cursor += len(fallback) + 1
+            updated = prefix + row
+            for offset in range(0, len(row), len(glyph)):
+                mark_list.append(Mark(
+                    "custom_emoji",
+                    len(prefix) + offset,
+                    len(prefix) + offset + len(glyph),
+                    custom_emoji_id=custom_id,
+                ))
             applied.append("add_divider_emoji")
+            applied.append(f"gold_row:{FULL_GOLD_COUNT}")
         else:
-            updated = updated + "\n\n" + f"{LONG_RULE}\n{SHORT_RULE}"
+            updated = updated + "\n\n" + LONG_RULE
             applied.append("add_divider")
         has_divider = True
     if add_footer and not has_footer:
@@ -727,6 +862,293 @@ def strip_custom_emoji_html(html_text: str) -> str:
     return re.sub(r"<tg-emoji\b[^>]*>(.*?)</tg-emoji>", r"\1", html_text or "", flags=re.DOTALL)
 
 
+ACCENT_CHOICES = {
+    "announcement": ("📢", "🚨", "🔔", "❗", "🔥"),
+    "news": ("📌", "ℹ️", "📢", "🔔"),
+    "registration": ("✅", "🆕", "📌", "🎓"),
+    "exam": ("🎯", "📝", "📚"),
+    "rank": ("🏆", "📈", "⭐", "👑"),
+    "resource": ("📚", "💡", "📝", "🔖"),
+    "lesson": ("📚", "💡", "✏️"),
+    "motivational": ("✨", "💪", "🔥", "⭐"),
+    "consulting": ("💡", "📌", "✨", "💬"),
+    "discount": ("🎁", "🔥", "✅"),
+    "planning": ("📅", "📝", "📌"),
+    "general": ("✨", "📌", "💡", "🔥", "⭐", "✅"),
+}
+_LISTISH = re.compile(r"^\s*(?:[•▪·🔹🔶\-–—]|[0-9۰-۹]{1,2}[).．]|[الفبجد]\))")
+
+
+def _insertable(emoji: str) -> bool:
+    return bool(emoji) and not _has_word_char(emoji)
+
+
+def _line_starts_with_emoji(line: str) -> bool:
+    core = line.strip()
+    if not core:
+        return False
+    first = core[0]
+    return not (first.isalnum() or "\u0600" <= first <= "\u06FF" or first in "«\"'([")
+
+
+def accent_pool(mappings: list[EmojiMapping] | None, category: str, avoid_ids: set[str] | None) -> list[EmojiMapping]:
+    avoided = {str(item) for item in (avoid_ids or set())}
+    usable: list[EmojiMapping] = []
+    for mapping in mappings or []:
+        if not mapping.enabled or not str(mapping.custom_emoji_id).isdigit() or not _insertable(mapping.unicode_emoji or ""):
+            continue
+        if (mapping.category or "") in {"divider", "membership", "support"}:
+            continue
+        usable.append(mapping)
+    preferred = ACCENT_CHOICES.get(category) or ACCENT_CHOICES["general"]
+    preferred_rows = [item for item in usable if item.unicode_emoji in preferred]
+    pool = preferred_rows or usable
+    pool.sort(key=lambda item: (str(item.custom_emoji_id) in avoided, -(item.priority or 0)))
+    unique: list[EmojiMapping] = []
+    seen: set[str] = set()
+    for item in pool:
+        if item.unicode_emoji in seen:
+            continue
+        seen.add(item.unicode_emoji)
+        unique.append(item)
+    return unique
+
+
+def _protected_line(start: int, end: int, marks: list[Mark]) -> bool:
+    return any(mark.type in _PROTECTED_MARKS and mark.start < end and mark.end > start for mark in marks)
+
+
+def plan_placements(indexes: list[int], layout: str, max_insert: int) -> list[tuple[int, str]]:
+    """Spread a few accents through the post. Never every line, never only the footer."""
+    if not indexes or max_insert <= 0:
+        return []
+    planned: list[tuple[int, str]] = [(indexes[0], "heading")]
+    rest = indexes[1:]
+    if layout == "list":
+        step = 2 if len(rest) > 3 else 1
+        for offset, index in enumerate(rest):
+            if offset % step != 0:
+                continue
+            if planned and index <= planned[-1][0] + 1 and len(rest) > 2:
+                continue
+            planned.append((index, "point"))
+            if len(planned) >= max_insert:
+                break
+    elif layout == "scatter" and rest and max_insert > 1:
+        planned.append((rest[len(rest) // 2], "point"))
+        if len(rest) > 2 and max_insert > 2:
+            planned.append((rest[-1], "close"))
+    elif layout == "closing" and rest and max_insert > 1:
+        planned.append((rest[-1], "close"))
+    seen: set[int] = set()
+    unique: list[tuple[int, str]] = []
+    for index, role in planned:
+        if index in seen:
+            continue
+        seen.add(index)
+        unique.append((index, role))
+    return unique[:max_insert]
+
+
+def decorate_body(
+    text: str,
+    marks: list[Mark],
+    mappings: list[EmojiMapping] | None,
+    *,
+    category: str,
+    layout: str,
+    avoid_ids: set[str] | None,
+    max_insert: int,
+) -> tuple[str, list[Mark], list[str]]:
+    """Put real library emoji on the title and spaced body lines. Words stay."""
+    if layout not in {"title", "scatter", "list", "closing"} or max_insert <= 0 or not text:
+        return text, marks, []
+    pool = accent_pool(mappings, category, avoid_ids)
+    if not pool:
+        return text, marks, []
+    rows = _line_segments(text)
+    content_indexes: list[int] = []
+    for index, (_start, _end, content, _sep) in enumerate(rows):
+        if not content.strip() or is_footer_line(content) or _is_collapsible_line(content):
+            continue
+        if _protected_line(rows[index][0], rows[index][1], marks) or _OPTION_LINE.search(content):
+            continue
+        if content.strip().startswith("#") or content.strip().startswith("http"):
+            continue
+        content_indexes.append(index)
+    if not content_indexes:
+        return text, marks, []
+    placed = plan_placements(content_indexes, layout, max_insert)
+    targets = [index for index, _role in placed]
+    roles = {index: role for index, role in placed}
+    updated = text
+    current = list(marks)
+    applied: list[str] = []
+    for offset, index in enumerate(reversed(targets)):
+        start, end, content, _sep = rows[index]
+        role = roles.get(index, "point")
+        if _line_starts_with_emoji(content) and role != "close":
+            continue
+        accent = pool[(len(targets) - 1 - offset) % len(pool)]
+        emoji = first_emoji_grapheme(accent.unicode_emoji or "") or ""
+        if not emoji:
+            continue
+        if role == "close":
+            prefix_at = end
+            insert = " " + emoji
+            mark_start = end + 1
+        else:
+            prefix_at = start
+            insert = emoji + " "
+            mark_start = start
+        updated = updated[:prefix_at] + insert + updated[prefix_at:]
+        delta = len(insert)
+        current = [mark.shift(delta) if mark.start >= prefix_at else mark for mark in current]
+        current.append(Mark("custom_emoji", mark_start, mark_start + len(emoji), custom_emoji_id=str(accent.custom_emoji_id)))
+        if "body_emoji" not in applied:
+            applied.append("body_emoji")
+            applied.append("emoji_plan:" + ",".join(role for _index, role in placed))
+    return updated, current, applied
+
+
+def _exact_custom_cover(start: int, end: int, marks: list[Mark]) -> bool:
+    return any(
+        mark.type == "custom_emoji"
+        and mark.custom_emoji_id
+        and str(mark.custom_emoji_id).isdigit()
+        and mark.start == start
+        and mark.end == end
+        for mark in marks
+    )
+
+
+def _library_match(grapheme: str, mappings: list[EmojiMapping] | None) -> tuple[str, str] | None:
+    norm = grapheme.replace("\ufe0f", "").replace("\ufe0e", "")
+    best: tuple[int, bool, str, str] | None = None
+    for mapping in mappings or []:
+        if not mapping.enabled or not str(mapping.custom_emoji_id).isdigit():
+            continue
+        glyph = first_emoji_grapheme(mapping.unicode_emoji or "")
+        if not glyph:
+            continue
+        glyph_norm = glyph.replace("\ufe0f", "").replace("\ufe0e", "")
+        if glyph_norm != norm and (mapping.unicode_emoji or "") != grapheme:
+            continue
+        rank = (int(mapping.priority or 0), glyph == grapheme)
+        if best is None or rank > (best[0], best[1]):
+            best = (rank[0], rank[1], glyph, str(mapping.custom_emoji_id))
+    if not best:
+        return None
+    return best[2], best[3]
+
+
+def _substitution_pool(
+    mappings: list[EmojiMapping] | None,
+    avoid_ids: set[str] | None,
+) -> list[tuple[str, str]]:
+    rows: list[tuple[str, str]] = []
+    for item in accent_pool(mappings, "general", avoid_ids):
+        glyph = first_emoji_grapheme(item.unicode_emoji or "")
+        if glyph and str(item.custom_emoji_id).isdigit():
+            rows.append((glyph, str(item.custom_emoji_id)))
+    if rows:
+        return rows
+    for item in mappings or []:
+        if not item.enabled or not str(item.custom_emoji_id).isdigit():
+            continue
+        glyph = first_emoji_grapheme(item.unicode_emoji or "")
+        if glyph:
+            rows.append((glyph, str(item.custom_emoji_id)))
+    return rows
+
+
+def _span_protected(text: str, start: int, end: int, marks: list[Mark]) -> bool:
+    if any(mark.type in _PROTECTED_MARKS and mark.start < end and mark.end > start for mark in marks):
+        return True
+    line_end = text.find("\n", start)
+    if line_end < 0:
+        line_end = len(text)
+    line_start = text.rfind("\n", 0, start) + 1
+    return bool(_OPTION_LINE.search(text[line_start:line_end]))
+
+
+def _splice_emoji(
+    text: str,
+    marks: list[Mark],
+    start: int,
+    end: int,
+    glyph: str,
+    custom_id: str | None,
+) -> tuple[str, list[Mark]]:
+    delta = len(glyph) - (end - start)
+    updated = text[:start] + glyph + text[end:]
+    kept: list[Mark] = []
+    for mark in marks:
+        if mark.type == "custom_emoji" and mark.start < end and mark.end > start:
+            continue
+        if mark.end <= start:
+            kept.append(mark)
+            continue
+        if mark.start >= end:
+            kept.append(mark.shift(delta))
+            continue
+        new_end = mark.end + delta if mark.end >= end else mark.end
+        if new_end > mark.start:
+            kept.append(replace(mark, end=new_end))
+    if custom_id and glyph:
+        kept.append(Mark("custom_emoji", start, start + len(glyph), custom_emoji_id=custom_id))
+    return updated, kept
+
+
+def premiumize_existing_emoji(
+    text: str,
+    marks: list[Mark],
+    mappings: list[EmojiMapping] | None,
+    avoid_ids: set[str] | None = None,
+) -> tuple[str, list[Mark], list[str]]:
+    """Replace every unprotected unicode emoji with a saved premium id.
+
+    Quotes, code and exam options keep their glyphs. Nothing here invents an id.
+    If no saved id can cover a body emoji, that glyph is removed instead of sent.
+    """
+    if not text:
+        return text, marks, []
+    pool = _substitution_pool(mappings, avoid_ids)
+    spans = emoji_graphemes(text)
+    if not spans:
+        return text, marks, []
+    updated = text
+    current = list(marks)
+    replaced = 0
+    stripped = 0
+    sub_index = 0
+    custom_count = sum(1 for mark in current if mark.type == "custom_emoji")
+    for start, end, grapheme in reversed(spans):
+        if _exact_custom_cover(start, end, current):
+            continue
+        if _inside_url(updated, start) or _span_protected(updated, start, end, current):
+            continue
+        match = _library_match(grapheme, mappings)
+        glyph, custom_id = "", None
+        if match and custom_count < MAX_CUSTOM_EMOJI:
+            glyph, custom_id = match
+        elif pool and custom_count < MAX_CUSTOM_EMOJI:
+            glyph, custom_id = pool[sub_index % len(pool)]
+            sub_index += 1
+        updated, current = _splice_emoji(updated, current, start, end, glyph, custom_id)
+        if custom_id:
+            replaced += 1
+            custom_count += 1
+        else:
+            stripped += 1
+    applied: list[str] = []
+    if replaced:
+        applied.append(f"premium_emoji:{replaced}")
+    if stripped:
+        applied.append(f"emoji_stripped:{stripped}")
+    return updated, current, applied
+
+
 def prepare_post(
     text: str,
     raw_entities: list | None = None,
@@ -743,9 +1165,10 @@ def prepare_post(
     enable_emoji: bool = True,
     body_emoji: bool = True,
     avoid_emoji_ids: set[str] | None = None,
+    emoji_layout: str = "title",
 ) -> tuple[str, str | None, list[dict], list[tuple[int, int, str]], list[str]]:
     marks = list(parsed_marks) if parsed_marks is not None else parse_telegram_entities(text or "", raw_entities)
-    updated, marks, applied = tidy_existing_chrome(text or "", marks)
+    updated, marks, applied = tidy_existing_chrome(text or "", marks, keep_lightning=bool(enable_emoji))
     if enable_emoji:
         updated, marks, divider_rules = apply_divider_library(updated, marks, mappings)
         applied.extend(divider_rules)
@@ -764,11 +1187,27 @@ def prepare_post(
         updated, marks, role_rules = decorate_existing_footer(updated, marks, mappings)
         applied.extend(role_rules)
     if enable_emoji and body_emoji:
+        budget = max(1, min(4, max_emoji))
+        updated, marks, accent_rules = decorate_body(
+            updated,
+            marks,
+            mappings,
+            category=category,
+            layout=emoji_layout,
+            avoid_ids=avoid_emoji_ids,
+            max_insert=budget,
+        )
+        applied.extend(accent_rules)
+    if enable_emoji:
         before = len([mark for mark in marks if mark.type == "custom_emoji"])
         marks = add_library_emoji(updated, marks, mappings, category, max_emoji, avoid_ids=avoid_emoji_ids)
         after = len([mark for mark in marks if mark.type == "custom_emoji"])
         if after > before:
             applied.append(f"emoji_replacement:{after - before}")
+        updated, marks, premium_rules = premiumize_existing_emoji(
+            updated, marks, mappings, avoid_emoji_ids,
+        )
+        applied.extend(premium_rules)
     html_text = render_html(updated, marks)
     if html_text and "blockquote" in html_text and "preserve_quote" not in applied:
         applied.append("preserve_quote")

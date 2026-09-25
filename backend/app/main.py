@@ -1,4 +1,5 @@
 from contextlib import asynccontextmanager
+import asyncio
 import hmac
 import logging
 from pathlib import Path
@@ -8,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+from backend.app.api.automation import router as automation_router
 from backend.app.api.auth import router as auth_router
 from backend.app.api.channels import router as channels_router
 from backend.app.api.dashboard import router as dashboard_router
@@ -63,7 +65,12 @@ async def lifespan(_app: FastAPI):
     except Exception:
         logger.exception("Startup bootstrap failed")
     await setup_webhook()
+    stop_automation = asyncio.Event()
+    from backend.app.services.automation_runner import automation_loop
+    automation_task = asyncio.create_task(automation_loop(stop_automation))
     yield
+    stop_automation.set()
+    automation_task.cancel()
     from backend.app.telegram.session_login import close_pending_login
     await close_pending_login()
     await close_user_client()
@@ -86,6 +93,7 @@ app.add_middleware(
 )
 
 app.include_router(auth_router)
+app.include_router(automation_router)
 app.include_router(channels_router)
 app.include_router(emojis_router)
 app.include_router(styles_router)

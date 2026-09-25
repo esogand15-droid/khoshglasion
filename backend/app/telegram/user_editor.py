@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 
 from backend.app.core.config import get_settings
+from backend.app.formatting.emoji import custom_emoji_span_valid
 from backend.app.formatting.textutil import utf16_len
 
 logger = logging.getLogger(__name__)
@@ -144,6 +145,17 @@ def _entities(text: str, spans: list[tuple[int, int, str]] | None = None, format
     return built
 
 
+def _reject_broken_emoji(text: str, entities: list[dict] | None) -> str | None:
+    for item in entities or []:
+        if item.get("type") != "custom_emoji":
+            continue
+        start = int(item.get("offset") or 0)
+        length = int(item.get("length") or 0)
+        if not custom_emoji_span_valid(text, start, length):
+            return "custom_emoji_length_invalid"
+    return None
+
+
 async def edit_via_user(
     chat_id: int,
     message_id: int,
@@ -151,6 +163,14 @@ async def edit_via_user(
     spans: list[tuple[int, int, str]] | None = None,
     entities: list[dict] | None = None,
 ) -> dict:
+    broken = _reject_broken_emoji(text, entities)
+    if not broken and not entities:
+        for start, end, _custom_id in spans or []:
+            if not custom_emoji_span_valid(text, start, end - start):
+                broken = "custom_emoji_length_invalid"
+                break
+    if broken:
+        return {"ok": False, "error": broken, "method": "user_session", "emoji_rejected": True}
     client = await get_user_client()
     if client is None:
         return {"ok": False, "error": "user_session_not_configured"}
@@ -165,6 +185,35 @@ async def edit_via_user(
             return {"ok": True, "method": "user_session", "warning": "not_modified"}
         logger.warning("User-session edit failed: %s", message)
         return {"ok": False, "error": message, "method": "user_session"}
+
+
+async def delete_via_user(chat_id: int, message_id: int) -> dict:
+    client = await get_user_client()
+    if client is None:
+        return {"ok": False, "error": "user_session_not_configured"}
+    try:
+        await client.delete_messages(int(chat_id), [int(message_id)])
+        return {"ok": True, "method": "user_session"}
+    except Exception as exc:
+        logger.warning("User-session delete failed: %s", type(exc).__name__)
+        return {"ok": False, "error": type(exc).__name__}
+
+
+async def send_via_user(chat_id: int, text: str, entities: list[dict] | None = None) -> dict:
+    """Send a channel post with library emoji entities. Never logs the session."""
+    broken = _reject_broken_emoji(text, entities)
+    if broken:
+        return {"ok": False, "error": broken, "method": "user_session", "emoji_rejected": True}
+    client = await get_user_client()
+    if client is None:
+        return {"ok": False, "error": "user_session_not_configured"}
+    try:
+        formatting = _entities(text, None, entities) if entities else None
+        sent = await client.send_message(int(chat_id), text[:4000], formatting_entities=formatting or None)
+        return {"ok": True, "message_id": int(sent.id), "method": "user_session"}
+    except Exception as exc:
+        logger.warning("User-session send failed: %s", type(exc).__name__)
+        return {"ok": False, "error": type(exc).__name__, "method": "user_session"}
 
 
 async def user_session_status() -> dict:

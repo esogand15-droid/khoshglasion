@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.core.runtime import RuntimeState, load_runtime
 from backend.app.formatting.emoji import EmojiMapping as EmojiMap
-from backend.app.formatting.editor import analyze_post
+from backend.app.formatting.editor import ai_plan, analyze_post
 from backend.app.formatting.engine import format_message
 from backend.app.formatting.rotation import choose_template
 from backend.app.formatting.styles import get_style, style_from_payload, style_is_enabled
@@ -21,7 +21,7 @@ from backend.app.models.channel import Channel
 from backend.app.models.emoji import EmojiMapping
 from backend.app.models.message_log import MessageLog
 from backend.app.models.style import StylePreset
-from backend.app.services.ai import enhance_with_ai
+from backend.app.services.ai import edit_with_ai, pick_layout
 from backend.app.services.ai_provider import detect_provider
 from backend.app.services.notify import notify
 from backend.app.telegram.edit import edit_telegram_message, merge_signature
@@ -315,14 +315,20 @@ async def process_channel_post(
         has_entities=bool(entities),
     )
 
-    use_ai = (
-        runtime.ai_ready
-        and (channel.ai_rewrite if channel.ai_rewrite is not None else True)
-        and decision.strategy == "light_edit"
-    )
+    channel_ai = channel.ai_rewrite if channel.ai_rewrite is not None else True
+    plan = ai_plan(decision)
     ai_text = None
     ai_marks = None
-    if use_ai:
+    ai_reason = "disabled"
+    if not channel_ai:
+        ai_reason = "channel_off"
+    elif not runtime.ai_enabled:
+        ai_reason = "disabled"
+    elif not runtime.ai_ready:
+        ai_reason = "not_ready"
+    elif plan == "skip":
+        ai_reason = "locked" if decision.has_options or decision.category == "solution" else "too_short"
+    else:
         previous = ""
         prev = (
             await db.execute(
@@ -334,13 +340,14 @@ async def process_channel_post(
         ).scalar_one_or_none()
         if prev:
             previous = prev[:300]
-        ai_text = await enhance_with_ai(
+        ai_text, ai_reason = await edit_with_ai(
             ai_source,
             decision.category,
             previous,
             runtime=runtime,
             limit=900 if has_media else 3600,
             required=quotes,
+            mode=plan,
         )
         if ai_text and quotes:
             ai_text, ai_marks = unwrap_quotes(ai_text, quotes)
@@ -348,7 +355,13 @@ async def process_channel_post(
                 logger.info("AI dropped a quote; keeping the admin wording")
                 ai_text = None
                 ai_marks = None
+                ai_reason = "dropped_quote"
 
+    layout = choice.emoji_style_id
+    if runtime.ai_ready and layout not in {"off", "quiet"}:
+        picked = await pick_layout(ai_source or effective, runtime)
+        if picked:
+            layout = picked
     started = time.perf_counter()
     result = format_message(
         raw_text=ai_text or effective,
@@ -366,21 +379,29 @@ async def process_channel_post(
         support_username=getattr(runtime, "support_username", None),
         category=decision.category,
         structure_id=choice.structure_id,
-        body_emoji=choice.emoji_style_id == "accent",
+        body_emoji=layout in {"title", "scatter", "list", "closing"},
         avoid_emoji_ids=set(recent_emoji_ids),
+        emoji_layout=layout,
     )
     result.applied_rules.append(f"strategy:{decision.strategy}")
     result.applied_rules.append(f"template:{decision.template_family}")
     result.applied_rules.append(f"template_id:{choice.template_id}")
     result.applied_rules.append(f"style_id:{choice.style_id}")
-    result.applied_rules.append(f"emoji_style:{choice.emoji_style_id}")
+    result.applied_rules.append(f"emoji_style:{layout}")
+    if layout != choice.emoji_style_id:
+        result.applied_rules.append("ai_layout")
     result.applied_rules.append(f"structure:{choice.structure_id}")
     selection = choice.as_dict()
+    selection["emoji_style_id"] = layout
     selection["used_emoji_ids"] = [cid for _start, _end, cid in result.emoji_spans]
     if ai_text:
         result.applied_rules.append("ai_enhanced")
         selection["ai_provider"] = detect_provider(runtime.ai_base_url)
         selection["ai_model"] = runtime.ai_model
+    elif runtime.ai_enabled or channel.ai_rewrite is True:
+        skipped = {"disabled", "channel_off", "not_ready", "locked", "too_short"}
+        label = "skipped" if ai_reason in skipped else "rejected"
+        result.applied_rules.append(f"ai_{label}:{ai_reason}")
     elapsed = (time.perf_counter() - started) * 1000
 
     if not result.changed and not force:
@@ -448,6 +469,8 @@ async def process_channel_post(
     else:
         log.status = "failed"
         log.error = str(edit_result.get("error") or "edit_failed")[:2000]
+        if edit_result.get("emoji_rejected"):
+            await _remember_emoji_error(db, log.error)
         channel.last_error = log.error
         await notify(
             runtime,
@@ -466,17 +489,42 @@ async def process_channel_post(
     }
 
 
+def _result_has_premium(result) -> bool:
+    for item in getattr(result, "entities", None) or []:
+        if item.get("type") == "custom_emoji" and str(item.get("custom_emoji_id") or "").isdigit():
+            return True
+    return bool(getattr(result, "emoji_spans", None))
+
+
+def premium_edit_plan(has_premium: bool, mode: str, session_ready: bool) -> str:
+    """user sends premium entities. refuse does not downgrade to unicode. bot is plain formatting."""
+    if not has_premium or (mode or "").lower() == "off":
+        return "bot"
+    if session_ready and (mode or "").lower() in {"auto", "user"}:
+        return "user"
+    return "refuse"
+
+
 async def _edit(runtime: RuntimeState, channel: Channel, chat_id: int, message_id: int, result, has_media: bool, markup):
     mode = (runtime.premium_mode or "auto").lower()
     has_formatting = bool(result.html_text)
-    want_user = channel.emoji_replacement and mode in {"auto", "user"} and session_configured() and bool(result.entities or result.emoji_spans)
-    if want_user:
+    has_premium = bool(channel.emoji_replacement) and _result_has_premium(result)
+    plan = premium_edit_plan(has_premium, mode, session_configured())
+    if plan == "user":
         user_result = await edit_via_user(
             chat_id, message_id, result.text, result.emoji_spans, entities=result.entities,
         )
         if user_result.get("ok"):
             return user_result
-        logger.info("User-session edit failed, trying Bot API: %s", user_result.get("error"))
+        logger.info("User-session premium edit failed; unicode fallback removed: %s", user_result.get("error"))
+        return {**user_result, "ok": False, "emoji_rejected": True}
+    if plan == "refuse":
+        return {
+            "ok": False,
+            "error": "premium_session_required",
+            "method": "user_session",
+            "emoji_rejected": True,
+        }
     return await edit_telegram_message(
         chat_id=chat_id,
         message_id=message_id,

@@ -61,12 +61,26 @@ def _record_output(text: str) -> None:
     del _recent_hashes[:-_MAX_HISTORY]
 
 
-def build_messages(text: str, category: str, previous_context: str = "", extra_variation: bool = False) -> list[dict]:
-    hint = CATEGORY_HINTS.get(category, CATEGORY_HINTS["general"])
+TIDY_HINT = (
+    "این متن را بخوان و فقط چینش را خواناتر کن. "
+    "تیتر را از خود متن بردار، لیست را اگر هست بولت کن، و بین بخش‌ها یک خط فاصله بگذار. "
+    "جمله، عدد، اسم، تاریخ، قیمت و لینک را عوض نکن و جملهٔ تازه نساز. "
+    "فوتر، خط ━ و دعوت عضویت را ننویس."
+)
+
+
+def build_messages(
+    text: str,
+    category: str,
+    previous_context: str = "",
+    extra_variation: bool = False,
+    mode: str = "rewrite",
+) -> list[dict]:
+    hint = TIDY_HINT if mode == "tidy" else CATEGORY_HINTS.get(category, CATEGORY_HINTS["general"])
     user = f"{hint}\n\nمتن اصلی:\n{wrap_post(text)}"
-    if previous_context:
+    if previous_context and mode == "rewrite":
         user += f"\n\nبرای اینکه این پست شبیه پست قبلی نشود، فقط لحن و چینش را عوض کن. پست قبلی این بود:\n{previous_context[:280]}"
-    if extra_variation:
+    if extra_variation and mode == "rewrite":
         user += "\n\nاین بار ساختار جمله‌ها را کاملاً متفاوت بچین، ولی واقعیت‌ها همان بماند."
     return [
         {"role": "system", "content": SYSTEM_PROMPT},
@@ -153,6 +167,104 @@ async def _sleep_retry(attempt: int, retry_after: str | None) -> None:
     await asyncio.sleep(wait)
 
 
+LAYOUTS = {"title", "scatter", "list", "closing"}
+
+
+def parse_layout_token(raw: str | None) -> str | None:
+    token = ((raw or "").strip().lower().split() or [""])[0].strip(".,:\"'`")
+    return token if token in LAYOUTS else None
+
+
+async def complete_text(runtime: RuntimeState, messages: list[dict]) -> str | None:
+    if not runtime.ai_ready:
+        return None
+    url, spec = _provider_call(runtime, messages, runtime.ai_temperature)
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(40.0, connect=8.0)) as client:
+            response = await client.post(url, json=spec["payload"], headers=spec["headers"])
+        if response.status_code != 200:
+            logger.info("draft model status %s", response.status_code)
+            return None
+        text, _finish = extract_message_text(response.json())
+        return text or None
+    except Exception as exc:
+        logger.info("draft model skipped: %s", type(exc).__name__)
+        return None
+
+
+async def pick_layout(text: str, runtime: RuntimeState) -> str | None:
+    """Ask the model which decoration fits. Failure falls back to rotation."""
+    if not runtime.ai_ready or not text or len(text.strip()) < 20:
+        return None
+    url, spec = _provider_call(
+        runtime,
+        [
+            {
+                "role": "system",
+                "content": "فقط یکی از این کلمه‌ها را برگردان: title یا scatter یا list یا closing. توضیح ننویس.",
+            },
+            {"role": "user", "content": wrap_post(text[:1200])},
+        ],
+        0.2,
+        health=True,
+    )
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(12.0, connect=5.0)) as client:
+            response = await client.post(url, json=spec["payload"], headers=spec["headers"])
+        if response.status_code != 200:
+            return None
+        raw, _finish = extract_message_text(response.json())
+        return parse_layout_token(raw)
+    except Exception as exc:
+        logger.info("layout pick skipped: %s", type(exc).__name__)
+        return None
+
+
+async def edit_with_ai(
+    text: str,
+    category: str = "general",
+    previous_context: str = "",
+    runtime: RuntimeState | None = None,
+    limit: int = 3600,
+    required: list[str] | None = None,
+    mode: str = "rewrite",
+) -> tuple[str | None, str]:
+    """Return the accepted text and a reason the caller can store on the log."""
+    if runtime is None or not runtime.ai_ready:
+        return None, "not_ready"
+    if not text or len(text.strip()) < runtime.ai_min_chars:
+        return None, "too_short"
+    if mode not in {"rewrite", "tidy"}:
+        mode = "tidy"
+
+    messages = build_messages(text, category, previous_context, mode=mode)
+    try:
+        raw = await _call_model(runtime, messages, runtime.ai_temperature)
+        accepted, reason = accept_ai_output(text, raw, limit, required)
+        opening = _content_hash((accepted or "").strip().split("\n", 1)[0][:80]) if accepted else ""
+        repeated = bool(accepted) and (_content_hash(accepted) in _recent_hashes or f"open:{opening}" in _recent_hashes)
+        if repeated and mode == "rewrite":
+            logger.info("AI output repeated a recent post; retrying once")
+            messages = build_messages(text, category, previous_context, extra_variation=True, mode=mode)
+            raw = await _call_model(runtime, messages, min(0.95, runtime.ai_temperature + 0.15))
+            accepted, reason = accept_ai_output(text, raw, limit, required)
+        if not accepted:
+            logger.info("AI output rejected: %s", reason)
+            return None, reason
+        _record_output(accepted)
+        logger.info("AI enhanced category=%s mode=%s len=%s", category, mode, len(accepted))
+        return accepted, "ok"
+    except httpx.HTTPStatusError as exc:
+        logger.error("AI API error %s", redact(str(exc), runtime.ai_api_key if runtime else None))
+        return None, "http_error"
+    except httpx.TimeoutException:
+        logger.error("AI request timed out")
+        return None, "timeout"
+    except Exception as exc:
+        logger.error("AI call failed: %s: %s", type(exc).__name__, exc)
+        return None, "error"
+
+
 async def enhance_with_ai(
     text: str,
     category: str = "general",
@@ -160,36 +272,18 @@ async def enhance_with_ai(
     runtime: RuntimeState | None = None,
     limit: int = 3600,
     required: list[str] | None = None,
+    mode: str = "rewrite",
 ) -> Optional[str]:
-    if runtime is None or not runtime.ai_ready:
-        return None
-    if not text or len(text.strip()) < runtime.ai_min_chars:
-        return None
-
-    messages = build_messages(text, category, previous_context)
-    try:
-        raw = await _call_model(runtime, messages, runtime.ai_temperature)
-        accepted, reason = accept_ai_output(text, raw, limit, required)
-        opening = _content_hash((accepted or "").strip().split("\n", 1)[0][:80]) if accepted else ""
-        repeated = bool(accepted) and (_content_hash(accepted) in _recent_hashes or f"open:{opening}" in _recent_hashes)
-        if repeated:
-            logger.info("AI output repeated a recent post; retrying once")
-            messages = build_messages(text, category, previous_context, extra_variation=True)
-            raw = await _call_model(runtime, messages, min(0.95, runtime.ai_temperature + 0.15))
-            accepted, reason = accept_ai_output(text, raw, limit, required)
-        if not accepted:
-            logger.info("AI output rejected: %s", reason)
-            return None
-        _record_output(accepted)
-        logger.info("AI enhanced category=%s len=%s", category, len(accepted))
-        return accepted
-    except httpx.HTTPStatusError as exc:
-        logger.error("AI API error %s", redact(str(exc), runtime.ai_api_key if runtime else None))
-    except httpx.TimeoutException:
-        logger.error("AI request timed out")
-    except Exception as exc:
-        logger.error("AI call failed: %s: %s", type(exc).__name__, exc)
-    return None
+    accepted, _reason = await edit_with_ai(
+        text,
+        category,
+        previous_context,
+        runtime=runtime,
+        limit=limit,
+        required=required,
+        mode=mode,
+    )
+    return accepted
 
 
 async def test_ai_connection(runtime: RuntimeState) -> dict:

@@ -28,3 +28,13 @@ def require_role(*roles):
             raise HTTPException(status_code=403, detail="Forbidden")
         return admin
     return checker
+
+
+def assert_editor(admin: Admin) -> None:
+    if admin.role not in {"OWNER", "ADMIN", "EDITOR"}:
+        raise HTTPException(status_code=403, detail="این نقش فقط می‌تواند ببیند")
+
+
+def assert_publisher(admin: Admin) -> None:
+    if admin.role not in {"OWNER", "ADMIN"}:
+        raise HTTPException(status_code=403, detail="انتشار برای این نقش باز نیست")

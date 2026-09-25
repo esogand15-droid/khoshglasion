@@ -101,6 +101,7 @@ def format_message(
     structure_id: str | None = None,
     body_emoji: bool = True,
     avoid_emoji_ids: set[str] | None = None,
+    emoji_layout: str = "title",
 ) -> FormattedMessage:
     original = raw_text or ""
     text = original
@@ -158,6 +159,7 @@ def format_message(
         enable_emoji=enable_emoji,
         body_emoji=body_emoji,
         avoid_emoji_ids=avoid_emoji_ids,
+        emoji_layout=emoji_layout,
     )
     text = prepared
     applied.extend(rule for rule in chrome_rules if rule not in applied)

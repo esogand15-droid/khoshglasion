@@ -6,5 +6,16 @@ from backend.app.models.rule import FormattingRule
 from backend.app.models.admin import Admin
 from backend.app.models.audit import AuditLog
 from backend.app.models.system import SystemSetting, WebhookEvent
+from backend.app.models.automation import (
+    AutomationConfig,
+    AutomationJob,
+    AutomationLog,
+    DraftPost,
+    HashtagRule,
+    JobLock,
+    NewsSource,
+    PromptVersion,
+    PublishSlot,
+)
 
 __all__ = ["Channel","MessageLog","EmojiMapping","StylePreset","FormattingRule","Admin","AuditLog","SystemSetting","WebhookEvent"]

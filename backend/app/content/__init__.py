@@ -1,0 +1,1 @@
+"""Content automation stages. Each function is independent of Telegram."""

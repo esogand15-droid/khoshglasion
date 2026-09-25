@@ -54,6 +54,36 @@ def _columns_for(connection: Connection) -> dict[str, dict[str, str]]:
             "label": "VARCHAR(128)",
             "source": "VARCHAR(32)",
         },
+        "automation_config": {
+            "paused": _bool(connection, False),
+            "attribution_mode": "VARCHAR(16) DEFAULT 'news'",
+            "collect_interval_minutes": "INTEGER DEFAULT 20",
+            "daily_cap": "INTEGER DEFAULT 6",
+            "balance_categories": _bool(connection, True),
+        },
+        "news_sources": {
+            "priority": "VARCHAR(16) DEFAULT 'normal'",
+            "interval_minutes": "INTEGER DEFAULT 20",
+            "source_type": "VARCHAR(32) DEFAULT 'channel'",
+            "last_collect_at": "TIMESTAMP",
+        },
+        "draft_posts": {
+            "source_content": "TEXT",
+            "analysis_json": "TEXT",
+            "hashtags": "TEXT",
+            "template_id": "VARCHAR(64)",
+            "style_id": "VARCHAR(64)",
+            "emoji_signature": "VARCHAR(128)",
+            "confidence": "VARCHAR(16)",
+            "importance": "VARCHAR(16)",
+            "version": "INTEGER DEFAULT 1",
+            "versions_json": "TEXT",
+            "retry_count": "INTEGER DEFAULT 0",
+            "next_retry_at": "TIMESTAMP",
+            "content_hash": "VARCHAR(40)",
+            "source_url": "VARCHAR(256)",
+            "updated_at": "TIMESTAMP",
+        },
     }
 
 
@@ -136,6 +166,7 @@ def sync_schema(connection: Connection) -> None:
 
 
 async def ensure_schema() -> None:
+    import backend.app.models  # noqa: F401
     engine = get_engine()
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)

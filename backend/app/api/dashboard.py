@@ -7,9 +7,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.core.runtime import load_runtime
 from backend.app.db.base import get_db
+from backend.app.models.automation import DraftPost, PublishSlot
 from backend.app.models.channel import Channel
 from backend.app.models.emoji import EmojiMapping
 from backend.app.models.message_log import MessageLog
+from backend.app.services.autopost import get_config, next_slot_time
 from backend.app.security.deps import get_current_admin
 
 router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
@@ -31,6 +33,30 @@ def template_usage(rules_list: list[str | None]) -> list[dict]:
                 counts[name] = counts.get(name, 0) + 1
                 break
     return [{"name": name, "count": count} for name, count in sorted(counts.items(), key=lambda item: -item[1])]
+
+
+async def _automation_queue(db: AsyncSession) -> dict:
+    config = await get_config(db)
+    counts = dict((await db.execute(select(DraftPost.status, func.count()).group_by(DraftPost.status))).all())
+    slots = (await db.execute(select(PublishSlot).where(PublishSlot.enabled == True))).scalars().all()  # noqa: E712
+    nxt = next_slot_time(list(slots))
+    today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    failed_today = (
+        await db.execute(
+            select(func.count()).select_from(DraftPost).where(DraftPost.status == "failed", DraftPost.updated_at >= today)
+        )
+    ).scalar() or 0
+    return {
+        "preview": int(counts.get("preview") or 0),
+        "scheduled": int(counts.get("scheduled") or 0),
+        "skipped": int(counts.get("skipped") or 0),
+        "failed": int(counts.get("failed") or 0),
+        "failed_today": int(failed_today),
+        "next_slot": nxt.isoformat() if nxt else None,
+        "paused": bool(config.paused),
+        "auto_publish": bool(config.auto_publish),
+        "last_error": config.last_error,
+    }
 
 
 @router.get("")
@@ -120,6 +146,7 @@ async def dashboard(db: AsyncSession = Depends(get_db), admin=Depends(get_curren
             "created_at": row.created_at.isoformat() if row.created_at else None,
         } for row in recent],
         "templates": template_usage(list(rule_rows)),
+        "queue": await _automation_queue(db),
         "failures": [{
             "id": row.id,
             "chat_id": row.chat_id,

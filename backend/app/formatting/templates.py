@@ -24,4 +24,4 @@ def branded_footer(support: str | None = None) -> str:
 
 
 def plain_divider() -> str:
-    return f"{LONG_RULE}\n{SHORT_RULE}"
+    return LONG_RULE

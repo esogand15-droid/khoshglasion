@@ -10,6 +10,7 @@ from backend.app.schemas.emoji import EmojiCreate, EmojiUpdate
 from backend.app.security.deps import get_current_admin
 from backend.app.services.audit import write_audit
 from backend.app.telegram.bot import get_bot
+from backend.app.telegram.emoji_pack import fetch_sticker_set, import_pack_names, parse_pack_names
 
 router = APIRouter(prefix="/api/emojis", tags=["emojis"])
 
@@ -73,6 +74,19 @@ async def import_emojis(payload: list[dict], db: AsyncSession = Depends(get_db),
         imported += 1
     await db.flush()
     return {"imported": imported}
+
+
+@router.post("/import-pack")
+async def import_pack(payload: dict, db: AsyncSession = Depends(get_db), admin=Depends(get_current_admin)):
+    raw = str(payload.get("url") or payload.get("link") or payload.get("name") or "").strip()
+    names = parse_pack_names(raw, allow_bare=True)
+    if not names:
+        raise HTTPException(status_code=400, detail="لینک پک معتبر نیست. نمونه: https://t.me/addemoji/Name")
+    if get_bot() is None:
+        raise HTTPException(status_code=400, detail="توکن ربات تنظیم نشده")
+    result = await import_pack_names(db, names, fetch_sticker_set)
+    await write_audit(db, admin=admin, action="import_pack", resource="emoji", resource_id=names[0], ip_address=None)
+    return result
 
 
 @router.post("/validate")

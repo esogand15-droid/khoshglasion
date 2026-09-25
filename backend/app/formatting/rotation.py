@@ -13,7 +13,7 @@ from backend.app.formatting.editor import ContentDecision
 from backend.app.formatting.styles import style_for_category
 
 STRUCTURES = ("classic", "airy", "compact")
-EMOJI_STYLES = ("chrome", "accent")
+EMOJI_STYLES = ("list", "scatter", "closing", "title")
 _LIST_LINE = re.compile(r"^\s*(?:🔹|🔶|•|▪|·|[-–—]|[0-9۰-۹]{1,2}[).．]|[الفبجد]\))")
 
 
@@ -80,12 +80,14 @@ def choose_template(
     if not emoji_enabled:
         emoji_style_id = "off"
         reasons.append("emoji:off")
-    elif locked:
-        emoji_style_id = "chrome"
-        reasons.append("emoji:chrome")
+    elif decision.has_options or decision.category in {"exam", "solution"}:
+        emoji_style_id = "quiet"
+        reasons.append("emoji:quiet")
     else:
         emoji_style_id = pick_avoiding_recent(EMOJI_STYLES, recent_emoji_styles or [])
         reasons.append(f"emoji:{emoji_style_id}")
+        if locked:
+            reasons.append("words:locked")
 
     return TemplateChoice(
         template_id=f"{decision.template_family}.{structure_id}",

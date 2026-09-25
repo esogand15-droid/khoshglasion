@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.core.runtime import RuntimeState, load_runtime, save_runtime_values
 from backend.app.formatting.richtext import role_for_raw_entity
+from backend.app.telegram.emoji_pack import fetch_sticker_set, import_pack_names, parse_pack_names
 from backend.app.formatting.textutil import utf16_slice
 from backend.app.models.emoji import EmojiMapping
 from backend.app.telegram.bot import get_bot
@@ -28,7 +29,9 @@ HELP = """خوشگلاسیون آماده‌ست.
 /pause توقف کامل
 /resume ادامه پردازش
 
-برای پر کردن کتابخانه ایموجی، یک پیام حاوی ایموجی پرمیوم را همین‌جا فوروارد کن.
+برای پر کردن کتابخانه، ایموجی پرمیوم را همین‌جا بفرست یا لینک پک را بده:
+https://t.me/addemoji/نام‌پک
+/pack نام‌پک
 اول در پنل، آیدی عددی‌ات را در «ادمین‌های تلگرام» بگذار تا دستورهای حساس قفل شود."""
 
 
@@ -110,6 +113,20 @@ async def handle_private_message(db: AsyncSession, message: dict, runtime: Runti
     command = text.split()[0].split("@")[0].lower() if text.startswith("/") else ""
 
     captured = await capture_custom_emoji(db, message)
+    pack_names = parse_pack_names(text, allow_bare=command == "/pack")
+    if pack_names and command in {"", "/pack"}:
+        if not _allowed(user_id, runtime, sensitive=bool(runtime.admin_ids)):
+            await _reply(chat_id, "وارد کردن پک فقط برای ادمین ربات است.")
+            return {"ok": True, "skipped": "not_admin"}
+        result = await import_pack_names(db, pack_names, fetch_sticker_set)
+        note = ""
+        if captured:
+            note = f"\n{captured} ایموجی همین پیام هم ذخیره شد."
+        if not runtime.admin_ids:
+            note += "\nهشدار: ادمین تلگرام هنوز قفل نشده. /id را در پنل بگذار."
+        await _reply(chat_id, result["message"] + note)
+        return {"ok": True, "captured": captured, "imported": result["imported"]}
+
     if captured and _allowed(user_id, runtime, sensitive=False):
         await _reply(chat_id, f"{captured} ایموجی پرمیوم به کتابخانه اضافه شد.")
         if not command:
@@ -142,6 +159,8 @@ async def handle_private_message(db: AsyncSession, message: dict, runtime: Runti
     elif command == "/resume":
         await save_runtime_values(db, {"kill_switch": "false"})
         await _reply(chat_id, "پردازش روشن شد.")
+    elif command == "/pack":
+        await _reply(chat_id, "لینک پک را بفرست. نمونه: /pack https://t.me/addemoji/Name")
     elif command == "/dry":
         arg = text.split()[1].lower() if len(text.split()) > 1 else "on"
         enabled = arg not in {"off", "0", "false"}

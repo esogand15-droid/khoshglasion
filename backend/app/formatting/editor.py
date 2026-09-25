@@ -1,7 +1,8 @@
 """Decide how a رتبه لند post may be edited. This does not rewrite text.
 
-Suitability beats variety. Fact-heavy posts are preserve-only. AI is allowed
-only when the decision says light_edit.
+Suitability beats variety. Fact-heavy posts stay preserve-only for templates.
+The model may still read them in tidy mode. Exam options and short notes are
+not sent to the model.
 """
 from __future__ import annotations
 
@@ -93,3 +94,22 @@ def analyze_post(text: str | None, entities: list | None = None) -> ContentDecis
         has_number=has_number,
         has_options=has_options,
     )
+
+
+REWRITE_CATEGORIES = {"motivational", "consulting", "general", "planning", "qa", "occasion", "ad", "service"}
+
+
+def ai_plan(decision: ContentDecision) -> str:
+    """rewrite, tidy, or skip.
+
+    skip keeps exam options, answer keys, and very short notes untouched.
+    tidy means the model reads a fact-heavy post and may only restack it.
+    rewrite is the lighter edit used for soft posts.
+    """
+    if decision.has_options or decision.category == "solution":
+        return "skip"
+    if decision.length_class == "short":
+        return "skip"
+    if decision.strategy == "light_edit" or decision.category in REWRITE_CATEGORIES:
+        return "rewrite"
+    return "tidy"

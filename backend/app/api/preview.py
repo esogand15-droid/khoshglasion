@@ -8,28 +8,32 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.app.core.runtime import load_runtime
 from backend.app.db.base import get_db
 from backend.app.formatting.diff import line_diff
-from backend.app.formatting.editor import analyze_post
+from backend.app.formatting.editor import ai_plan, analyze_post
 from backend.app.formatting.emoji import EmojiMapping as EmojiMap
 from backend.app.formatting.engine import format_message
 from backend.app.models.channel import Channel
 from backend.app.models.emoji import EmojiMapping
 from backend.app.schemas.preview import PreviewRequest, PreviewResponse
 from backend.app.security.deps import get_current_admin
-from backend.app.services.ai import enhance_with_ai
+from backend.app.services.ai import edit_with_ai
 from backend.app.telegram.pipeline import parse_contexts, resolve_style
 
 router = APIRouter(prefix="/api/preview", tags=["preview"])
 
 
 def preview_ai_plan(text: str, use_ai: bool, ai_ready: bool) -> tuple[bool, dict, str | None]:
-    """The lab uses the same lock as the bot. A checkbox must not rewrite facts."""
-    decision = analyze_post(text).as_dict()
+    """The lab uses the same lock as the bot. Exam options are never rewritten."""
+    decision_obj = analyze_post(text)
+    decision = decision_obj.as_dict()
+    decision["ai_mode"] = ai_plan(decision_obj)
     if not use_ai:
         return False, decision, None
     if not ai_ready:
         return False, decision, "هوش مصنوعی آماده نیست"
-    if decision.get("strategy") != "light_edit":
-        return False, decision, "این متن قفل است؛ واقعیت، گزینه و نقل‌قول بازنویسی نمی‌شوند"
+    if decision["ai_mode"] == "skip":
+        if decision_obj.has_options or decision_obj.category == "solution":
+            return False, decision, "گزینه و پاسخ آزمون بازنویسی نمی‌شود"
+        return False, decision, "متن کوتاه است و به هوش مصنوعی داده نمی‌شود"
     return True, decision, None
 
 
@@ -44,7 +48,14 @@ async def preview_ai_enhance(payload: AIPreviewRequest, db: AsyncSession = Depen
     should_ai, decision, reason = preview_ai_plan(payload.text, True, runtime.ai_ready)
     enhanced = None
     if should_ai:
-        enhanced = await enhance_with_ai(payload.text, decision.get("category") or payload.category, runtime=runtime)
+        enhanced, ai_reason = await edit_with_ai(
+            payload.text,
+            decision.get("category") or payload.category,
+            runtime=runtime,
+            mode=decision.get("ai_mode") or "tidy",
+        )
+        if not enhanced and not reason:
+            reason = ai_reason
     return {
         "original": payload.text,
         "enhanced": enhanced,
@@ -85,14 +96,17 @@ async def preview(payload: PreviewRequest, db: AsyncSession = Depends(get_db), a
     ai_note = None
     should_ai, decision, lock_reason = preview_ai_plan(payload.text, payload.use_ai, runtime.ai_ready)
     if should_ai:
-        enhanced = await enhance_with_ai(
+        enhanced, ai_reason = await edit_with_ai(
             payload.text,
             decision.get("category") or "general",
             runtime=runtime,
             limit=900 if payload.is_caption else 3600,
+            mode=decision.get("ai_mode") or "tidy",
         )
         if enhanced:
             source = enhanced
+        elif not lock_reason:
+            lock_reason = f"خروجی مدل پذیرفته نشد: {ai_reason}"
             ai_note = "ai_enhanced"
     result = format_message(
         raw_text=source,

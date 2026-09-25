@@ -58,6 +58,30 @@ def strip_custom_emoji_html(html_text: str | None) -> str | None:
     return stripped if "<" in stripped else None
 
 
+def edit_attempts(
+    text: str,
+    html_text: str | None,
+    prefer_html: bool,
+) -> list[tuple[str, str, str | None]]:
+    """Premium HTML is never retried as unicode emoji.
+
+    A rejected custom emoji used to fall through to plain text. That is the
+    path that published the broken gold line. Record the error instead.
+    """
+    has_custom = bool(html_text and "<tg-emoji" in html_text)
+    attempts: list[tuple[str, str, str | None]] = []
+    if prefer_html and html_text:
+        attempts.append(("bot_html", html_text, "HTML"))
+    if has_custom:
+        return [item for item in attempts if item[1]]
+    formatting_html = strip_custom_emoji_html(html_text)
+    if formatting_html and formatting_html != html_text:
+        attempts.append(("bot_html_text", formatting_html, "HTML"))
+    if text:
+        attempts.append(("bot_plain", text, None))
+    return [item for item in attempts if item[1]]
+
+
 def is_emoji_rejection(message: str) -> bool:
     lowered = (message or "").lower()
     return any(hint in lowered for hint in EMOJI_ERROR_HINTS)
@@ -78,13 +102,7 @@ async def edit_telegram_message(
         return {"ok": False, "error": "bot not configured"}
 
     markup = markup_from_raw(reply_markup)
-    formatting_html = strip_custom_emoji_html(html_text)
-    attempts = [
-        ("bot_html", html_text, "HTML") if prefer_html and html_text else None,
-        ("bot_html_text", formatting_html, "HTML") if formatting_html and formatting_html != html_text else None,
-        ("bot_plain", text, None),
-    ]
-    attempts = [item for item in attempts if item]
+    attempts = edit_attempts(text, html_text, prefer_html)
     last_error = "edit_failed"
     emoji_rejected = False
 
@@ -122,7 +140,7 @@ async def edit_telegram_message(
                 if method == "bot_html" and is_emoji_rejection(msg):
                     emoji_rejected = True
                     last_error = msg
-                    logger.warning("Custom emoji rejected; keeping quote and links: %s", msg)
+                    logger.warning("Custom emoji rejected; not sending a unicode copy: %s", msg)
                     break
                 return {"ok": False, "error": msg, "method": method, "emoji_rejected": emoji_rejected}
             except TelegramForbiddenError as exc:
