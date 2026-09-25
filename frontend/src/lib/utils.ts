@@ -22,6 +22,17 @@ export function fa(value: string | number): string {
   return String(value).replace(/\d/g, (d) => FA_DIGITS[Number(d)]);
 }
 
+/** FastAPI may return a string or a validation list. Never render the list. */
+export function apiDetail(error: { response?: { data?: { detail?: unknown } } } | null | undefined, fallback: string) {
+  const detail = error?.response?.data?.detail;
+  if (typeof detail === "string" && detail.trim()) return detail;
+  if (Array.isArray(detail)) {
+    const first = detail.find((item) => item && typeof item === "object" && typeof (item as { msg?: unknown }).msg === "string") as { msg?: string } | undefined;
+    if (first?.msg) return first.msg;
+  }
+  return fallback;
+}
+
 /** Persian digits back to Latin (for parsing user input). */
 export function en(value: string): string {
   return value.replace(/[۰-۹]/g, (d) => String(FA_DIGITS.indexOf(d))).replace(/[٠-٩]/g, (d) => String(d.charCodeAt(0) - 0x0660));

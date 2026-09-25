@@ -17,8 +17,10 @@ import { Stat } from "@/components/ui/stat";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { ShamsiDateTime } from "@/components/ui/shamsi-datetime";
+import { shamsiLabel } from "@/lib/jalali";
 import { DiffList, TelegramPreview } from "@/lib/telegram";
-import { fa } from "@/lib/utils";
+import { apiDetail, en, fa } from "@/lib/utils";
 
 const STATUS: Record<string, string> = {
   preview: "بازبینی",
@@ -85,9 +87,17 @@ function categoryLabel(value: string | null | undefined) {
 
 function whenLabel(value: string | null | undefined) {
   if (!value) return "هنوز نیست";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleString("fa-IR");
+  const label = shamsiLabel(value);
+  return label === "ثبت نشده" ? "زمان نامعتبر" : label;
+}
+
+function reasonLabel(value: string | null | undefined) {
+  if (!value) return "";
+  return {
+    needs_review: "نیاز به بازبینی",
+    similar: "شبیه پست اخیر",
+    skip: "مدل این خبر را رد کرد",
+  }[value] || value;
 }
 
 export default function Automation() {
@@ -151,7 +161,7 @@ export default function Automation() {
       await api.patch("/api/automation", patch);
       await load();
     } catch (error: any) {
-      setMsg(error.response?.data?.detail || "ذخیره نشد");
+      setMsg(apiDetail(error, "ذخیره نشد"));
     }
   }
 
@@ -159,7 +169,7 @@ export default function Automation() {
     try {
       await action();
     } catch (error: any) {
-      setMsg(error.response?.data?.detail || fallback);
+      setMsg(apiDetail(error, fallback));
     }
   }
 
@@ -170,7 +180,7 @@ export default function Automation() {
     try {
       await action();
     } catch (error: any) {
-      setMsg(error.response?.data?.detail || fallback);
+      setMsg(apiDetail(error, fallback));
     } finally {
       setPending(null);
     }
@@ -214,7 +224,7 @@ export default function Automation() {
           const ads = Number(result.ads || 0);
           setMsg(result.error || (result.skipped === "disabled" ? "اتوماسیون خاموش است" : result.skipped === "paused" ? "صف متوقف است" : `پیش‌نویس تازه: ${fa(result.created ?? 0)}${photos ? ` · عکس: ${fa(photos)}` : ""}${ads ? ` · تبلیغ رد شد: ${fa(ads)}` : ""}${filed ? ` · پوشه فاین‌تیون: ${fa(filed)}` : ""}${result.recent ? " · پست‌های اخیر کانال خوانده شد" : ""}`));
           await load();
-        } catch (error: any) { setMsg(error.response?.data?.detail || "جمع‌آوری انجام نشد"); }
+        } catch (error: any) { setMsg(apiDetail(error, "جمع‌آوری انجام نشد")); }
         finally { setBusy(false); }
       }}>جمع‌آوری الان</Button>}
     >
@@ -254,10 +264,26 @@ export default function Automation() {
               <ToggleRow disabled={!canEdit} checked={!!data.paused} label="توقف اضطراری صف" hint="جمع‌آوری و انتشار خودکار هر دو می‌ایستند." onChange={(value) => saveConfig({ paused: value })} />
               <ToggleRow disabled={!canEdit} checked={data.balance_categories !== false} label="تعادل دسته در سقف روزانه" hint="یک دسته تمام سهم روز را نمی‌گیرد." onChange={(value) => saveConfig({ balance_categories: value })} />
               <Field label="سقف انتشار روزانه">
-                <Input type="number" min={1} max={48} defaultValue={data.daily_cap || 6} disabled={!canEdit} onBlur={(event) => saveConfig({ daily_cap: Number(event.target.value) || 6 })} />
+                <Input type="number" min={1} max={48} defaultValue={data.daily_cap || 6} disabled={!canEdit} onBlur={(event) => {
+                  const parsed = Number(en(event.target.value));
+                  if (!Number.isInteger(parsed) || parsed < 1 || parsed > 48) {
+                    setMsg("سقف روزانه باید بین ۱ و ۴۸ باشد");
+                    event.target.value = String(data.daily_cap || 6);
+                    return;
+                  }
+                  if (parsed !== Number(data.daily_cap || 6)) saveConfig({ daily_cap: parsed });
+                }} />
               </Field>
               <Field label="فاصلهٔ جمع‌آوری، دقیقه">
-                <Input type="number" min={5} max={240} defaultValue={data.collect_interval_minutes || 20} disabled={!canEdit} onBlur={(event) => saveConfig({ collect_interval_minutes: Number(event.target.value) || 20 })} />
+                <Input type="number" min={5} max={240} defaultValue={data.collect_interval_minutes || 20} disabled={!canEdit} onBlur={(event) => {
+                  const parsed = Number(en(event.target.value));
+                  if (!Number.isInteger(parsed) || parsed < 5 || parsed > 240) {
+                    setMsg("فاصله جمع‌آوری باید بین ۵ و ۲۴۰ دقیقه باشد");
+                    event.target.value = String(data.collect_interval_minutes || 20);
+                    return;
+                  }
+                  if (parsed !== Number(data.collect_interval_minutes || 20)) saveConfig({ collect_interval_minutes: parsed });
+                }} />
               </Field>
               <Field label="ذکر منبع">
                 <Select
@@ -276,10 +302,10 @@ export default function Automation() {
                   value={String(data.target_chat_id || "")}
                   disabled={!canEdit}
                   onChange={(event) => saveConfig({ target_chat_id: event.target.value ? Number(event.target.value) : null })}
-                  options={[{ value: "", label: "انتخاب نشده" }, ...channels.map((channel) => ({ value: String(channel.chat_id), label: channel.title || channel.username || String(channel.chat_id) }))]}
+                  options={[{ value: "", label: "انتخاب نشده" }, ...(Array.isArray(channels) ? channels : []).map((channel) => ({ value: String(channel.chat_id), label: channel.title || channel.username || String(channel.chat_id) }))]}
                 />
               </Field>
-              <p className="text-xs text-muted-foreground lg:col-span-2">ساعت بعدی: {whenLabel(data.next_slot)} · آخرین جمع‌آوری: {whenLabel(data.last_collect_at)}</p>
+              <p className="text-xs text-muted-foreground lg:col-span-2">ساعت بعدی، تهران: {whenLabel(data.next_slot)} · آخرین جمع‌آوری، تهران: {whenLabel(data.last_collect_at)}</p>
             </CardContent>
           </Card>
         </TabsContent>
@@ -353,7 +379,7 @@ export default function Automation() {
                     <div key={slot.id} className="flex items-center justify-between rounded-xl border border-border px-4 py-3 text-sm">
                       <div>
                         <b>{fa(String(slot.hour).padStart(2, "0"))}:{fa(String(slot.minute).padStart(2, "0"))}</b>
-                        <p className="text-xs text-muted-foreground">{slot.category ? categoryLabel(slot.category) : "هر دسته"}</p>
+                        <p className="text-xs text-muted-foreground">{slot.category ? categoryLabel(slot.category) : "هر دسته"} · هر روز، ساعت تهران</p>
                       </div>
                       <span className="flex items-center gap-2">
                         <Switch checked={slot.enabled !== false} disabled={!canEdit} onCheckedChange={(value) => run(async () => { await api.patch(`/api/automation/slots/${slot.id}`, { enabled: value }); await load(); }, "ساعت ذخیره نشد")} />
@@ -431,6 +457,12 @@ export default function Automation() {
                         <span className="text-xs text-muted-foreground">{draft.source_label} · {draft.style_label || categoryLabel(draft.category)} · {draft.confidence || "—"} {draft.has_photo ? "· همراه عکس" : draft.has_media ? "· کپشن" : ""} {draft.rewrite === "preserve" ? "· بدون خلاصه" : draft.rewrite === "summarize" ? "· خلاصه" : ""}</span>
                         {draft.hashtags && <span className="text-xs text-muted-foreground" dir="ltr">{draft.hashtags}</span>}
                       </div>
+                      <p className="text-xs text-muted-foreground">
+                        دریافت از کانال: {whenLabel(draft.source_at || draft.created_at)}
+                        {!draft.source_at ? " · زمان دقیق منبع ذخیره نشده، این زمان ثبت در پنل است" : ""}
+                        {draft.scheduled_at ? ` · انتشار برنامه‌شده: ${whenLabel(draft.scheduled_at)}` : ""}
+                        {draft.published_at ? ` · منتشر شد: ${whenLabel(draft.published_at)}` : ""}
+                      </p>
                       {draft.has_photo && <DraftPhoto id={draft.id} />}
                       {pending.startsWith(`${draft.id}:`) && <p className="text-xs text-brand" aria-live="polite">{pendingLabel(pending)}…</p>}
                       {edit?.id === draft.id ? (
@@ -457,12 +489,13 @@ export default function Automation() {
                           ))}
                         </details>
                       ) : null}
-                      {draft.error && <p className="text-xs text-destructive">{draft.error}</p>}
+                      {draft.error && <p className="text-xs text-destructive">{reasonLabel(draft.error)}</p>}
                       <div className="grid gap-2 lg:grid-cols-3">
                         <Select value={draft.category} disabled={!canEdit} onChange={(event) => run(async () => { await api.patch(`/api/automation/drafts/${draft.id}`, { category: event.target.value }); await load(); }, "دسته ذخیره نشد")} options={CATEGORIES.filter(([value]) => value).map(([value, label]) => ({ value, label }))} />
                         <Input className="h-10" defaultValue={draft.hashtags || ""} disabled={!canEdit} placeholder="#خبر" onBlur={(event) => { if (event.target.value !== (draft.hashtags || "")) run(async () => { await api.patch(`/api/automation/drafts/${draft.id}`, { hashtags: event.target.value }); }, "هشتگ ذخیره نشد"); }} />
-                        <Input type="datetime-local" className="h-10" disabled={!canEdit} onChange={(event) => { if (!event.target.value) return; run(async () => { await api.patch(`/api/automation/drafts/${draft.id}`, { scheduled_at: new Date(event.target.value).toISOString() }); await load(); }, "زمان ذخیره نشد"); }} />
+                        <p className="self-center text-xs text-muted-foreground">زمان‌بندی با تقویم شمسی، ساعت تهران</p>
                       </div>
+                      <ShamsiDateTime key={draft.id} value={draft.scheduled_at} disabled={!canEdit} onChange={(iso) => run(async () => { await api.patch(`/api/automation/drafts/${draft.id}`, { scheduled_at: iso }); setMsg("زمان تهران ذخیره شد"); await load(); }, "زمان ذخیره نشد")} />
                       <div className="flex flex-wrap gap-2">
                         <Button size="sm" variant="outline" disabled={!canEdit || !!pending} onClick={() => setEdit(edit?.id === draft.id ? null : { ...draft })}>{edit?.id === draft.id ? "بستن" : "ویرایش"}</Button>
                         {edit?.id === draft.id && <Button size="sm" variant="brand" loading={pending === `${draft.id}:save`} disabled={!!pending} onClick={() => act(`${draft.id}:save`, async () => { await api.patch(`/api/automation/drafts/${draft.id}`, { body: edit.body }); setEdit(null); setMsg("متن ذخیره شد"); await load(); }, "متن ذخیره نشد")}>ذخیره متن</Button>}
@@ -547,41 +580,73 @@ export default function Automation() {
         </TabsContent>
 
         <TabsContent value="finetune">
-          <Card>
-            <CardHeader><CardTitle>پوشهٔ سبک کانال‌های کنکور</CardTitle></CardHeader>
-            <CardContent className="space-y-4">
-              <p className="text-sm text-muted-foreground">هر بار که جمع‌آوری می‌زنی، یا صف خودکار منبع را می‌خواند، متن در یکی از این پوشه‌ها ذخیره می‌شود. نویسنده دفعهٔ بعد کارت همین پوشه را می‌خواند تا خبر، اطلاعیه، فان و راهنما را با سیاق کانال بنویسد، نه به‌صورت مقالهٔ مشاوره. جملهٔ نمونه‌ها کپی نمی‌شود و وزن مدل آموزش داده نمی‌شود؛ اگر مدل عوض شود همین پوشه می‌ماند.</p>
-              <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-                {(data.finetune?.folders || []).map((folder: any) => (
-                  <Stat key={folder.id} size="sm" label={folder.label} value={fa(folder.count || 0)} />
-                ))}
-              </div>
-              <p className="whitespace-pre-wrap rounded-xl border border-border p-3 text-xs leading-6 text-muted-foreground">{data.finetune?.card || "کارت سبک هنوز ساخته نشده."}</p>
-              <div className="flex flex-wrap gap-2">
-                {(data.finetune?.folders || []).map((folder: any) => (
-                  <Button key={folder.id} size="sm" variant={styleFolder === folder.id ? "brand" : "outline"} onClick={() => setStyleFolder(folder.id)}>{folder.label}</Button>
-                ))}
-              </div>
-              {(() => {
-                const folder = (data.finetune?.folders || []).find((item: any) => item.id === styleFolder) || (data.finetune?.folders || [])[0];
-                const samples = folder?.samples || [];
-                if (!samples.length) return <p className="text-xs text-muted-foreground">این پوشه هنوز خالی است. یک جمع‌آوری کافی است تا نمونهٔ همین سبک اینجا بیاید.</p>;
-                return (
-                  <Table>
-                    <TableHeader><TableRow><TableHead>منبع</TableHead><TableHead>نمونه</TableHead></TableRow></TableHeader>
-                    <TableBody>
-                      {samples.map((sample: any, index: number) => (
-                        <TableRow key={`${sample.label}-${index}`}>
-                          <TableCell className="align-top text-xs">{sample.label || "منبع"}</TableCell>
-                          <TableCell className="whitespace-pre-wrap text-xs">{sample.excerpt}</TableCell>
-                        </TableRow>
+          <div className="space-y-3">
+            <Card>
+              <CardHeader><CardTitle>پوشهٔ سبک کانال‌های کنکور</CardTitle></CardHeader>
+              <CardContent className="space-y-4">
+                <p className="text-sm text-muted-foreground">هر جمع‌آوری، پست را در پوشهٔ سبک می‌گذارد و ریتم همان پوشه را اندازه می‌گیرد: طول، تعداد خط و این‌که سؤال دارد یا نه. نویسنده دفعهٔ بعد همین کارت را می‌خواند، نه جملهٔ نمونه را. وزن مدل عوض نمی‌شود. نمونهٔ غلط را حذف کن یا به پوشهٔ درست ببر تا کارت بعدی تمیزتر شود.</p>
+                <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                  {(data.finetune?.folders || []).map((folder: any) => (
+                    <button key={folder.id} type="button" onClick={() => setStyleFolder(folder.id)} className={`cursor-pointer rounded-xl border bg-transparent p-3 text-start text-inherit ${styleFolder === folder.id ? "border-foreground" : "border-border"}`}>
+                      <Stat size="sm" label={folder.label} value={fa(folder.count || 0)} />
+                      <p className="mt-2 text-xs text-muted-foreground">{folder.count ? `${fa(folder.chars || 0)} حرف · ${fa(folder.lines || 0)} خط` : "هنوز خالی"}</p>
+                    </button>
+                  ))}
+                </div>
+                {(() => {
+                  const folder = (data.finetune?.folders || []).find((item: any) => item.id === styleFolder) || (data.finetune?.folders || [])[0];
+                  if (!folder) return null;
+                  return (
+                    <div className="space-y-3 rounded-xl border border-border p-3">
+                      <div>
+                        <p className="text-sm font-semibold">{folder.label}</p>
+                        <p className="mt-1 text-xs text-muted-foreground">{folder.angle}</p>
+                      </div>
+                      <p className="text-sm">{folder.rule}</p>
+                      <p className="whitespace-pre-wrap text-xs leading-6 text-muted-foreground">{folder.skeleton}</p>
+                      {folder.count ? <p className="text-xs text-muted-foreground">ریتم اندازه‌گرفته: حدود {fa(folder.chars || 0)} حرف و {fa(folder.lines || 0)} خط. سؤال در {fa(folder.questions || 0)} نمونه.</p> : <p className="text-xs text-muted-foreground">این پوشه هنوز خالی است. یک جمع‌آوری کافی است.</p>}
+                    </div>
+                  );
+                })()}
+                <p className="whitespace-pre-wrap rounded-xl border border-border p-3 text-xs leading-6 text-muted-foreground">{data.finetune?.card || "کارت سبک هنوز ساخته نشده."}</p>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardHeader><CardTitle>نمونه‌های همین پوشه</CardTitle></CardHeader>
+              <CardContent>
+                {(() => {
+                  const folder = (data.finetune?.folders || []).find((item: any) => item.id === styleFolder) || (data.finetune?.folders || [])[0];
+                  const samples = folder?.samples || [];
+                  if (!samples.length) return <p className="text-xs text-muted-foreground">نمونه‌ای نیست.</p>;
+                  return (
+                    <div className="space-y-3">
+                      {samples.map((sample: any) => (
+                        <div key={sample.id || sample.excerpt} className="space-y-2 rounded-xl border border-border p-3">
+                          <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
+                            <span>{sample.label || "منبع"} · {whenLabel(sample.created_at)} · {fa(sample.chars || 0)} حرف · {fa(sample.lines || 0)} خط</span>
+                            <span className="flex flex-wrap gap-2">
+                              <Select className="h-8 w-36 text-xs" value={folder.id} disabled={!canEdit} onChange={(event) => run(async () => { await api.patch(`/api/automation/finetune/samples/${sample.id}?folder=${event.target.value}`); setStyleFolder(event.target.value); setMsg("نمونه به پوشهٔ درست رفت و کارت سبک تازه شد"); await load(); }, "جابه‌جایی نشد")} options={(data.finetune?.folders || []).map((item: any) => ({ value: item.id, label: item.label }))} />
+                              <Button size="sm" variant="destructive" disabled={!canEdit} onClick={() => ask("این نمونه از پوشه حذف شود؟", () => run(async () => { await api.delete(`/api/automation/finetune/samples/${sample.id}`); setMsg("نمونه حذف شد و کارت سبک تازه شد"); await load(); }, "حذف نشد"))}>حذف</Button>
+                            </span>
+                          </div>
+                          <p className="whitespace-pre-wrap text-xs">{sample.excerpt}</p>
+                        </div>
                       ))}
-                    </TableBody>
-                  </Table>
-                );
-              })()}
-            </CardContent>
-          </Card>
+                    </div>
+                  );
+                })()}
+              </CardContent>
+            </Card>
+            <Card>
+              <CardHeader><CardTitle>اصلاح‌هایی که نویسنده یاد گرفته</CardTitle></CardHeader>
+              <CardContent className="space-y-2">
+                <p className="text-sm text-muted-foreground">تأیید، ویرایش، رد و انتشار در همین حافظه می‌ماند و به نوشتن بعدی می‌رسد. مدل جدید ساخته نمی‌شود.</p>
+                {(data.lessons || []).length ? (data.lessons as any[]).slice().reverse().map((item: any, index: number) => (
+                  <p key={`${item.note}-${index}`} className="rounded-lg border border-border px-3 py-2 text-xs">{item.note}</p>
+                )) : <p className="text-xs text-muted-foreground">هنوز اصلاحی ثبت نشده. اولین رد یا ویرایش اینجا می‌ماند.</p>}
+              </CardContent>
+            </Card>
+          </div>
         </TabsContent>
 
         <TabsContent value="logs">

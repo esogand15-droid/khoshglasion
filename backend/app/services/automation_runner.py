@@ -400,6 +400,9 @@ async def collect_sources(db: AsyncSession, *, force: bool = False) -> dict:
             analysis["writer_model"] = trace.get("writer_model") or ""
             analysis["writer_provider"] = trace.get("writer_provider") or ""
             analysis["layout"] = layout
+            seen_at = as_utc(item.get("date")) if isinstance(item.get("date"), datetime) else None
+            if seen_at:
+                analysis["source_at"] = seen_at.isoformat()
             if trace.get("repaired"):
                 config.lessons_json = push_lesson(
                     getattr(config, "lessons_json", None),

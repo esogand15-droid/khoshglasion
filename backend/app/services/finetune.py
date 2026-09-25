@@ -159,6 +159,25 @@ def base_card() -> str:
     return BASE_CARD
 
 
+def _median(values: list[int]) -> int:
+    if not values:
+        return 0
+    ordered = sorted(values)
+    return ordered[len(ordered) // 2]
+
+
+def folder_profile(rows: list) -> dict:
+    chars = [int(row.chars or 0) for row in rows]
+    line_counts = [int(row.lines or 0) for row in rows]
+    questions = sum(1 for row in rows if "؟" in (row.excerpt or ""))
+    return {
+        "count": len(rows),
+        "chars": _median(chars),
+        "lines": _median(line_counts),
+        "questions": questions,
+    }
+
+
 def render_card(rows: list) -> str:
     lines = [BASE_CARD, ""]
     if not rows:
@@ -167,15 +186,19 @@ def render_card(rows: list) -> str:
     grouped: dict[str, list] = {}
     for row in rows:
         grouped.setdefault(row.folder, []).append(row)
-    lines.append(f"نمونه‌های ذخیره‌شده: {len(rows)}")
+    lines.append(f"نمونه‌های ذخیره‌شده: {len(rows)}. جملهٔ نمونه را کپی نکن؛ فقط ریتم را بگیر.")
     for key, item in FOLDERS.items():
         group = grouped.get(key) or []
         if not group:
             continue
-        chars = sorted(int(row.chars or 0) for row in group)
-        line_counts = sorted(int(row.lines or 0) for row in group)
+        profile = folder_profile(group)
+        question = ""
+        if key == "fun" and profile["questions"]:
+            question = " فان می‌تواند با سؤال کوتاه تمام شود."
+        elif key in {"flash", "announce", "alert"} and profile["questions"]:
+            question = " خبر و اطلاعیه را با سؤال تمام نکن."
         lines.append(
-            f"- {item['label']}: {len(group)} نمونه، حدود {chars[len(chars) // 2]} حرف و {line_counts[len(line_counts) // 2]} خط."
+            f"- {item['label']}: {profile['count']} نمونه. ریتم معمول {profile['chars']} حرف و {profile['lines']} خط.{question} {item['rule']}"
         )
     dominant = max(grouped, key=lambda key: len(grouped[key]))
     lines.append(f"سبک غالب منابع: {folder_label(dominant)}. خبر را به مقالهٔ مشاوره تبدیل نکن.")
@@ -283,18 +306,27 @@ async def snapshot(db: AsyncSession) -> dict:
     folders = []
     for key, item in FOLDERS.items():
         group = grouped.get(key) or []
+        profile = folder_profile(group)
         folders.append({
             "id": key,
             "label": item["label"],
-            "count": len(group),
+            "angle": item["angle"],
+            "rule": item["rule"],
+            "skeleton": item["skeleton"],
+            "count": profile["count"],
+            "chars": profile["chars"],
+            "lines": profile["lines"],
+            "questions": profile["questions"],
             "samples": [
                 {
+                    "id": row.id,
                     "label": row.source_label,
                     "excerpt": row.excerpt,
                     "chars": row.chars,
+                    "lines": row.lines,
                     "created_at": row.created_at.isoformat() if row.created_at else None,
                 }
-                for row in group[:6]
+                for row in group[:8]
             ],
         })
     return {
@@ -302,6 +334,41 @@ async def snapshot(db: AsyncSession) -> dict:
         "card": render_card(rows),
         "folders": folders,
     }
+
+
+async def forget_sample(db: AsyncSession, sample_id: str) -> bool:
+    from backend.app.models.automation import StyleSample
+
+    row = (await db.execute(select(StyleSample).where(StyleSample.id == sample_id))).scalar_one_or_none()
+    if row is None:
+        return False
+    _unlink(row.folder, row.source_key)
+    await db.delete(row)
+    await db.flush()
+    await load_card(db)
+    return True
+
+
+async def move_sample(db: AsyncSession, sample_id: str, folder: str) -> bool:
+    from backend.app.models.automation import StyleSample
+
+    if folder not in FOLDERS:
+        return False
+    row = (await db.execute(select(StyleSample).where(StyleSample.id == sample_id))).scalar_one_or_none()
+    if row is None:
+        return False
+    _unlink(row.folder, row.source_key)
+    row.folder = folder
+    _write_sample(folder, row.source_key, {
+        "folder": folder,
+        "label": row.source_label,
+        "excerpt": row.excerpt,
+        "chars": row.chars,
+        "lines": row.lines,
+    })
+    await db.flush()
+    await load_card(db)
+    return True
 
 
 def keep_fun(text: str, judgment: dict, style: str) -> bool:

@@ -74,6 +74,12 @@ def _versions(raw: str | None) -> list[dict]:
     ]
 
 
+def _lessons(raw: str | None) -> list[dict]:
+    from backend.app.services.autopost import load_lessons
+
+    return load_lessons(raw)
+
+
 def _draft_photo(row: DraftPost):
     from backend.app.content.intake import photo_of
 
@@ -120,6 +126,7 @@ def dump_draft(row: DraftPost, username: str | None = None) -> dict:
         "writer_model": _analysis_flag(row.analysis_json, "writer_model") or "",
         "vision_model": _analysis_flag(row.analysis_json, "vision_model") or "",
         "versions": _versions(row.versions_json),
+        "source_at": _analysis_flag(row.analysis_json, "source_at") or None,
         "created_at": _iso(row.created_at),
     }
 
@@ -160,9 +167,9 @@ class ConfigIn(BaseModel):
     paused: bool | None = None
     attribution_mode: str | None = None
     target_chat_id: int | None = None
-    daily_cap: int | None = Field(default=None, ge=1, le=48)
+    daily_cap: int | None = None
     balance_categories: bool | None = None
-    collect_interval_minutes: int | None = Field(default=None, ge=5, le=240)
+    collect_interval_minutes: int | None = None
 
 
 class HashtagIn(BaseModel):
@@ -301,6 +308,7 @@ async def _read_automation_state(
         "drafts": [dump_draft(row, names.get(int(row.target_chat_id)) if row.target_chat_id else None) for row in drafts],
         "archive": [dump_draft(row, names.get(int(row.target_chat_id)) if row.target_chat_id else None) for row in archived],
         "finetune": finetune,
+        "lessons": _lessons(getattr(config, "lessons_json", None)),
     }
 
 
@@ -311,6 +319,10 @@ async def update_config(payload: ConfigIn, request: Request, db: AsyncSession = 
         assert_publisher(admin)
     if payload.attribution_mode and payload.attribution_mode not in {"news", "always", "never"}:
         raise HTTPException(status_code=400, detail="حالت منبع باید news، always یا never باشد")
+    if payload.daily_cap is not None and not 1 <= payload.daily_cap <= 48:
+        raise HTTPException(status_code=400, detail="سقف روزانه باید بین ۱ و ۴۸ باشد")
+    if payload.collect_interval_minutes is not None and not 5 <= payload.collect_interval_minutes <= 240:
+        raise HTTPException(status_code=400, detail="فاصله جمع‌آوری باید بین ۵ و ۲۴۰ دقیقه باشد")
     config = await get_config(db)
     data = payload.model_dump(exclude_unset=True)
     for key, value in data.items():
@@ -482,7 +494,7 @@ async def update_draft(draft_id: str, payload: DraftIn, request: Request, db: As
         if when.tzinfo is None:
             when = when.replace(tzinfo=timezone.utc)
         row.scheduled_at = when.astimezone(timezone.utc)
-        if row.status in {"preview", "failed", "skipped"}:
+        if row.status in {"preview", "failed", "skipped", "recalled", "rejected"}:
             row.status = "scheduled"
     await write_audit(db, admin=admin, action="edit", resource="draft", resource_id=row.id, ip_address=request.client.host if request.client else None)
     return dump_draft(row)
@@ -832,6 +844,26 @@ async def reject_draft(draft_id: str, request: Request, db: AsyncSession = Depen
     )
     await write_audit(db, admin=admin, action="reject", resource="draft", resource_id=row.id, ip_address=request.client.host if request.client else None)
     return dump_draft(row)
+
+
+@router.delete("/finetune/samples/{sample_id}")
+async def delete_style_sample(sample_id: str, db: AsyncSession = Depends(get_db), admin=Depends(get_current_admin)):
+    assert_editor(admin)
+    from backend.app.services.finetune import forget_sample
+
+    if not await forget_sample(db, sample_id):
+        raise HTTPException(status_code=404, detail="نمونه پیدا نشد")
+    return {"ok": True}
+
+
+@router.patch("/finetune/samples/{sample_id}")
+async def move_style_sample(sample_id: str, folder: str, db: AsyncSession = Depends(get_db), admin=Depends(get_current_admin)):
+    assert_editor(admin)
+    from backend.app.services.finetune import move_sample
+
+    if not await move_sample(db, sample_id, folder):
+        raise HTTPException(status_code=400, detail="پوشه یا نمونه معتبر نیست")
+    return {"ok": True}
 
 
 @router.post("/publish-due")

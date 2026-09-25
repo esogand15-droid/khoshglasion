@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { Component, useEffect, useState, type ReactNode } from "react";
 import { Outlet, useLocation, useNavigate } from "react-router-dom";
 import {
   Activity,
@@ -87,6 +87,24 @@ function NavItems({ onPick }: { onPick?: () => void }) {
   );
 }
 
+class OutletGuard extends Component<{ children: ReactNode }, { failed: boolean }> {
+  state = { failed: false };
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
+  render() {
+    if (this.state.failed) {
+      return (
+        <div className="rounded-xl border border-destructive/40 bg-card p-4 text-sm">
+          <p className="font-semibold">این بخش خطا داد و صفحه سیاه نماند.</p>
+          <button type="button" className="mt-3 cursor-pointer underline" onClick={() => this.setState({ failed: false })}>دوباره نشان بده</button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 export default function Layout() {
   const location = useLocation();
   const username = useAuth((s) => s.username);
@@ -150,7 +168,9 @@ export default function Layout() {
         </header>
         <main className="flex-1 p-4 sm:p-6">
           <div key={location.pathname} className="page-enter">
-            <Outlet />
+            <OutletGuard>
+              <Outlet />
+            </OutletGuard>
           </div>
         </main>
       </div>
