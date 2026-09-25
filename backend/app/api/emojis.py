@@ -1,6 +1,7 @@
 import json
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import Response
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -10,7 +11,8 @@ from backend.app.schemas.emoji import EmojiCreate, EmojiUpdate
 from backend.app.security.deps import assert_editor, get_current_admin
 from backend.app.services.audit import write_audit
 from backend.app.telegram.bot import get_bot
-from backend.app.telegram.emoji_pack import fetch_sticker_set, import_pack_names, parse_pack_names
+from backend.app.telegram.emoji_media import clean_ids, describe_custom_emojis, load_custom_emoji_file
+from backend.app.telegram.emoji_pack import fetch_sticker_set, import_pack_names, is_safe_fallback, parse_pack_names
 
 router = APIRouter(prefix="/api/emojis", tags=["emojis"])
 
@@ -89,6 +91,84 @@ async def import_pack(payload: dict, db: AsyncSession = Depends(get_db), admin=D
     result = await import_pack_names(db, names, fetch_sticker_set)
     await write_audit(db, admin=admin, action="import_pack", resource="emoji", resource_id=names[0], ip_address=None)
     return result
+
+
+@router.post("/previews")
+async def preview_emojis(payload: dict, db: AsyncSession = Depends(get_db), admin=Depends(get_current_admin)):
+    ids = clean_ids(payload.get("custom_emoji_ids") or payload.get("ids") or [])
+    if not ids:
+        return {"items": [], "missing": []}
+    known = set(
+        (
+            await db.execute(select(EmojiMapping.custom_emoji_id).where(EmojiMapping.custom_emoji_id.in_(ids)))
+        ).scalars().all()
+    )
+    wanted = [item for item in ids if item in known]
+    missing = [item for item in ids if item not in known]
+    bot = get_bot()
+    if not wanted:
+        return {"items": [], "missing": missing}
+    if bot is None:
+        return {"items": [], "missing": missing + wanted, "error": "توکن ربات تنظیم نشده"}
+    try:
+        items, not_found = await describe_custom_emojis(bot, wanted)
+    except Exception:
+        raise HTTPException(status_code=502, detail="خواندن ایموجی از تلگرام انجام نشد")
+    return {"items": items, "missing": missing + not_found}
+
+
+@router.get("/media/{custom_emoji_id}")
+async def emoji_media(custom_emoji_id: str, db: AsyncSession = Depends(get_db), admin=Depends(get_current_admin)):
+    custom_id = str(custom_emoji_id or "").strip()
+    if not custom_id.isdigit() or len(custom_id) > 64:
+        raise HTTPException(status_code=404, detail="ایموجی پیدا نشد")
+    owned = (
+        await db.execute(select(EmojiMapping.id).where(EmojiMapping.custom_emoji_id == custom_id).limit(1))
+    ).scalar_one_or_none()
+    if not owned:
+        raise HTTPException(status_code=404, detail="این شناسه در کتابخانه نیست")
+    bot = get_bot()
+    if bot is None:
+        raise HTTPException(status_code=400, detail="توکن ربات تنظیم نشده")
+    try:
+        data, content_type = await load_custom_emoji_file(bot, custom_id)
+    except LookupError:
+        raise HTTPException(status_code=404, detail="تلگرام فایل این ایموجی را نداد")
+    except Exception:
+        raise HTTPException(status_code=502, detail="خواندن فایل ایموجی از تلگرام انجام نشد")
+    return Response(
+        content=data,
+        media_type=content_type,
+        headers={"Cache-Control": "private, max-age=3600"},
+    )
+
+
+@router.post("/{emoji_id}/telegram-fallback")
+async def apply_telegram_fallback(emoji_id: str, request: Request, db: AsyncSession = Depends(get_db), admin=Depends(get_current_admin)):
+    assert_editor(admin)
+    row = (await db.execute(select(EmojiMapping).where(EmojiMapping.id == emoji_id))).scalar_one_or_none()
+    if not row:
+        raise HTTPException(status_code=404, detail="ایموجی پیدا نشد")
+    bot = get_bot()
+    if bot is None:
+        raise HTTPException(status_code=400, detail="توکن ربات تنظیم نشده")
+    try:
+        items, _missing = await describe_custom_emojis(bot, [row.custom_emoji_id])
+    except Exception:
+        raise HTTPException(status_code=502, detail="خواندن ایموجی از تلگرام انجام نشد")
+    emoji = items[0]["emoji"] if items else ""
+    if not is_safe_fallback(emoji):
+        raise HTTPException(status_code=400, detail="تلگرام برای این استیکر ایموجی معمولی قابل استفاده برنگرداند")
+    row.unicode_emoji = emoji
+    await write_audit(
+        db,
+        admin=admin,
+        action="telegram_fallback",
+        resource="emoji",
+        resource_id=row.id,
+        ip_address=request.client.host if request.client else None,
+    )
+    return dump_emoji(row)
 
 
 @router.post("/validate")

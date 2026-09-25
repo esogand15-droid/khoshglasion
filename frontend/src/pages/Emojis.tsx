@@ -1,7 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import api from "../services/api";
 import { useAuth } from "../stores/auth";
 import { Page } from "../components/page";
+import { DefaultEmoji, EmojiPreview, useEmojiMeta } from "@/components/EmojiPreview";
 import { Alert } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -10,7 +11,7 @@ import { Dialog } from "@/components/ui/dialog";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Field, Input } from "@/components/ui/input";
 import { SearchInput } from "@/components/ui/search-input";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { prefetchEmojiMeta } from "@/lib/emojiMedia";
 import { fa } from "@/lib/utils";
 
 export default function Emojis() {
@@ -21,11 +22,17 @@ export default function Emojis() {
   const [msg, setMsg] = useState("");
   const [q, setQ] = useState("");
   const [edit, setEdit] = useState<any>(null);
+  const [zoom, setZoom] = useState<any>(null);
   const [packUrl, setPackUrl] = useState("");
   const [packBusy, setPackBusy] = useState(false);
 
   async function load() { setItems((await api.get("/api/emojis")).data); }
   useEffect(() => { load().catch(() => {}); }, []);
+  useEffect(() => {
+    const ids = items.map((item) => item.custom_emoji_id).filter(Boolean);
+    if (!ids.length) return;
+    prefetchEmojiMeta(ids).then((error) => { if (error) setMsg(error); }).catch(() => {});
+  }, [items]);
   const shown = items.filter((item) => !q || `${item.unicode_emoji} ${item.custom_emoji_id} ${item.category || ""}`.includes(q));
 
   return (
@@ -35,7 +42,7 @@ export default function Emojis() {
       actions={<Button variant="outline" onClick={async () => { const { data } = await api.get("/api/emojis/export"); const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" }); const url = URL.createObjectURL(blob); const a = document.createElement("a"); a.href = url; a.download = "khoshgelasion-emojis.json"; a.click(); }}>خروجی</Button>}
     >
       <Alert title="کتابخانه از خود تلگرام پر می‌شود">
-        لینک https://t.me/addemoji/نام‌پک را اینجا یا در خصوصی ربات بفرست. ربات خودِ پک را از تلگرام می‌خواند. حرف و فونت وارد نمی‌شود تا متن پست خراب نشود.
+        لینک https://t.me/addemoji/نام‌پک را اینجا یا در خصوصی ربات بفرست. تصویر متحرک هر کارت از getCustomEmojiStickers و getFile تلگرام می‌آید و توکن ربات در مرورگر نیست. کنارش ایموجی معمولی همان استیکر است؛ Bot API برای ایموجی معمولی فایل متحرک جدا ندارد.
       </Alert>
       <Card>
         <CardHeader><CardTitle>ورود از لینک پک</CardTitle></CardHeader>
@@ -81,44 +88,35 @@ export default function Emojis() {
       </div>
 
       {shown.length ? (
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead />
-              <TableHead>ID</TableHead>
-              <TableHead>منبع</TableHead>
-              <TableHead>استفاده</TableHead>
-              <TableHead>وضعیت</TableHead>
-              <TableHead />
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {shown.map((item) => (
-              <TableRow key={item.id}>
-                <TableCell className="text-xl">{item.unicode_emoji}</TableCell>
-                <TableCell dir="ltr" className="text-xs">
-                  {item.custom_emoji_id}
-                  {item.custom_emoji_id?.startsWith("53683241") && <Badge variant="warning">فیک</Badge>}
-                </TableCell>
-                <TableCell>{item.category || "—"}<div className="text-xs text-muted-foreground">{item.source || ""}</div></TableCell>
-                <TableCell numeric>{fa(item.usage_count || 0)}</TableCell>
-                <TableCell><Badge variant={item.enabled ? "success" : "secondary"}>{item.enabled ? "فعال" : "خاموش"}</Badge></TableCell>
-                <TableCell>
-                  <div className="flex flex-wrap gap-2">
-                    <Button size="sm" variant="outline" disabled={!canEdit} onClick={() => setEdit({ ...item })}>ویرایش</Button>
-                    <Button size="sm" variant="outline" disabled={!canEdit} onClick={async () => { await api.patch(`/api/emojis/${item.id}`, { enabled: !item.enabled }); load(); }}>{item.enabled ? "خاموش" : "روشن"}</Button>
-                    <Button size="sm" variant="destructive" disabled={!canEdit} onClick={async () => { if (!confirm("این نگاشت حذف شود؟")) return; await api.delete(`/api/emojis/${item.id}`); load(); }}>حذف</Button>
-                  </div>
-                </TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+          {shown.map((item) => (
+            <EmojiCard
+              key={item.id}
+              item={item}
+              canEdit={canEdit}
+              onZoom={() => setZoom(item)}
+              onEdit={() => setEdit({ ...item })}
+              onToggle={async () => { await api.patch(`/api/emojis/${item.id}`, { enabled: !item.enabled }); load(); }}
+              onDelete={async () => { if (!confirm("این نگاشت حذف شود؟")) return; await api.delete(`/api/emojis/${item.id}`); load(); }}
+              onAdopt={async () => {
+                try {
+                  await api.post(`/api/emojis/${item.id}/telegram-fallback`);
+                  setMsg("پیش‌فرض تلگرام روی نگاشت ذخیره شد");
+                  load();
+                } catch (error: any) { setMsg(error.response?.data?.detail || "پیش‌فرض اعمال نشد"); }
+              }}
+            />
+          ))}
+        </div>
       ) : <EmptyState title="نگاشتی نیست" description="یک ایموجی پرمیوم را به ربات فوروارد کن." />}
 
       <Dialog open={!!edit} onOpenChange={(open) => !open && setEdit(null)} title="ویرایش نگاشت">
         {edit && (
           <div className="space-y-3">
+            <div className="flex items-center gap-3">
+              <EmojiPreview id={edit.custom_emoji_id} size={96} />
+              <DefaultEmoji value={edit.unicode_emoji} size={42} />
+            </div>
             <Field label="ایموجی"><Input value={edit.unicode_emoji} onChange={(e) => setEdit({ ...edit, unicode_emoji: e.target.value })} /></Field>
             <Field label="custom_emoji_id"><Input dir="ltr" value={edit.custom_emoji_id} onChange={(e) => setEdit({ ...edit, custom_emoji_id: e.target.value })} /></Field>
             <Field label="دسته"><Input value={edit.category || ""} onChange={(e) => setEdit({ ...edit, category: e.target.value })} /></Field>
@@ -134,6 +132,82 @@ export default function Emojis() {
           </div>
         )}
       </Dialog>
+      <Dialog open={!!zoom} onOpenChange={(open) => !open && setZoom(null)} size="lg" title="پیش‌نمایش تلگرام" description="فایل متحرک از getCustomEmojiStickers و getFile است. ایموجی معمولی، فیلد emoji همان استیکر است.">
+        {zoom && (
+          <div className="flex flex-col items-center gap-4 py-2">
+            <EmojiPreview id={zoom.custom_emoji_id} size={180} fallback={zoom.unicode_emoji} />
+            <ZoomFallback id={zoom.custom_emoji_id} stored={zoom.unicode_emoji} />
+            <p className="text-xs text-muted-foreground" dir="ltr">{zoom.custom_emoji_id}</p>
+          </div>
+        )}
+      </Dialog>
     </Page>
+  );
+}
+
+function EmojiCard({ item, canEdit, onZoom, onEdit, onToggle, onDelete, onAdopt }: {
+  item: any;
+  canEdit: boolean;
+  onZoom: () => void;
+  onEdit: () => void;
+  onToggle: () => void;
+  onDelete: () => void;
+  onAdopt: () => void;
+}) {
+  const meta = useEmojiMeta(item.custom_emoji_id);
+  const seen = useRef<HTMLDivElement>(null);
+  const [visible, setVisible] = useState(false);
+  useEffect(() => {
+    const node = seen.current;
+    if (!node) return;
+    const observer = new IntersectionObserver(([entry]) => setVisible(entry.isIntersecting), { rootMargin: "240px" });
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, []);
+  const telegramEmoji = meta?.emoji || "";
+  const differs = Boolean(telegramEmoji && telegramEmoji !== item.unicode_emoji);
+  return (
+    <Card>
+      <CardContent className="space-y-3 p-4">
+        <div ref={seen} className="flex items-center gap-3">
+          <button type="button" onClick={onZoom} className="cursor-pointer rounded-2xl" aria-label="بزرگ‌نمایی">
+            <EmojiPreview id={item.custom_emoji_id} size={76} active={visible} fallback={item.unicode_emoji} />
+          </button>
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <DefaultEmoji value={telegramEmoji || item.unicode_emoji} size={36} />
+              <div className="min-w-0">
+                <p className="text-xs text-muted-foreground">{meta?.is_video || meta?.is_animated ? "پرمیوم متحرک" : "پرمیوم"} · پیش‌فرض</p>
+                <p className="truncate text-xs" dir="ltr">{meta?.set_name || item.label || item.source || ""}</p>
+              </div>
+            </div>
+            {differs && <p className="mt-1 text-[11px] text-muted-foreground">جایگزینی در پست: {item.unicode_emoji}</p>}
+            <p className="mt-1 truncate text-[11px] text-muted-foreground" dir="ltr">{item.custom_emoji_id}</p>
+          </div>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <Badge variant={item.enabled ? "success" : "secondary"}>{item.enabled ? "فعال" : "خاموش"}</Badge>
+          {item.custom_emoji_id?.startsWith("53683241") && <Badge variant="warning">فیک</Badge>}
+          <span className="text-xs text-muted-foreground">{item.category || "بدون دسته"} · {fa(item.usage_count || 0)}</span>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <Button size="sm" variant="outline" disabled={!canEdit} onClick={onEdit}>ویرایش</Button>
+          <Button size="sm" variant="outline" disabled={!canEdit} onClick={onToggle}>{item.enabled ? "خاموش" : "روشن"}</Button>
+          {differs && <Button size="sm" variant="outline" disabled={!canEdit} onClick={onAdopt}>پیش‌فرض تلگرام</Button>}
+          <Button size="sm" variant="destructive" disabled={!canEdit} onClick={onDelete}>حذف</Button>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function ZoomFallback({ id, stored }: { id: string; stored: string }) {
+  const meta = useEmojiMeta(id);
+  const glyph = meta?.emoji || stored;
+  return (
+    <div className="text-center">
+      <DefaultEmoji value={glyph} size={52} />
+      <p className="text-xs text-muted-foreground">{meta?.emoji ? "پیش‌فرض تلگرام" : "پیش‌فرض ذخیره‌شده"}{meta?.emoji && meta.emoji !== stored ? ` · جایگزینی فعلی: ${stored}` : ""}</p>
+    </div>
   );
 }
