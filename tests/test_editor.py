@@ -1,4 +1,4 @@
-from backend.app.formatting.editor import analyze_post
+from backend.app.formatting.editor import ai_plan, analyze_post
 
 
 def test_exam_options_are_locked():
@@ -35,6 +35,19 @@ def test_short_post_is_not_sent_to_ai():
     decision = analyze_post("سلام وقت بخیر")
     assert decision.strategy == "preserve_strict"
     assert decision.length_class == "short"
+
+
+def test_fact_post_is_read_in_tidy_mode():
+    text = "اطلاعیه ثبت نام " + "جزئیات برنامه فردا اعلام شد. " * 6
+    decision = analyze_post(text)
+    assert decision.strategy == "preserve_strict"
+    assert decision.length_class != "short"
+    assert ai_plan(decision) == "tidy"
+
+
+def test_exam_options_are_not_sent_to_the_model():
+    decision = analyze_post("آزمون امروز\n1) گزینه اول\n2) گزینه دوم")
+    assert ai_plan(decision) == "skip"
 
 
 def test_quote_entity_locks_the_post():

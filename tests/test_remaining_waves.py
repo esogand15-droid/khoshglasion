@@ -22,6 +22,15 @@ def test_preview_refuses_locked_exam():
     assert reason
 
 
+def test_preview_reads_announcement_but_not_exam_options():
+    text = "اطلاعیه ثبت نام " + "جزئیات برنامه فردا اعلام شد. " * 6
+    should, decision, reason = preview_ai_plan(text, True, True)
+    assert should is True
+    assert decision["strategy"] == "preserve_strict"
+    assert decision["ai_mode"] == "tidy"
+    assert reason is None
+
+
 def test_preview_allows_long_soft_text_only_when_ai_is_ready():
     text = "مشاوره " + ("سوال داوطلب را دقیق جواب بده و قدم بعدی را روشن کن. " * 30)
     blocked, decision, reason = preview_ai_plan(text, True, False)

@@ -13,11 +13,11 @@ def test_locked_post_does_not_rotate():
         decision,
         channel_style="premium",
         recent_structures=["classic", "airy"],
-        recent_emoji_styles=["chrome"],
+        recent_emoji_styles=["list"],
         emoji_enabled=True,
     )
     assert choice.structure_id == "locked"
-    assert choice.emoji_style_id == "chrome"
+    assert choice.emoji_style_id == "scatter"
     assert choice.style_id == "premium"
     assert choice.template_id.endswith(".locked")
 
