@@ -58,6 +58,8 @@ from backend.app.services.autopost import (
     draft_from_source,
     ensure_content_defaults,
     get_config,
+    human_reason,
+    push_lesson,
     next_slot_time,
     slot_is_due,
     slot_key,
@@ -392,11 +394,19 @@ async def collect_sources(db: AsyncSession, *, force: bool = False) -> dict:
                 style_card=style_card,
                 plan=plan,
                 image_note=image_note or None,
+                lessons=getattr(config, "lessons_json", None),
                 trace=trace,
             )
             analysis["writer_model"] = trace.get("writer_model") or ""
             analysis["writer_provider"] = trace.get("writer_provider") or ""
             analysis["layout"] = layout
+            if trace.get("repaired"):
+                config.lessons_json = push_lesson(
+                    getattr(config, "lessons_json", None),
+                    kind="repair",
+                    category=category,
+                    note=f"خبر دسته {category} را SKIP نکن؛ قابل بازنویسی است",
+                )
             similar = False
             if body and too_similar(body, recent):
                 fresh_prompt = await compose_prompt(db, "regenerator_fresh")
@@ -412,6 +422,7 @@ async def collect_sources(db: AsyncSession, *, force: bool = False) -> dict:
                     style_card=style_card,
                     plan=plan,
                     image_note=image_note or None,
+                    lessons=getattr(config, "lessons_json", None),
                 )
                 if alt and not too_similar(alt, recent):
                     body = alt
@@ -430,7 +441,7 @@ async def collect_sources(db: AsyncSession, *, force: bool = False) -> dict:
                     content_hash=digest,
                     analysis_json=json.dumps(analysis, ensure_ascii=False),
                     confidence="low",
-                    error=reason or "rejected",
+                    error=human_reason(reason),
                     target_chat_id=config.target_chat_id,
                 ))
                 handled.add(message_id)
@@ -628,6 +639,12 @@ async def publish_due(db: AsyncSession) -> dict:
             job.attempts = (job.attempts or 0) + 1
             job.last_error = None
         await write_log(db, "published", str(draft.id))
+        config.lessons_json = push_lesson(
+            getattr(config, "lessons_json", None),
+            kind="published",
+            category=draft.category or "",
+            note=f"دسته {draft.category or 'news'} منتشر شد؛ برای خبر فقط یک ایموجی عنوان بگذار",
+        )
         published += 1
     if config.enabled and config.auto_publish and not getattr(config, "paused", False):
         slots = (await db.execute(select(PublishSlot))).scalars().all()
@@ -672,6 +689,12 @@ async def publish_due(db: AsyncSession) -> dict:
             counts[draft.category] = counts.get(draft.category, 0) + 1
             published += 1
             await write_log(db, "published", str(draft.id))
+            config.lessons_json = push_lesson(
+                getattr(config, "lessons_json", None),
+                kind="published",
+                category=draft.category or "",
+                note=f"دسته {draft.category or 'news'} منتشر شد؛ برای خبر فقط یک ایموجی عنوان بگذار",
+            )
     await db.flush()
     return {"published": published}
 

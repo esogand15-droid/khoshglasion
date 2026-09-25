@@ -71,8 +71,8 @@ export function EmojiPreview({ id, size = 72, active = true, fallback = "", inli
   return (
     <span
       className={inline
-        ? "inline-flex shrink-0 items-center justify-center align-middle overflow-hidden"
-        : "flex shrink-0 items-center justify-center overflow-hidden rounded-2xl border border-border bg-background/70"}
+        ? "inline-flex shrink-0 items-center justify-center align-middle overflow-hidden [&_svg]:h-full [&_svg]:w-full"
+        : "flex shrink-0 items-center justify-center overflow-hidden rounded-2xl border border-border bg-background/70 [&_svg]:h-full [&_svg]:w-full"}
       style={{ width: size, height: size }}
       aria-label="ایموجی پرمیوم"
     >

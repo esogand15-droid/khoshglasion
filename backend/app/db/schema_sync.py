@@ -61,6 +61,7 @@ def _columns_for(connection: Connection) -> dict[str, dict[str, str]]:
             "collect_interval_minutes": "INTEGER DEFAULT 20",
             "daily_cap": "INTEGER DEFAULT 6",
             "balance_categories": _bool(connection, True),
+            "lessons_json": "TEXT",
         },
         "news_sources": {
             "priority": "VARCHAR(16) DEFAULT 'normal'",

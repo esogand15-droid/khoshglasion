@@ -15,7 +15,13 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Field, Input } from "@/components/ui/input";
 import { SearchInput } from "@/components/ui/search-input";
 import { prefetchEmojiMeta } from "@/lib/emojiMedia";
-import { fa } from "@/lib/utils";
+import { en, fa } from "@/lib/utils";
+
+function readPriority(value: unknown): number | null {
+  const parsed = Number(en(String(value ?? "").trim()));
+  if (!Number.isInteger(parsed) || parsed < 0 || parsed > 1000) return null;
+  return parsed;
+}
 
 export default function Emojis() {
   const role = useAuth((state) => state.role);
@@ -136,11 +142,13 @@ export default function Emojis() {
           </div>
           <Button variant="brand" disabled={!canEdit} onClick={async () => {
             try {
-              await api.post("/api/emojis", { ...form, priority: Number(form.priority), category: form.category || undefined });
+              const priority = readPriority(form.priority);
+              if (priority === null) throw new Error("priority");
+              await api.post("/api/emojis", { ...form, priority, category: form.category || undefined });
               setForm({ unicode_emoji: "", custom_emoji_id: "", category: "", priority: "70" });
               setMsg("اضافه شد");
               load();
-            } catch (error: any) { setMsg(error.response?.data?.detail || "ثبت نشد"); }
+            } catch (error: any) { setMsg(error.response?.data?.detail || (error.message === "priority" ? "اولویت باید عدد ۰ تا ۱۰۰۰ باشد" : "ثبت نشد")); }
           }}>افزودن</Button>
           {msg && <Alert>{msg}</Alert>}
         </CardContent>
@@ -163,7 +171,7 @@ export default function Emojis() {
           <Input className="h-8 w-28" value={bulkCategory} onChange={(event) => setBulkCategory(event.target.value)} placeholder="دسته" />
           <Button size="sm" variant="outline" onClick={() => bulk("category", { category: bulkCategory })}>اعمال دسته</Button>
           <Input className="h-8 w-20" type="number" value={bulkPriority} onChange={(event) => setBulkPriority(event.target.value)} />
-          <Button size="sm" variant="outline" onClick={() => bulk("priority", { priority: Number(bulkPriority) })}>اعمال اولویت</Button>
+          <Button size="sm" variant="outline" onClick={() => { const priority = readPriority(bulkPriority); if (priority === null) { setMsg("اولویت باید عدد ۰ تا ۱۰۰۰ باشد"); return; } bulk("priority", { priority }); }}>اعمال اولویت</Button>
         </div>
       )}
 
@@ -177,7 +185,7 @@ export default function Emojis() {
               selected={selectedSet.has(item.id)}
               onSelect={(on) => toggleSelected(item.id, on)}
               onZoom={() => setZoom(item)}
-              onEdit={() => setEdit({ ...item })}
+              onEdit={() => setEdit({ ...item, priority: String(item.priority ?? 50) })}
               onToggle={async () => { await api.patch(`/api/emojis/${item.id}`, { enabled: !item.enabled }); load(); }}
               onDelete={() => ask("این نگاشت حذف شود؟", async () => { await api.delete(`/api/emojis/${item.id}`); load(); })}
               onAdopt={async () => {
@@ -202,10 +210,12 @@ export default function Emojis() {
             <Field label="ایموجی"><Input value={edit.unicode_emoji} onChange={(e) => setEdit({ ...edit, unicode_emoji: e.target.value })} /></Field>
             <Field label="custom_emoji_id"><Input dir="ltr" value={edit.custom_emoji_id} onChange={(e) => setEdit({ ...edit, custom_emoji_id: e.target.value })} /></Field>
             <Field label="دسته"><Input value={edit.category || ""} onChange={(e) => setEdit({ ...edit, category: e.target.value })} /></Field>
-            <Field label="اولویت"><Input value={edit.priority} onChange={(e) => setEdit({ ...edit, priority: e.target.value })} /></Field>
+            <Field label="اولویت"><Input inputMode="numeric" value={edit.priority} onChange={(e) => setEdit({ ...edit, priority: e.target.value })} /></Field>
             <Button variant="brand" disabled={!canEdit} onClick={async () => {
+              const priority = readPriority(edit.priority);
+              if (priority === null) { setMsg("اولویت باید عدد ۰ تا ۱۰۰۰ باشد"); return; }
               try {
-                await api.patch(`/api/emojis/${edit.id}`, { unicode_emoji: edit.unicode_emoji, custom_emoji_id: edit.custom_emoji_id, category: edit.category || null, priority: Number(edit.priority) });
+                await api.patch(`/api/emojis/${edit.id}`, { unicode_emoji: edit.unicode_emoji, custom_emoji_id: edit.custom_emoji_id, category: edit.category || null, priority });
                 setEdit(null);
                 setMsg("نگاشت ذخیره شد");
                 load();
@@ -273,7 +283,7 @@ function EmojiCard({ item, canEdit, selected, onSelect, onZoom, onEdit, onToggle
         <div className="flex flex-wrap items-center gap-2">
           <Badge variant={item.enabled ? "success" : "secondary"}>{item.enabled ? "فعال" : "خاموش"}</Badge>
           {item.custom_emoji_id?.startsWith("53683241") && <Badge variant="warning">فیک</Badge>}
-          <span className="text-xs text-muted-foreground">{item.category || "بدون دسته"} · {fa(item.usage_count || 0)}</span>
+          <span className="text-xs text-muted-foreground">{item.category || "بدون دسته"} · اولویت {fa(item.priority ?? 50)} · استفاده {fa(item.usage_count || 0)}</span>
         </div>
         <div className="flex flex-wrap gap-2">
           <Button size="sm" variant="outline" disabled={!canEdit} onClick={onEdit}>ویرایش</Button>

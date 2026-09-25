@@ -59,6 +59,8 @@ def rewrite_plan(text: str) -> str:
 
 
 def layout_for(category: str | None, style: str | None, plan: str) -> str:
+    if (category or "") in {"news", "announcement", "registration"}:
+        return "title"
     if style == "fun":
         return "scatter"
     if style in {"guide", "consult"} or category in {"lesson", "planning", "consulting"}:

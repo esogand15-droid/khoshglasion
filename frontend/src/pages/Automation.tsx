@@ -394,7 +394,7 @@ export default function Automation() {
                       </div>
                       {edit?.id === draft.id ? (
                         <Textarea value={edit.body} onChange={(event) => setEdit({ ...edit, body: event.target.value })} />
-                      ) : <p className="whitespace-pre-wrap text-sm">{draft.body || draft.error || "متن تولید نشده؛ منبع پایین را ببین."}</p>}
+                      ) : draft.body ? <p className="whitespace-pre-wrap text-sm">{draft.body}</p> : <p className="text-sm text-muted-foreground">برای این منبع هنوز متنی ساخته نشده. منبع پایین جدا از پیش‌نویس است.</p>}
                       {draft.source_content && (
                         <details className="text-xs text-muted-foreground">
                           <summary>متن منبع، جدا از پیش‌نویس</summary>
@@ -425,7 +425,7 @@ export default function Automation() {
                       <div className="flex flex-wrap gap-2">
                         <Button size="sm" variant="outline" disabled={!canEdit} onClick={() => setEdit(edit?.id === draft.id ? null : { ...draft })}>{edit?.id === draft.id ? "بستن" : "ویرایش"}</Button>
                         {edit?.id === draft.id && <Button size="sm" variant="brand" onClick={() => run(async () => { await api.patch(`/api/automation/drafts/${draft.id}`, { body: edit.body }); setEdit(null); setMsg("متن ذخیره شد"); await load(); }, "متن ذخیره نشد")}>ذخیره متن</Button>}
-                        <Button size="sm" variant="outline" onClick={() => run(async () => { setPreview((await api.get(`/api/automation/drafts/${draft.id}/preview`)).data); }, "پیش‌نمایش نشد")}>خروجی ارسال</Button>
+                        {draft.body && <Button size="sm" variant="outline" onClick={() => run(async () => { setPreview((await api.get(`/api/automation/drafts/${draft.id}/preview`)).data); }, "پیش‌نمایش نشد")}>خروجی ارسال</Button>}
                         {canPublish && draft.body && draft.status !== "skipped" && <Button size="sm" variant="outline" onClick={() => run(async () => { await api.post(`/api/automation/drafts/${draft.id}/test-send`); setMsg("پیش‌نمایش به خودت رفت، نه کانال"); }, "ارسال آزمایشی نشد")}>بفرست به خودم</Button>}
                         {canPublish && draft.body && draft.status !== "skipped" && <Button size="sm" variant="outline" onClick={() => run(async () => { await api.post(`/api/automation/drafts/${draft.id}/approve`); setMsg("برای ساعت بعدی زمان‌بندی شد"); await load(); }, "تأیید نشد")}>تأیید</Button>}
                         {canPublish && draft.body && draft.status !== "skipped" && <Button size="sm" variant="brand" onClick={() => run(async () => { await api.post(`/api/automation/drafts/${draft.id}/publish`); setMsg("منتشر شد"); await load(); }, "منتشر نشد")}>انتشار الان</Button>}

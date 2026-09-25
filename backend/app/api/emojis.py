@@ -275,6 +275,10 @@ async def update_emoji(emoji_id: str, payload: EmojiUpdate, db: AsyncSession = D
     if not row:
         raise HTTPException(status_code=404, detail="ایموجی پیدا نشد")
     data = payload.model_dump(exclude_unset=True)
+    if "priority" in data:
+        priority = data["priority"]
+        if priority is None or not isinstance(priority, int) or not 0 <= priority <= 1000:
+            raise HTTPException(status_code=400, detail="اولویت باید بین ۰ و ۱۰۰۰ باشد")
     if "contexts" in data and data["contexts"] is not None:
         data["contexts"] = json.dumps(data["contexts"], ensure_ascii=False)
     for key, value in data.items():

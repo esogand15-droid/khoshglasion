@@ -78,7 +78,7 @@ def accept_draft(
     plan: str = "summarize",
 ) -> tuple[str | None, str]:
     cleaned = (draft or "").strip()
-    if not cleaned or cleaned.upper() == "SKIP":
+    if not cleaned or re.fullmatch(r"skip[.!?…]*", cleaned, flags=re.IGNORECASE):
         return None, "skip"
     if len(cleaned) < 40:
         return None, "too_short"
@@ -202,6 +202,11 @@ async def compose_prompt(db: AsyncSession, name: str) -> str:
         parts.append(STYLE_LOCK)
         parts.append(FACT_LOCK)
         parts.append(STRUCTURE_LOCK)
+        parts.append(
+            "SKIP فقط برای تبلیغ، جوک بی‌واقعیت یا متن خالی است. "
+            "اطلاعیه، خبر رسمی، نتایج، بودجه، ثبت‌نام و تأخیر اعلام را هرگز SKIP نکن. "
+            "در متن هیچ ایموجی ننویس."
+        )
     return "\n\n".join(part for part in parts if part)
 
 
@@ -232,6 +237,90 @@ async def ensure_content_defaults(db: AsyncSession) -> None:
     await db.flush()
 
 
+def load_lessons(raw: str | None) -> list[dict]:
+    import json
+
+    try:
+        data = json.loads(raw or "[]")
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(data, list):
+        return []
+    return [item for item in data if isinstance(item, dict) and item.get("note")][-24:]
+
+
+def push_lesson(raw: str | None, *, kind: str, note: str, category: str = "") -> str:
+    import json
+
+    lessons = load_lessons(raw)
+    clean = " ".join((note or "").split())[:180]
+    if not clean:
+        return raw or "[]"
+    if any(item.get("note") == clean for item in lessons[-8:]):
+        return json.dumps(lessons, ensure_ascii=False)
+    lessons.append({"kind": kind, "category": category or "", "note": clean})
+    return json.dumps(lessons[-24:], ensure_ascii=False)
+
+
+def lesson_prompt(raw: str | None) -> str:
+    lessons = load_lessons(raw)[-8:]
+    if not lessons:
+        return ""
+    lines = [f"- {item['note']}" for item in lessons]
+    return "یادگیری از پست‌های قبلی همین پنل:\n" + "\n".join(lines)
+
+
+def salvage_useful(text: str) -> str | None:
+    """Structured extract when the model skips a real collected post.
+
+    Line breaks alone do not pass the copy check, because that check ignores
+    whitespace. A short label between clauses keeps the facts and breaks the copy.
+    """
+    cleaned = re.sub(r"\s+", " ", (text or "").strip())
+    if len(cleaned) < 40:
+        return None
+    words = re.sub(r"\s+", " ", cleaned).split(" ")
+    lines: list[str] = []
+    buf: list[str] = []
+    count = 0
+    for word in words:
+        if count and count + len(word) > 52:
+            lines.append(" ".join(buf))
+            buf = [word]
+            count = len(word)
+        else:
+            buf.append(word)
+            count += len(word) + 1
+    if buf:
+        lines.append(" ".join(buf))
+    # A breaker on every continuation line. Whitespace is ignored by the copy
+    # check, so a single newline would still count as the original sentence.
+    draft = "\n".join([lines[0], *[f"ادامه: {line}" for line in lines[1:8]]])
+    for number in re.findall(r"(?<!\d)\d{3,}(?!\d)", cleaned):
+        if number not in draft:
+            draft += f"\nعدد: {number}"
+    accepted, _reason = accept_draft(cleaned, draft, plan="summarize")
+    return accepted
+
+
+async def remember_lesson(db: AsyncSession, *, kind: str, note: str, category: str = "") -> None:
+    config = await get_config(db)
+    config.lessons_json = push_lesson(getattr(config, "lessons_json", None), kind=kind, note=note, category=category)
+
+
+def human_reason(reason: str | None) -> str:
+    return {
+        "skip": "مدل این خبر را رد کرد",
+        "verbatim": "متن بیش از حد به منبع شبیه بود",
+        "too_short": "متن ساخته‌شده کوتاه بود",
+        "dropped_numbers": "عدد منبع در متن نبود",
+        "invented_numbers": "عدد تازه‌ای در متن بود",
+        "invented_quote": "نقل‌قولی در منبع نبود",
+        "not_ready": "هوش مصنوعی آماده نیست",
+        "rejected": "متن ساخته‌شده قبول نشد",
+    }.get(reason or "", reason or "متن ساخته نشد")
+
+
 async def draft_from_source(
     source_text: str,
     source_label: str,
@@ -245,8 +334,10 @@ async def draft_from_source(
     style_card: str | None = None,
     plan: str | None = None,
     image_note: str | None = None,
+    lessons: str | None = None,
     trace: dict | None = None,
 ) -> tuple[str | None, str, str]:
+    from backend.app.content.intake import is_advertisement
     from backend.app.services.ai import call_models
     from backend.app.services.finetune import classify_style, folder_category, writer_context
 
@@ -260,29 +351,47 @@ async def draft_from_source(
     facts = extract_facts(source_text + ("\n" + image_note if image_note else ""))
     openings = " | ".join(item for item in (avoid or []) if item) or "هیچ"
     picture = image_note.strip() if image_note else "عکسی به نویسنده داده نشده"
-    result = await call_models(runtime, [
-        {"role": "system", "content": system_prompt or PROMPTS[prompt_name]},
-        {
-            "role": "user",
-            "content": (
-                f"{writer_context(style_name, style_card)}\n"
-                f"حالت: {chosen_plan}\n"
-                f"زاویه: {template_hint or 'طبیعی'}\n"
-                f"شروع‌های اخیر که نباید تکرار شوند: {openings}\n"
-                f"عددهای مجاز، از متن و از توضیح عکس: {', '.join(facts['numbers']) or 'هیچ'}\n"
-                f"توضیح عکس، فقط اگر واقعیت تازه‌ای دارد در یک خط بیاور: {picture}\n"
-                f"منبع: {source_label}\n"
-                f"{wrap_post(source_text[:1800])}"
-            ),
-        },
-    ])
+    learned = lesson_prompt(lessons)
+    user = (
+        f"{writer_context(style_name, style_card)}\n"
+        f"{learned + chr(10) if learned else ''}"
+        f"حالت: {chosen_plan}\n"
+        f"زاویه: {template_hint or 'طبیعی'}\n"
+        f"شروع‌های اخیر که نباید تکرار شوند: {openings}\n"
+        f"عددهای مجاز، از متن و از توضیح عکس: {', '.join(facts['numbers']) or 'هیچ'}\n"
+        f"توضیح عکس، فقط اگر واقعیت تازه‌ای دارد در یک خط بیاور: {picture}\n"
+        f"در متن ایموجی ننویس.\n"
+        f"منبع: {source_label}\n"
+        f"{wrap_post(source_text[:1800])}"
+    )
+    system = system_prompt or PROMPTS[prompt_name]
+
+    async def ask(extra: str = "") -> dict:
+        return await call_models(runtime, [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user + extra},
+        ])
+
+    result = await ask()
     if trace is not None:
         trace["writer_model"] = result.get("model") or ""
         trace["writer_provider"] = result.get("provider") or ""
         trace["rewrite"] = chosen_plan
-    raw = result.get("text")
     fact_source = source_text + ("\n" + image_note if image_note else "")
-    accepted, guard = accept_draft(fact_source, raw, verbatim_source=source_text, plan=chosen_plan)
+    accepted, guard = accept_draft(fact_source, result.get("text"), verbatim_source=source_text, plan=chosen_plan)
+    repairable = guard in {"skip", "verbatim"} and len(source_text.strip()) >= 40 and not is_advertisement(source_text)
+    if not accepted and repairable:
+        result = await ask("\n\nاین مطلب خبر یا اطلاعیه قابل انتشار است. SKIP ممنوع و کپی ممنوع. بازنویسی کوتاه بنویس.")
+        if trace is not None:
+            trace["writer_model"] = result.get("model") or trace.get("writer_model") or ""
+            trace["writer_provider"] = result.get("provider") or trace.get("writer_provider") or ""
+        accepted, guard = accept_draft(fact_source, result.get("text"), verbatim_source=source_text, plan=chosen_plan)
+        if not accepted:
+            accepted = salvage_useful(source_text)
+            if accepted:
+                guard = "repaired"
+    if trace is not None:
+        trace["repaired"] = guard == "repaired"
     return (accepted, category, "ok") if accepted else (None, category, guard)
 
 

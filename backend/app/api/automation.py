@@ -32,6 +32,8 @@ from backend.app.services.autopost import (
     next_slot_time,
     normalize_source,
     parse_invite_hash,
+    human_reason,
+    remember_lesson,
     remember_version,
 )
 
@@ -450,6 +452,12 @@ async def update_draft(draft_id: str, payload: DraftIn, request: Request, db: As
         if len(payload.body.strip()) < 8:
             raise HTTPException(status_code=400, detail="متن پیش‌نویس خالی است")
         remember_version(row, payload.body.strip(), "edit")
+        await remember_lesson(
+            db,
+            kind="edit",
+            category=row.category or "",
+            note="اپراتور متن را اصلاح کرد؛ خبر واقعی را رد نکن و فرمول تکراری ننویس",
+        )
     if payload.category:
         row.category = payload.category
     if payload.hashtags is not None:
@@ -561,6 +569,12 @@ async def approve_draft(draft_id: str, request: Request, db: AsyncSession = Depe
     row.status = "scheduled"
     row.scheduled_at = when.astimezone(timezone.utc)
     row.error = None
+    await remember_lesson(
+        db,
+        kind="approve",
+        category=row.category or "",
+        note=f"دسته {row.category or 'news'} تأیید شد؛ خبر واقعی را رد نکن",
+    )
     await write_audit(db, admin=admin, action="approve", resource="draft", resource_id=row.id, ip_address=request.client.host if request.client else None)
     return dump_draft(row)
 
@@ -579,6 +593,8 @@ async def regenerate_draft(draft_id: str, request: Request, mode: str = "fresh",
     runtime = await load_runtime(db)
     style = classify_style(source)
     prompt = await compose_prompt(db, f"regenerator_{mode}")
+    config = await get_config(db)
+    trace: dict = {}
     body, category, reason = await draft_from_source(
         source,
         row.source_label or "",
@@ -588,9 +604,13 @@ async def regenerate_draft(draft_id: str, request: Request, mode: str = "fresh",
         system_prompt=prompt,
         style=style,
         style_card=await load_card(db),
+        lessons=getattr(config, "lessons_json", None),
+        trace=trace,
     )
     if not body:
-        raise HTTPException(status_code=400, detail=reason or "بازنویسی رد شد")
+        raise HTTPException(status_code=400, detail=human_reason(reason))
+    if trace.get("repaired"):
+        await remember_lesson(db, kind="repair", category=category, note=f"خبر دسته {category} را SKIP نکن؛ قابل بازنویسی است")
     diff = line_diff(row.body, body)
     if not apply:
         return {"applied": False, "proposed": body, "diff": diff}
@@ -776,6 +796,12 @@ async def reject_draft(draft_id: str, request: Request, db: AsyncSession = Depen
     if row.status in {"published", "sending"}:
         raise HTTPException(status_code=400, detail="پست منتشرشده یا در حال ارسال را رد نکن. اول از کانال پس بگیر")
     row.status = "rejected"
+    await remember_lesson(
+        db,
+        kind="reject",
+        category=row.category or "",
+        note=f"پیش‌نویس دسته {row.category or 'عمومی'} رد شد؛ لحن را عوض کن و تبلیغ را منتشر نکن",
+    )
     await write_audit(db, admin=admin, action="reject", resource="draft", resource_id=row.id, ip_address=request.client.host if request.client else None)
     return dump_draft(row)
 

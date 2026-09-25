@@ -22,6 +22,7 @@ class AutomationConfig(Base):
     collect_interval_minutes: Mapped[int] = mapped_column(Integer, default=20)
     daily_cap: Mapped[int] = mapped_column(Integer, default=6)
     balance_categories: Mapped[bool] = mapped_column(Boolean, default=True)
+    lessons_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     last_collect_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
 

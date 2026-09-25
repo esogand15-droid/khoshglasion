@@ -902,7 +902,9 @@ def accent_pool(mappings: list[EmojiMapping] | None, category: str, avoid_ids: s
         usable.append(mapping)
     preferred = ACCENT_CHOICES.get(category) or ACCENT_CHOICES["general"]
     preferred_rows = [item for item in usable if item.unicode_emoji in preferred]
-    pool = preferred_rows or usable
+    if not preferred_rows:
+        return []
+    pool = preferred_rows
     pool.sort(key=lambda item: (str(item.custom_emoji_id) in avoided, -(item.priority or 0)))
     unique: list[EmojiMapping] = []
     seen: set[str] = set()
@@ -911,7 +913,7 @@ def accent_pool(mappings: list[EmojiMapping] | None, category: str, avoid_ids: s
             continue
         seen.add(item.unicode_emoji)
         unique.append(item)
-    return unique
+    return unique[:2]
 
 
 def _protected_line(start: int, end: int, marks: list[Mark]) -> bool:
@@ -1187,7 +1189,7 @@ def prepare_post(
         updated, marks, role_rules = decorate_existing_footer(updated, marks, mappings)
         applied.extend(role_rules)
     if enable_emoji and body_emoji:
-        budget = max(1, min(4, max_emoji))
+        budget = 1 if emoji_layout in {"title", "quiet", "closing"} else min(2, max_emoji)
         updated, marks, accent_rules = decorate_body(
             updated,
             marks,

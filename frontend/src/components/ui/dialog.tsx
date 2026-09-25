@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { createPortal } from "react-dom";
 import { X } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -33,19 +34,19 @@ export function Dialog({ open, onOpenChange, title, description, children, foote
     const prev = document.activeElement as HTMLElement | null;
     const prevOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
-    panel.current?.querySelector<HTMLElement>("[data-autofocus], button, input, textarea, select, a[href]")?.focus();
+    panel.current?.querySelector<HTMLElement>("[data-autofocus], button, input, textarea, select, a[href]")?.focus({ preventScroll: true });
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && onOpenChange(false);
     document.addEventListener("keydown", onKey);
     return () => {
       document.removeEventListener("keydown", onKey);
       document.body.style.overflow = prevOverflow;
-      prev?.focus();
+      prev?.focus({ preventScroll: true });
     };
   }, [open, onOpenChange]);
 
-  if (!open) return null;
+  if (!open || typeof document === "undefined") return null;
 
-  return (
+  return createPortal(
     <div
       className="fixed inset-0 z-[var(--z-modal)] flex items-end justify-center bg-black/60 p-4 backdrop-blur-sm sm:items-center"
       onClick={() => role === "dialog" && onOpenChange(false)}
@@ -58,7 +59,7 @@ export function Dialog({ open, onOpenChange, title, description, children, foote
         aria-describedby={description ? descId : undefined}
         onClick={(e) => e.stopPropagation()}
         className={cn(
-          "w-full rounded-2xl border border-border bg-popover p-5 text-popover-foreground shadow-[0_30px_80px_-20px_oklch(0_0_0/80%)]",
+          "flex max-h-[min(85dvh,760px)] w-full flex-col overflow-hidden rounded-2xl border border-border bg-popover p-5 text-popover-foreground shadow-[0_30px_80px_-20px_oklch(0_0_0/80%)]",
           widths[size],
           "animate-fade-up [animation-duration:var(--duration-slow)]",
           className,
@@ -77,9 +78,10 @@ export function Dialog({ open, onOpenChange, title, description, children, foote
             )}
           </div>
         )}
-        {children && <div className="mt-4">{children}</div>}
+        {children && <div className="mt-4 min-h-0 flex-1 overflow-y-auto">{children}</div>}
         {footer && <div className="mt-5 flex flex-row-reverse justify-start gap-2 sm:flex-row">{footer}</div>}
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
