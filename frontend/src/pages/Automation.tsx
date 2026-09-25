@@ -6,6 +6,7 @@ import { Alert } from "@/components/ui/alert";
 import { AsyncPage } from "@/components/ui/page-state";
 import { useConfirm } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -116,6 +117,8 @@ export default function Automation() {
   const [statusFilter, setStatusFilter] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("");
   const [bucket, setBucket] = useState<"queue" | "archive">("queue");
+  const [picked, setPicked] = useState<string[]>([]);
+  const [bulkCategory, setBulkCategory] = useState("news");
   const [pending, setPending] = useState("");
   const [preview, setPreview] = useState<any>(null);
   const [proposal, setProposal] = useState<any>(null);
@@ -170,6 +173,23 @@ export default function Automation() {
       await action();
     } catch (error: any) {
       setMsg(apiDetail(error, fallback));
+    }
+  }
+
+  async function bulkDrafts(action: string, extra: Record<string, unknown> = {}) {
+    if (!picked.length || pending) return;
+    setPending(`bulk:${action}`);
+    setMsg("");
+    try {
+      const { data: result } = await api.post("/api/automation/drafts/bulk", { ids: picked, action, ...extra });
+      const skipped = result.skipped ? ` · ${fa(result.skipped)} رد شد چون وضعیتش اجازه نمی‌داد` : "";
+      setMsg(action === "reject" ? `${fa(result.count || 0)} تا به بایگانی رفت. صف همین‌جا ماند.${skipped}` : `اعمال شد: ${fa(result.count || 0)}${skipped}`);
+      setPicked([]);
+      await load();
+    } catch (error: any) {
+      setMsg(apiDetail(error, "کار گروهی انجام نشد"));
+    } finally {
+      setPending("");
     }
   }
 
@@ -441,19 +461,35 @@ export default function Automation() {
             <CardHeader><CardTitle>{bucket === "archive" ? "بایگانی" : "پیش‌نویس‌ها"}</CardTitle></CardHeader>
             <CardContent className="space-y-3">
               <div className="flex flex-wrap gap-2">
-                <Button size="sm" variant={bucket === "queue" ? "brand" : "outline"} onClick={() => setBucket("queue")}>صف پیش‌نویس</Button>
-                <Button size="sm" variant={bucket === "archive" ? "brand" : "outline"} onClick={() => setBucket("archive")}>بایگانی{metrics.archive ? ` · ${fa(metrics.archive)}` : ""}</Button>
+                <Button size="sm" variant={bucket === "queue" ? "brand" : "outline"} onClick={() => { setBucket("queue"); setPicked([]); }}>صف پیش‌نویس</Button>
+                <Button size="sm" variant={bucket === "archive" ? "brand" : "outline"} onClick={() => { setBucket("archive"); setPicked([]); }}>بایگانی{metrics.archive ? ` · ${fa(metrics.archive)}` : ""}</Button>
               </div>
               {bucket === "archive" && <p className="text-xs text-muted-foreground">ردشده‌ها اینجاست. از همین‌جا می‌شود دوباره منتشرشان کرد.</p>}
               <div className="grid gap-2 sm:grid-cols-2">
                 {bucket === "queue" && <Select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)} options={[{ value: "", label: "همه وضعیت‌ها" }, ...Object.entries(STATUS).filter(([value]) => value !== "rejected").map(([value, label]) => ({ value, label }))]} />}
                 <Select value={categoryFilter} onChange={(event) => setCategoryFilter(event.target.value)} options={CATEGORIES.map(([value, label]) => ({ value, label: value ? label : "همه دسته‌ها" }))} />
               </div>
+              {canEdit && (
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button size="sm" variant="outline" onClick={() => setPicked((bucket === "archive" ? data.archive : data.drafts || []).map((item: any) => item.id))}>انتخاب همین فهرست</Button>
+                  {picked.length > 0 && <Button size="sm" variant="outline" onClick={() => setPicked([])}>لغو انتخاب</Button>}
+                </div>
+              )}
+              {canEdit && picked.length > 0 && (
+                <div className="sticky top-2 z-10 flex flex-wrap items-center gap-2 rounded-2xl border border-border bg-card p-3">
+                  <p className="text-sm">{fa(picked.length)} انتخاب شده · روی کادر هر پیش‌نویس هم می‌شود زد</p>
+                  <Button size="sm" variant="destructive" disabled={!!pending} onClick={() => ask(`${fa(picked.length)} پیش‌نویس رد شود و به بایگانی برود؟ صف همین‌جا می‌ماند.`, () => bulkDrafts("reject"))}>رد گروهی</Button>
+                  <Button size="sm" variant="outline" disabled={!!pending} onClick={() => bulkDrafts("restore")}>برگردان گروهی</Button>
+                  <Select className="h-8 w-32" value={bulkCategory} onChange={(event) => setBulkCategory(event.target.value)} options={CATEGORIES.filter(([value]) => value).map(([value, label]) => ({ value, label }))} />
+                  <Button size="sm" variant="outline" disabled={!!pending} onClick={() => bulkDrafts("category", { category: bulkCategory })}>اعمال دسته</Button>
+                </div>
+              )}
               {(bucket === "archive" ? data.archive : data.drafts)?.length ? (
                 <div className="space-y-4">
                   {(bucket === "archive" ? data.archive : data.drafts).map((draft: any) => (
-                    <article key={draft.id} aria-busy={actionKey.startsWith(`${draft.id}:`) || undefined} className={`space-y-3 rounded-2xl border p-4 transition-colors ${actionKey.startsWith(`${draft.id}:`) ? "border-brand/70 bg-brand/5" : "border-border"}`}>
+                    <article key={draft.id} aria-busy={actionKey.startsWith(`${draft.id}:`) || undefined} onClick={(event) => { if (!canEdit || (event.target as HTMLElement).closest("button, a, input, select, textarea, summary, label")) return; setPicked((prev) => prev.includes(draft.id) ? prev.filter((item) => item !== draft.id) : [...prev, draft.id]); }} className={`space-y-3 cursor-pointer rounded-2xl border p-4 transition-colors ${picked.includes(draft.id) ? "border-brand ring-2 ring-brand/50" : actionKey.startsWith(`${draft.id}:`) ? "border-brand/70 bg-brand/5" : "border-border"}`}>
                       <div className="flex flex-wrap items-center gap-2">
+                        {canEdit && <span onClick={(event) => event.stopPropagation()}><Checkbox checked={picked.includes(draft.id)} onCheckedChange={(on) => setPicked((prev) => on ? [...new Set([...prev, draft.id])] : prev.filter((item) => item !== draft.id))} aria-label="انتخاب پیش‌نویس" /></span>}
                         <Badge variant={draft.status === "failed" ? "destructive" : draft.status === "published" ? "success" : "secondary"}>{STATUS[draft.status] || draft.status}</Badge>
                         <span className="text-xs text-muted-foreground">{draft.source_label} · {draft.style_label || categoryLabel(draft.category)} · {draft.confidence || "—"} {draft.has_photo ? "· همراه عکس" : draft.has_media ? "· کپشن" : ""} {draft.rewrite === "preserve" ? "· بدون خلاصه" : draft.rewrite === "summarize" ? "· خلاصه" : ""}</span>
                         {draft.hashtags && <span className="text-xs text-muted-foreground" dir="ltr">{draft.hashtags}</span>}

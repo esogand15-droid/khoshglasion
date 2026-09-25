@@ -310,11 +310,22 @@ function EmojiCard({ item, canEdit, selected, onSelect, onZoom, onEdit, onToggle
   const telegramEmoji = meta?.emoji || "";
   const differs = Boolean(telegramEmoji && telegramEmoji !== item.unicode_emoji);
   return (
-    <Card>
+    <Card
+      role={canEdit ? "button" : undefined}
+      tabIndex={canEdit ? 0 : undefined}
+      aria-pressed={canEdit ? selected : undefined}
+      onClick={() => { if (canEdit) onSelect(!selected); }}
+      onKeyDown={(event) => {
+        if (!canEdit || (event.key !== "Enter" && event.key !== " ")) return;
+        event.preventDefault();
+        onSelect(!selected);
+      }}
+      className={selected ? "cursor-pointer ring-2 ring-brand" : "cursor-pointer"}
+    >
       <CardContent className="space-y-3 p-4">
         <div ref={seen} className="flex items-center gap-3">
-          {canEdit && <Checkbox checked={selected} onCheckedChange={onSelect} aria-label="انتخاب" />}
-          <button type="button" onClick={onZoom} className="cursor-pointer rounded-2xl" aria-label="بزرگ‌نمایی">
+          {canEdit && <span onClick={(event) => event.stopPropagation()}><Checkbox checked={selected} onCheckedChange={onSelect} aria-label="انتخاب" /></span>}
+          <button type="button" onClick={(event) => { event.stopPropagation(); onZoom(); }} className="cursor-pointer rounded-2xl" aria-label="بزرگ‌نمایی">
             <EmojiPreview id={item.custom_emoji_id} size={76} active={visible} fallback={item.unicode_emoji} />
           </button>
           <div className="min-w-0">
@@ -335,8 +346,8 @@ function EmojiCard({ item, canEdit, selected, onSelect, onZoom, onEdit, onToggle
           <Badge variant="secondary">{spectrumLabel(item.category)}{item.source === "manual" ? " · دستی" : item.source === "ai" ? " · هوش مصنوعی" : ""}</Badge>
           <span className="text-xs text-muted-foreground">اولویت {fa(item.priority ?? 50)} · استفاده {fa(item.usage_count || 0)}</span>
         </div>
-        {canEdit && <Select className="h-8" value={item.category || ""} onChange={(event) => onSpectrum(event.target.value)} options={[{ value: "", label: "بدون طیف" }, ...SPECTRA.map(([value, label]) => ({ value, label }))]} />}
-        <div className="flex flex-wrap gap-2">
+        {canEdit && <span onClick={(event) => event.stopPropagation()}><Select className="h-8" value={item.category || ""} onChange={(event) => onSpectrum(event.target.value)} options={[{ value: "", label: "بدون طیف" }, ...SPECTRA.map(([value, label]) => ({ value, label }))]} /></span>}
+        <div className="flex flex-wrap gap-2" onClick={(event) => event.stopPropagation()}>
           <Button size="sm" variant="outline" disabled={!canEdit} onClick={onEdit}>ویرایش</Button>
           <Button size="sm" variant="outline" disabled={!canEdit} onClick={onToggle}>{item.enabled ? "خاموش" : "روشن"}</Button>
           {differs && <Button size="sm" variant="outline" disabled={!canEdit} onClick={onAdopt}>پیش‌فرض تلگرام</Button>}

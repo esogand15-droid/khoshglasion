@@ -899,6 +899,72 @@ async def delete_prompt(prompt_id: str, db: AsyncSession = Depends(get_db), admi
     return {"ok": True}
 
 
+@router.post("/drafts/bulk")
+async def bulk_drafts(payload: dict, request: Request, db: AsyncSession = Depends(get_db), admin=Depends(get_current_admin)):
+    assert_editor(admin)
+    ids = []
+    for raw in payload.get("ids") or []:
+        item = str(raw or "").strip()
+        if item and item not in ids:
+            ids.append(item)
+        if len(ids) >= 80:
+            break
+    if not ids:
+        raise HTTPException(status_code=400, detail="چیزی انتخاب نشده")
+    action = str(payload.get("action") or "").strip()
+    rows = (await db.execute(select(DraftPost).where(DraftPost.id.in_(ids)))).scalars().all()
+    done = 0
+    skipped = 0
+    if action == "reject":
+        for row in rows:
+            if row.status in {"published", "sending", "rejected"}:
+                skipped += 1
+                continue
+            row.status = "rejected"
+            row.scheduled_at = None
+            row.next_retry_at = None
+            jobs = (
+                await db.execute(
+                    select(AutomationJob).where(
+                        AutomationJob.ref_id == row.id,
+                        AutomationJob.kind == "publish",
+                        AutomationJob.status.in_(["pending", "retry"]),
+                    )
+                )
+            ).scalars().all()
+            for job in jobs:
+                job.status = "cancelled"
+            done += 1
+        if done:
+            await remember_lesson(db, kind="reject", category="", note="چند پیش‌نویس رد شد؛ لحن تکراری را دوباره نساز")
+    elif action == "restore":
+        for row in rows:
+            if row.status not in {"rejected", "skipped"}:
+                skipped += 1
+                continue
+            row.status = "preview"
+            row.error = None
+            done += 1
+    elif action == "category":
+        category = str(payload.get("category") or "").strip()[:64]
+        if not category:
+            raise HTTPException(status_code=400, detail="دسته را انتخاب کن")
+        for row in rows:
+            row.category = category
+            done += 1
+    else:
+        raise HTTPException(status_code=400, detail="این کار گروهی شناخته نشد")
+    await write_audit(
+        db,
+        admin=admin,
+        action=f"bulk_{action}",
+        resource="draft",
+        new_value={"count": done, "skipped": skipped},
+        ip_address=request.client.host if request.client else None,
+    )
+    return {"ok": True, "count": done, "skipped": skipped}
+
+
 @router.post("/drafts/{draft_id}/reject")
 async def reject_draft(draft_id: str, request: Request, db: AsyncSession = Depends(get_db), admin=Depends(get_current_admin)):
     assert_editor(admin)
