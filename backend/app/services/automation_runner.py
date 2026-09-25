@@ -25,7 +25,8 @@ from backend.app.content.pipeline import (
     source_url,
     too_similar,
 )
-from backend.app.content.publish import prepare_publish_payload
+from backend.app.content.media_store import remember_paths
+from backend.app.content.publish import configured_footer, prepare_publish_payload
 from backend.app.content.schedule import cursor_after, next_retry_at, pick_balanced
 from backend.app.core.runtime import load_runtime
 from backend.app.formatting.editor import analyze_post
@@ -593,6 +594,7 @@ async def collect_sources(db: AsyncSession, *, force: bool = False) -> dict:
             )
             db.add(draft)
             await db.flush()
+            await remember_paths(db, draft.id, paths)
             if draft.status == "scheduled":
                 db.add(AutomationJob(
                     kind="publish",
@@ -690,6 +692,7 @@ async def deliver_draft(db: AsyncSession, draft: DraftPost, chat_id: int) -> tup
     video = video_of(draft.analysis_json)
     has_media = bool(photos or video)
     avoid = await recent_emoji_ids(db, draft.id)
+    config = await get_config(db)
     payload = prepare_publish_payload(
         draft.body,
         spectrum_of(style or draft.category),
@@ -697,6 +700,7 @@ async def deliver_draft(db: AsyncSession, draft: DraftPost, chat_id: int) -> tup
         maps,
         is_caption=has_media,
         avoid_emoji_ids=avoid,
+        footer=configured_footer(getattr(config, "footer_text", None)),
     )
     analysis["emoji_ids"] = payload["emoji_ids"]
     analysis["sent_fp"] = fingerprint(payload["text"])

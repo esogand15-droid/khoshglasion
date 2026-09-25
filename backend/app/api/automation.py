@@ -6,12 +6,12 @@ import re
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
-from sqlalchemy import and_, func, not_, or_, select
+from sqlalchemy import and_, desc, func, not_, nulls_last, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.content.links import channel_message_url
-from backend.app.content.publish import prepare_publish_payload
+from backend.app.content.publish import configured_footer, prepare_publish_payload
 from backend.app.db.base import get_db
 from backend.app.core.runtime import load_runtime
 from backend.app.formatting.diff import line_diff
@@ -183,6 +183,7 @@ class ConfigIn(BaseModel):
     daily_cap: int | None = None
     balance_categories: bool | None = None
     collect_interval_minutes: int | None = None
+    footer_text: str | None = Field(default=None, max_length=400)
 
 
 class HashtagIn(BaseModel):
@@ -258,6 +259,29 @@ async def automation_state(
         raise HTTPException(status_code=503, detail="صف اتوماسیون الان خوانده نشد. چند ثانیه بعد دوباره بزن.") from exc
 
 
+async def _settle_published(db: AsyncSession) -> None:
+    """A sent post must leave the review count, even if the status write was lost."""
+    rows = (
+        await db.execute(
+            select(DraftPost)
+            .where(
+                DraftPost.message_id.is_not(None),
+                DraftPost.status.in_(["preview", "sending", "scheduled"]),
+            )
+            .limit(200)
+        )
+    ).scalars().all()
+    if not rows:
+        return
+    now = datetime.now(timezone.utc)
+    for row in rows:
+        row.status = "published"
+        row.error = None
+        if row.published_at is None:
+            row.published_at = now
+    await db.commit()
+
+
 async def _read_automation_state(
     draft_status: str | None = None,
     draft_category: str | None = None,
@@ -266,6 +290,7 @@ async def _read_automation_state(
 ):
     # Read only. Do not SET LOCAL here: on asyncpg a failed SET aborts the
     # transaction and every later query becomes the 503 the panel shows.
+    await _settle_published(db)
     config = await get_config(db)
     sources = (await db.execute(select(NewsSource).order_by(NewsSource.created_at))).scalars().all()
     slots = (await db.execute(select(PublishSlot).order_by(PublishSlot.hour, PublishSlot.minute))).scalars().all()
@@ -274,18 +299,34 @@ async def _read_automation_state(
         or_(DraftPost.status == "seen", DraftPost.error.in_(["تکراری است", "similar"])),
     )
     hidden_ads = and_(DraftPost.status == "skipped", DraftPost.error.like("تبلیغ%"))
-    draft_query = select(DraftPost).where(DraftPost.status != "rejected", not_(hidden_repeat))
+    already_sent = and_(
+        DraftPost.message_id.is_not(None),
+        DraftPost.status.notin_(["recalled", "rejected"]),
+    )
+    draft_query = select(DraftPost).where(
+        DraftPost.status.notin_(["rejected", "published"]),
+        not_(already_sent),
+        not_(hidden_repeat),
+    )
     if not draft_status:
         draft_query = draft_query.where(not_(hidden_ads))
     draft_query = draft_query.order_by(DraftPost.created_at.desc()).limit(80)
     archive_query = select(DraftPost).where(DraftPost.status == "rejected").order_by(DraftPost.created_at.desc()).limit(80)
-    if draft_status and draft_status != "rejected":
+    published_query = (
+        select(DraftPost)
+        .where(or_(DraftPost.status == "published", already_sent))
+        .order_by(nulls_last(desc(DraftPost.published_at)), desc(DraftPost.created_at))
+        .limit(80)
+    )
+    if draft_status and draft_status not in {"rejected", "published"}:
         draft_query = draft_query.where(DraftPost.status == draft_status)
     if draft_category:
         draft_query = draft_query.where(DraftPost.category == draft_category)
         archive_query = archive_query.where(DraftPost.category == draft_category)
+        published_query = published_query.where(DraftPost.category == draft_category)
     drafts = (await db.execute(draft_query)).scalars().all()
     archived = (await db.execute(archive_query)).scalars().all()
+    published = (await db.execute(published_query)).scalars().all()
     channels = (await db.execute(select(Channel))).scalars().all()
     names = {int(row.chat_id): row.username for row in channels if row.chat_id and row.username}
     hashtags = (await db.execute(select(HashtagRule).order_by(HashtagRule.priority.desc()))).scalars().all()
@@ -305,11 +346,22 @@ async def _read_automation_state(
         "balance_categories": config.balance_categories,
         "collect_interval_minutes": config.collect_interval_minutes,
         "target_chat_id": config.target_chat_id,
+        "footer_text": configured_footer(getattr(config, "footer_text", None)),
         "metrics": {
-            "preview": int(counts.get("preview") or 0),
+            "preview": int(
+                (
+                    await db.execute(
+                        select(func.count())
+                        .select_from(DraftPost)
+                        .where(DraftPost.status == "preview", DraftPost.message_id.is_(None))
+                    )
+                ).scalar()
+                or 0
+            ),
             "scheduled": int(counts.get("scheduled") or 0),
             "failed": int(counts.get("failed") or 0),
             "archive": int(counts.get("rejected") or 0),
+            "published": int(counts.get("published") or 0),
             "published_today": sum(today.values()),
             "daily_cap": config.daily_cap,
         },
@@ -327,6 +379,7 @@ async def _read_automation_state(
         "sources": [dump_source(row) for row in sources],
         "slots": [dump_slot(row) for row in slots],
         "drafts": [dump_draft(row, names.get(int(row.target_chat_id)) if row.target_chat_id else None) for row in drafts],
+        "published": [dump_draft(row, names.get(int(row.target_chat_id)) if row.target_chat_id else None) for row in published],
         "archive": [dump_draft(row, names.get(int(row.target_chat_id)) if row.target_chat_id else None) for row in archived],
         "finetune": finetune,
         "lessons": _lessons(getattr(config, "lessons_json", None)),
@@ -346,6 +399,8 @@ async def update_config(payload: ConfigIn, request: Request, db: AsyncSession = 
         raise HTTPException(status_code=400, detail="فاصله جمع‌آوری باید بین ۵ و ۲۴۰ دقیقه باشد")
     config = await get_config(db)
     data = payload.model_dump(exclude_unset=True)
+    if "footer_text" in data:
+        data["footer_text"] = (data["footer_text"] or "").strip()
     for key, value in data.items():
         setattr(config, key, value)
     await write_audit(db, admin=admin, action="update", resource="automation", new_value=data, ip_address=request.client.host if request.client else None)
@@ -521,47 +576,46 @@ async def update_draft(draft_id: str, payload: DraftIn, request: Request, db: As
     return dump_draft(row)
 
 
-_photo_miss: dict[str, float] = {}
+_photo_locks: dict[str, object] = {}
 
 
-def _remember_photo(row: DraftPost, path: str) -> None:
+def _remember_photos(row: DraftPost, paths: list[str]) -> None:
     try:
         data = json.loads(row.analysis_json or "")
     except json.JSONDecodeError:
         data = {}
     if not isinstance(data, dict):
         data = {}
-    data["photo_path"] = path
-    data["has_media"] = True
+    if paths:
+        data["photo_path"] = paths[0]
+        data["photo_paths"] = paths
+        data["has_media"] = True
     row.analysis_json = json.dumps(data, ensure_ascii=False)
 
 
-async def _recover_photo(db: AsyncSession, row: DraftPost) -> str | None:
+async def _recover_photos(db: AsyncSession, row: DraftPost) -> list[str]:
     import asyncio
-    import time
 
-    from backend.app.telegram.collector import refetch_published_photo, refetch_source_photo
+    from backend.app.content.media_store import remember_paths
+    from backend.app.telegram.collector import refetch_published_photos, refetch_source_photos
 
-    missed = _photo_miss.get(row.id)
-    if missed and time.monotonic() - missed < 90:
-        return None
     raw = (row.source_key or "").strip()
     username, _, tail = raw.rpartition(":")
-    saved = None
+    paths: list[str] = []
     if row.target_chat_id and row.message_id:
         try:
-            saved = await asyncio.wait_for(
-                refetch_published_photo(int(row.target_chat_id), int(row.message_id), username or "published"),
+            paths = await asyncio.wait_for(
+                refetch_published_photos(int(row.target_chat_id), int(row.message_id), username or "published"),
                 timeout=12,
             )
         except Exception:
             logger.info("published photo recovery skipped")
-            saved = None
-    if saved is None and username and tail.isdigit():
+            paths = []
+    if not paths and username and tail.isdigit():
         source = (await db.execute(select(NewsSource).where(NewsSource.username == username))).scalar_one_or_none()
         try:
-            saved = await asyncio.wait_for(
-                refetch_source_photo(
+            paths = await asyncio.wait_for(
+                refetch_source_photos(
                     username,
                     int(tail),
                     access_hash=None if source is None else source.access_hash,
@@ -571,13 +625,11 @@ async def _recover_photo(db: AsyncSession, row: DraftPost) -> str | None:
             )
         except Exception:
             logger.info("source photo recovery skipped")
-            saved = None
-    if saved:
-        _photo_miss.pop(row.id, None)
-        _remember_photo(row, saved)
-    else:
-        _photo_miss[row.id] = time.monotonic()
-    return saved
+            paths = []
+    if paths:
+        _remember_photos(row, paths)
+        await remember_paths(db, row.id, paths)
+    return paths
 
 
 def _draft_media_paths(row: DraftPost) -> list[str]:
@@ -586,21 +638,84 @@ def _draft_media_paths(row: DraftPost) -> list[str]:
     return photo_paths_of(row.analysis_json)
 
 
+async def _photo_bytes(db: AsyncSession, row: DraftPost, index: int) -> bytes | None:
+    import asyncio
+
+    from backend.app.content.media_store import load_photo, read_image, remember_slot
+
+    paths = _draft_media_paths(row)
+    if 0 <= index < len(paths):
+        data = read_image(paths[index])
+        if data:
+            try:
+                async with db.begin_nested():
+                    await remember_slot(db, row.id, index, data)
+                await db.commit()
+            except Exception:
+                logger.info("photo copy skipped")
+            return data
+    stored = await load_photo(db, row.id, index)
+    if stored:
+        return stored
+    raw = _analysis_flag(row.analysis_json, "photo_paths")
+    raw_list = [item for item in raw if isinstance(item, str)] if isinstance(raw, list) else []
+    single = _analysis_flag(row.analysis_json, "photo_path")
+    if isinstance(single, str) and single not in raw_list:
+        raw_list.insert(0, single)
+    if 0 <= index < len(raw_list):
+        from pathlib import Path
+
+        from backend.app.content.intake import media_root
+
+        data = read_image(raw_list[index])
+        name = Path(raw_list[index]).name
+        if data is None and name and ".." not in name and "/" not in name and "\\" not in name:
+            data = read_image(str(media_root() / name))
+        if data:
+            try:
+                async with db.begin_nested():
+                    await remember_slot(db, row.id, index, data)
+                await db.commit()
+            except Exception:
+                logger.info("photo copy skipped")
+            return data
+    lock = _photo_locks.get(row.id)
+    if lock is None:
+        lock = asyncio.Lock()
+        _photo_locks[row.id] = lock
+    async with lock:
+        stored = await load_photo(db, row.id, index)
+        if stored:
+            return stored
+        paths = _draft_media_paths(row)
+        if 0 <= index < len(paths):
+            data = read_image(paths[index])
+            if data:
+                return data
+        recovered = await _recover_photos(db, row)
+        if 0 <= index < len(recovered):
+            data = read_image(recovered[index])
+            if data:
+                try:
+                    await db.commit()
+                except Exception:
+                    logger.info("recovered photo commit skipped")
+                return data
+        stored = await load_photo(db, row.id, index)
+        if stored:
+            return stored
+    return None
+
+
 @router.get("/drafts/{draft_id}/photo")
 async def draft_photo(draft_id: str, index: int = 0, db: AsyncSession = Depends(get_db), admin=Depends(get_current_admin)):
-    row = await _draft(db, draft_id)
-    paths = _draft_media_paths(row)
-    path = paths[index] if 0 <= index < len(paths) else None
-    if path is None and index == 0:
-        path = _draft_photo(row) or await _recover_photo(db, row)
-    if path is None:
-        raise HTTPException(status_code=404, detail="عکس این پست پیدا نشد")
-    from pathlib import Path
-
     from backend.app.content.intake import image_mime
 
-    data = Path(path).read_bytes()
-    return Response(content=data, media_type=image_mime(data), headers={"Cache-Control": "private, max-age=60"})
+    row = await _draft(db, draft_id)
+    data = await _photo_bytes(db, row, index)
+    if not data:
+        raise HTTPException(status_code=404, detail="عکس این پست پیدا نشد")
+    return Response(content=data, media_type=image_mime(data), headers={"Cache-Control": "private, max-age=300"})
 
 
 @router.get("/drafts/{draft_id}/video")
@@ -631,6 +746,7 @@ async def preview_draft(draft_id: str, db: AsyncSession = Depends(get_db), admin
     maps = await load_emoji_maps(db)
     photo = photo_of(row.analysis_json)
     spectrum = spectrum_of(_analysis_flag(row.analysis_json, "style") or row.category)
+    config = await get_config(db)
     payload = prepare_publish_payload(
         row.body,
         spectrum,
@@ -638,6 +754,7 @@ async def preview_draft(draft_id: str, db: AsyncSession = Depends(get_db), admin
         maps,
         is_caption=photo is not None or bool(_analysis_flag(row.analysis_json, "video_path")),
         avoid_emoji_ids=await recent_emoji_ids(db, row.id),
+        footer=configured_footer(getattr(config, "footer_text", None)),
     )
     expects_photo = photo is not None or bool(_analysis_flag(row.analysis_json, "photo_path")) or bool(_analysis_flag(row.analysis_json, "image_note"))
     return {"text": payload["text"], "html_text": payload["html_text"], "emoji_ids": payload["emoji_ids"], "has_photo": expects_photo, "spectrum": spectrum, "spectrum_label": spectrum_label(spectrum)}
@@ -659,6 +776,7 @@ async def test_send_draft(draft_id: str, request: Request, db: AsyncSession = De
     photos = photo_paths_of(row.analysis_json)
     video = video_of(row.analysis_json)
     spectrum = spectrum_of(_analysis_flag(row.analysis_json, "style") or row.category)
+    config = await get_config(db)
     payload = prepare_publish_payload(
         row.body,
         spectrum,
@@ -666,6 +784,7 @@ async def test_send_draft(draft_id: str, request: Request, db: AsyncSession = De
         maps,
         is_caption=bool(photos or video),
         avoid_emoji_ids=await recent_emoji_ids(db, row.id),
+        footer=configured_footer(getattr(config, "footer_text", None)),
     )
     note_id, note_error = await publish_rendered(int(chat_id), "پیش‌نمایش آزمایشی. این پیام در کانال عمومی نرفت.")
     if note_error:

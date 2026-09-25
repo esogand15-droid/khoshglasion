@@ -116,7 +116,8 @@ export default function Automation() {
   const [edit, setEdit] = useState<any>(null);
   const [statusFilter, setStatusFilter] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("");
-  const [bucket, setBucket] = useState<"queue" | "archive">("queue");
+  const [bucket, setBucket] = useState<"queue" | "archive" | "published">("queue");
+  const [footerText, setFooterText] = useState<string | null>(null);
   const [picked, setPicked] = useState<string[]>([]);
   const [bulkCategory, setBulkCategory] = useState("news");
   const [pending, setPending] = useState("");
@@ -221,6 +222,8 @@ export default function Automation() {
   }
 
   const metrics = data.metrics || {};
+  const shownDrafts = bucket === "archive" ? data.archive : bucket === "published" ? data.published : data.drafts;
+  const footerValue = footerText ?? data.footer_text ?? "";
   const hashtags = data.hashtags || [];
   const actionKey = typeof pending === "string" ? pending : "";
   const grouped = CATEGORIES.filter(([value]) => value).map(([value, label]) => ({
@@ -317,6 +320,10 @@ export default function Automation() {
                     { value: "never", label: "هرگز" },
                   ]}
                 />
+              </Field>
+              <Field label="فوتر کانال، زیر پست خودکار" hint="خط جداکننده و این متن زیر هر پست خودکار می‌رود. خالی کن و ذخیره کن تا فوتر نرود. تا وقتی عوضش نکنی، فوتر کانال مشاوره است." className="lg:col-span-2">
+                <Textarea rows={4} value={footerValue} disabled={!canEdit} onChange={(event) => setFooterText(event.target.value)} />
+                <Button size="sm" variant="outline" disabled={!canEdit} onClick={() => saveConfig({ footer_text: footerValue })}>ذخیره فوتر</Button>
               </Field>
               <Field label="کانال مقصد">
                 <Select
@@ -458,20 +465,22 @@ export default function Automation() {
 
         <TabsContent value="drafts">
           <Card>
-            <CardHeader><CardTitle>{bucket === "archive" ? "بایگانی" : "پیش‌نویس‌ها"}</CardTitle></CardHeader>
+            <CardHeader><CardTitle>{bucket === "archive" ? "بایگانی" : bucket === "published" ? "منتشرشده" : "پیش‌نویس‌ها"}</CardTitle></CardHeader>
             <CardContent className="space-y-3">
               <div className="flex flex-wrap gap-2">
                 <Button size="sm" variant={bucket === "queue" ? "brand" : "outline"} onClick={() => { setBucket("queue"); setPicked([]); }}>صف پیش‌نویس</Button>
+                <Button size="sm" variant={bucket === "published" ? "brand" : "outline"} onClick={() => { setBucket("published"); setPicked([]); }}>منتشرشده{metrics.published ? ` · ${fa(metrics.published)}` : ""}</Button>
                 <Button size="sm" variant={bucket === "archive" ? "brand" : "outline"} onClick={() => { setBucket("archive"); setPicked([]); }}>بایگانی{metrics.archive ? ` · ${fa(metrics.archive)}` : ""}</Button>
               </div>
               {bucket === "archive" && <p className="text-xs text-muted-foreground">ردشده‌ها اینجاست. از همین‌جا می‌شود دوباره منتشرشان کرد.</p>}
+              {bucket === "published" && <p className="text-xs text-muted-foreground">منتشرشده‌ها از صف پیش‌نویس بیرون می‌آیند و اینجا می‌مانند. شمارش منتظر بازبینی آن‌ها را ندارد.</p>}
               <div className="grid gap-2 sm:grid-cols-2">
-                {bucket === "queue" && <Select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)} options={[{ value: "", label: "همه وضعیت‌ها" }, ...Object.entries(STATUS).filter(([value]) => value !== "rejected").map(([value, label]) => ({ value, label }))]} />}
+                {bucket === "queue" && <Select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)} options={[{ value: "", label: "همه وضعیت‌ها" }, ...Object.entries(STATUS).filter(([value]) => value !== "rejected" && value !== "published").map(([value, label]) => ({ value, label }))]} />}
                 <Select value={categoryFilter} onChange={(event) => setCategoryFilter(event.target.value)} options={CATEGORIES.map(([value, label]) => ({ value, label: value ? label : "همه دسته‌ها" }))} />
               </div>
               {canEdit && (
                 <div className="flex flex-wrap items-center gap-2">
-                  <Button size="sm" variant="outline" onClick={() => setPicked((bucket === "archive" ? data.archive : data.drafts || []).map((item: any) => item.id))}>انتخاب همین فهرست</Button>
+                  <Button size="sm" variant="outline" onClick={() => setPicked((shownDrafts || []).map((item: any) => item.id))}>انتخاب همین فهرست</Button>
                   {picked.length > 0 && <Button size="sm" variant="outline" onClick={() => setPicked([])}>لغو انتخاب</Button>}
                 </div>
               )}
@@ -484,9 +493,9 @@ export default function Automation() {
                   <Button size="sm" variant="outline" disabled={!!pending} onClick={() => bulkDrafts("category", { category: bulkCategory })}>اعمال دسته</Button>
                 </div>
               )}
-              {(bucket === "archive" ? data.archive : data.drafts)?.length ? (
+              {shownDrafts?.length ? (
                 <div className="space-y-4">
-                  {(bucket === "archive" ? data.archive : data.drafts).map((draft: any) => (
+                  {shownDrafts.map((draft: any) => (
                     <article key={draft.id} aria-busy={actionKey.startsWith(`${draft.id}:`) || undefined} onClick={(event) => { if (!canEdit || (event.target as HTMLElement).closest("button, a, input, select, textarea, summary, label")) return; setPicked((prev) => prev.includes(draft.id) ? prev.filter((item) => item !== draft.id) : [...prev, draft.id]); }} className={`space-y-3 cursor-pointer rounded-2xl border p-4 transition-colors ${picked.includes(draft.id) ? "border-brand ring-2 ring-brand/50" : actionKey.startsWith(`${draft.id}:`) ? "border-brand/70 bg-brand/5" : "border-border"}`}>
                       <div className="flex flex-wrap items-center gap-2">
                         {canEdit && <span onClick={(event) => event.stopPropagation()}><Checkbox checked={picked.includes(draft.id)} onCheckedChange={(on) => setPicked((prev) => on ? [...new Set([...prev, draft.id])] : prev.filter((item) => item !== draft.id))} aria-label="انتخاب پیش‌نویس" /></span>}
@@ -533,7 +542,7 @@ export default function Automation() {
                           ))}
                         </details>
                       ) : null}
-                      {draft.error && <p className="text-xs text-destructive">{reasonLabel(draft.error)}</p>}
+                      {draft.error && draft.status !== "published" && <p className="text-xs text-destructive">{reasonLabel(draft.error)}</p>}
                       <div className="grid gap-2 lg:grid-cols-3">
                         <Select value={draft.category} disabled={!canEdit} onChange={(event) => run(async () => { await api.patch(`/api/automation/drafts/${draft.id}`, { category: event.target.value }); await load(); }, "دسته ذخیره نشد")} options={CATEGORIES.filter(([value]) => value).map(([value, label]) => ({ value, label }))} />
                         <Input className="h-10" defaultValue={draft.hashtags || ""} disabled={!canEdit} placeholder="#خبر" onBlur={(event) => { if (event.target.value !== (draft.hashtags || "")) run(async () => { await api.patch(`/api/automation/drafts/${draft.id}`, { hashtags: event.target.value }); }, "هشتگ ذخیره نشد"); }} />
@@ -546,7 +555,7 @@ export default function Automation() {
                         {draft.body && <Button size="sm" variant="outline" loading={pending === `${draft.id}:preview`} disabled={!!pending} onClick={() => act(`${draft.id}:preview`, async () => { setPreview({ draftId: draft.id, has_photo: draft.has_photo, ...(await api.get(`/api/automation/drafts/${draft.id}/preview`)).data }); }, "پیش‌نمایش نشد")}>خروجی ارسال</Button>}
                         {canPublish && draft.body && RELEASABLE.has(draft.status) && <Button size="sm" variant="outline" loading={pending === `${draft.id}:test`} disabled={!!pending} onClick={() => act(`${draft.id}:test`, async () => { await api.post(`/api/automation/drafts/${draft.id}/test-send`); setMsg("پیش‌نمایش به خودت رفت، نه کانال"); }, "ارسال آزمایشی نشد")}>بفرست به خودم</Button>}
                         {canPublish && draft.body && RELEASABLE.has(draft.status) && <Button size="sm" variant="outline" loading={pending === `${draft.id}:approve`} disabled={!!pending} onClick={() => act(`${draft.id}:approve`, async () => { await api.post(`/api/automation/drafts/${draft.id}/approve`); setMsg("برای ساعت بعدی زمان‌بندی شد"); setBucket("queue"); await load(); }, "تأیید نشد")}>تأیید</Button>}
-                        {canPublish && draft.body && RELEASABLE.has(draft.status) && <Button size="sm" variant="brand" loading={pending === `${draft.id}:publish`} disabled={!!pending} onClick={() => act(`${draft.id}:publish`, async () => { await api.post(`/api/automation/drafts/${draft.id}/publish`); setMsg("در کانال منتشر شد"); setBucket("queue"); await load(); }, "منتشر نشد")}>انتشار الان</Button>}
+                        {canPublish && draft.body && RELEASABLE.has(draft.status) && <Button size="sm" variant="brand" loading={pending === `${draft.id}:publish`} disabled={!!pending} onClick={() => act(`${draft.id}:publish`, async () => { await api.post(`/api/automation/drafts/${draft.id}/publish`); setMsg("در کانال منتشر شد و از صف پیش‌نویس رفت."); setBucket("queue"); await load(); }, "منتشر نشد")}>انتشار الان</Button>}
                         {canPublish && draft.published_url && draft.message_id && <a className="self-center text-xs underline" href={draft.published_url} target="_blank" rel="noreferrer">پیام کانال</a>}
                         {canPublish && draft.message_id && draft.status === "published" && <Button size="sm" variant="destructive" loading={pending === `${draft.id}:unsend`} disabled={!!pending} onClick={() => act(`${draft.id}:unsend`, async () => { await api.post(`/api/automation/drafts/${draft.id}/unsend`); setMsg("از کانال حذف شد. می‌توانی دوباره منتشرش کنی."); await load(); }, "حذف نشد")}>پس بگیر</Button>}
                         {canEdit && <Button size="sm" variant="outline" loading={pending === `${draft.id}:fresh`} disabled={!!pending} onClick={() => act(`${draft.id}:fresh`, async () => { setProposal({ id: draft.id, mode: "fresh", ...(await api.post(`/api/automation/drafts/${draft.id}/regenerate?mode=fresh`)).data }); }, "بازنویسی نشد")}>شروع تازه</Button>}
@@ -558,7 +567,7 @@ export default function Automation() {
                     </article>
                   ))}
                 </div>
-              ) : <EmptyState title={bucket === "archive" ? "بایگانی خالی است" : "پیش‌نویسی نیست"} description={bucket === "archive" ? "ردشده‌ها اینجا می‌مانند و از همین‌جا می‌شود منتشرشان کرد." : "بعد از جمع‌آوری، متن ساخته‌شده اینجا دیده می‌شود. تا تأیید یا رسیدن ساعت، در کانال نمی‌رود."} />}
+              ) : <EmptyState title={bucket === "archive" ? "بایگانی خالی است" : bucket === "published" ? "منتشرشده‌ای نیست" : "پیش‌نویسی نیست"} description={bucket === "archive" ? "ردشده‌ها اینجا می‌مانند و از همین‌جا می‌شود منتشرشان کرد." : bucket === "published" ? "بعد از انتشار، پست از صف پیش‌نویس می‌آید اینجا. صفحه پیش‌نویس همان‌جا می‌ماند." : "بعد از جمع‌آوری، متن ساخته‌شده اینجا دیده می‌شود. تا تأیید یا رسیدن ساعت، در کانال نمی‌رود."} />}
             </CardContent>
           </Card>
         </TabsContent>
@@ -781,6 +790,14 @@ function DraftVideo({ id }: { id: string }) {
   return <video src={url} controls className="max-h-96 w-full rounded-xl border border-border bg-black" />;
 }
 
+function looksLikeImage(bytes: Uint8Array, type: string) {
+  const jpeg = bytes[0] === 0xff && bytes[1] === 0xd8;
+  const png = bytes[0] === 0x89 && bytes[1] === 0x50;
+  const gif = bytes[0] === 0x47 && bytes[1] === 0x49;
+  const webp = bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[8] === 0x57;
+  return jpeg || png || gif || webp || type.startsWith("image/");
+}
+
 function DraftPhoto({ id, index = 0 }: { id: string; index?: number }) {
   const [url, setUrl] = useState<string>("");
   const [failed, setFailed] = useState(false);
@@ -788,22 +805,40 @@ function DraftPhoto({ id, index = 0 }: { id: string; index?: number }) {
   useEffect(() => {
     let live = true;
     let objectUrl = "";
-    api.get(`/api/automation/drafts/${id}/photo`, { params: { index }, responseType: "blob", timeout: 25000 }).then((response) => {
-      if (!live) return;
-      const blob = response.data as Blob;
-      if (!blob || blob.size < 32 || (blob.type && !blob.type.startsWith("image/") && blob.type !== "application/octet-stream")) {
+    const load = async (attempt: number) => {
+      try {
+        const response = await api.get(`/api/automation/drafts/${id}/photo`, { params: { index }, responseType: "blob", timeout: 45000 });
+        if (!live) return;
+        const blob = response.data as Blob;
+        const bytes = new Uint8Array(await blob.arrayBuffer());
+        if (!live) return;
+        if (!blob || bytes.length < 32 || !looksLikeImage(bytes, blob.type || "")) {
+          if (attempt < 2) {
+            window.setTimeout(() => { if (live) void load(attempt + 1); }, 700);
+            return;
+          }
+          setFailed(true);
+          return;
+        }
+        const typed = new Blob([bytes], { type: blob.type?.startsWith("image/") ? blob.type : "image/jpeg" });
+        objectUrl = URL.createObjectURL(typed);
+        setUrl(objectUrl);
+      } catch {
+        if (!live) return;
+        if (attempt < 2) {
+          window.setTimeout(() => { if (live) void load(attempt + 1); }, 700);
+          return;
+        }
         setFailed(true);
-        return;
       }
-      objectUrl = URL.createObjectURL(blob.type ? blob : new Blob([blob], { type: "image/jpeg" }));
-      setUrl(objectUrl);
-    }).catch(() => { if (live) setFailed(true); });
+    };
+    void load(0);
     return () => {
       live = false;
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
   }, [id, index]);
-  if (failed) return <p className="rounded-xl border border-destructive/40 px-3 py-2 text-xs text-destructive">عکس این پست باز نشد. صفحه را یک بار تازه کن؛ اگر باز نشد، فایل عکس روی سرور نمانده.</p>;
+  if (failed) return <p className="rounded-xl border border-destructive/40 px-3 py-2 text-xs text-destructive">عکس این پست باز نشد. اگر تلگرام در دسترس باشد، یک بار دیگر صفحه را تازه کن.</p>;
   if (!url) return <div className="flex h-48 items-center justify-center rounded-xl border border-border bg-muted text-xs text-muted-foreground" aria-label="در حال خواندن عکس">در حال آوردن عکس پست…</div>;
   return (
     <>

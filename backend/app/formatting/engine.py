@@ -144,7 +144,15 @@ def format_message(
 
     footer = (footer_text if footer_text is not None else style.footer_template) or ""
     limit = 1024 if is_caption else 4096
-    room_for_chrome = len(text) <= max(0, limit - 80)
+    chrome = 0
+    if style.use_divider_bottom and style.divider:
+        chrome += len(style.divider) + 4
+    if style.add_footer and footer:
+        chrome += len(footer) + 4
+    if chrome and len(text) + chrome > limit:
+        text = _trim_to_limit(text, max(1, limit - chrome))
+        applied.append("trim_for_chrome")
+    room_for_chrome = not chrome or len(text) + chrome <= limit
     prepared, html_text, entity_dicts, emoji_spans, chrome_rules = prepare_post(
         text,
         raw_entities=incoming if preserve_offsets else None,

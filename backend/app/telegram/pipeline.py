@@ -361,16 +361,26 @@ async def process_channel_post(
 
     style = await resolve_style(db, channel.style_id)
     active_style = channel.style_id if style is not None or (channel.style_id and get_style(channel.style_id).slug == channel.style_id) else None
-    from backend.app.formatting.styles import DEFAULT_FOOTER
+    from dataclasses import replace
+
+    from backend.app.formatting.styles import DEFAULT_FOOTER, DIVIDER, StyleConfig
 
     if channel.footer_text is not None:
         footer = channel.footer_text
     elif (runtime.default_footer or "").strip():
         footer = runtime.default_footer
-    elif style is not None and (style.footer_template or "") and style.footer_template != DEFAULT_FOOTER:
-        footer = None
     else:
-        footer = ""
+        footer = DEFAULT_FOOTER
+    if (footer or "").strip():
+        base = style if style is not None else StyleConfig(name="کانال", slug=active_style or "educational", divider=DIVIDER)
+        style = replace(
+            base,
+            add_footer=True,
+            use_divider_bottom=True,
+            divider=base.divider or DIVIDER,
+            footer_template=footer.strip(),
+        )
+        footer = footer.strip()
     emoji_maps = await load_emoji_maps(db) if channel.emoji_replacement else []
     from backend.app.formatting.richtext import quote_texts, shield_quotes, unwrap_quotes
 

@@ -370,6 +370,57 @@ async def refetch_source_photo(
 
 
 async def refetch_published_photo(chat_id: int, message_id: int, key: str) -> str | None:
+    photos = await refetch_published_photos(chat_id, message_id, key)
+    return photos[0] if photos else None
+
+
+async def _download_album(client, entity, message_id: int, key: str) -> list[str]:
+    try:
+        message = await asyncio.wait_for(client.get_messages(entity, ids=int(message_id)), timeout=10)
+    except Exception as exc:
+        logger.info("album refetch skipped: %s", type(exc).__name__)
+        return []
+    if message is None:
+        return []
+    messages = [message]
+    grouped = getattr(message, "grouped_id", None)
+    if grouped:
+        try:
+            nearby = await asyncio.wait_for(
+                client.get_messages(entity, limit=10, max_id=int(message_id) + 6, min_id=max(0, int(message_id) - 6)),
+                timeout=10,
+            )
+        except Exception as exc:
+            logger.info("album nearby skipped: %s", type(exc).__name__)
+            nearby = []
+        grouped_messages = [item for item in nearby or [] if getattr(item, "grouped_id", None) == grouped]
+        if grouped_messages:
+            messages = sorted(grouped_messages, key=lambda item: int(item.id))
+    paths: list[str] = []
+    for item in messages:
+        saved = await _save_photo(client, item, key)
+        if saved and saved not in paths:
+            paths.append(saved)
+    return paths
+
+
+async def refetch_source_photos(
+    username: str,
+    message_id: int,
+    *,
+    access_hash: int | None = None,
+    invite_hash: str | None = None,
+) -> list[str]:
+    client = await _news_client()
+    if client is None:
+        return []
+    entity = await _open_known(client, username, access_hash, invite_hash)
+    if entity is None:
+        return []
+    return await _download_album(client, entity, message_id, username)
+
+
+async def refetch_published_photos(chat_id: int, message_id: int, key: str) -> list[str]:
     from backend.app.telegram.user_editor import get_news_client, get_user_client
 
     for opener in (get_user_client, get_news_client):
@@ -379,10 +430,10 @@ async def refetch_published_photo(chat_id: int, message_id: int, key: str) -> st
             client = None
         if client is None:
             continue
-        saved = await _download_message_photo(client, int(chat_id), message_id, key)
+        saved = await _download_album(client, int(chat_id), message_id, key or "published")
         if saved:
             return saved
-    return None
+    return []
 
 
 async def _messages(client, entity, username: str, *, min_id: int, limit: int, title: str | None = None, recent: bool = False):

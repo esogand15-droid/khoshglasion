@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { ChevronDown, ChevronUp, GripVertical } from "lucide-react";
 import api from "../services/api";
 import { useAuth } from "../stores/auth";
@@ -57,18 +57,30 @@ function idsOf(items: any[], bucket: string) {
     .map((item) => item.id);
 }
 
-function reorderLocal(items: any[], bucket: string, fromId: string, toId: string) {
+function moveToIndex(items: any[], bucket: string, fromId: string, insertAt: number) {
   const ids = idsOf(items, bucket);
   const from = ids.indexOf(fromId);
-  const to = ids.indexOf(toId);
-  if (from < 0 || to < 0 || from === to) return items;
-  ids.splice(from, 1);
-  ids.splice(to, 0, fromId);
-  const rank = new Map(ids.map((id, index) => [id, index + 1]));
-  const priority = new Map(ids.map((id, index) => [id, ids.length - index]));
+  if (from < 0) return items;
+  const nextIds = ids.filter((id) => id !== fromId);
+  const at = Math.max(0, Math.min(insertAt, nextIds.length));
+  if (at === from) return items;
+  nextIds.splice(at, 0, fromId);
+  const rank = new Map(nextIds.map((id, index) => [id, index + 1]));
+  const priority = new Map(nextIds.map((id, index) => [id, nextIds.length - index]));
   return items.map((item) => (
     rank.has(item.id) ? { ...item, rank: rank.get(item.id), priority: priority.get(item.id) } : item
   ));
+}
+
+function indexAt(bucket: string, dragId: string, clientY: number) {
+  const cards = Array.from(document.querySelectorAll<HTMLElement>(`[data-bucket="${CSS.escape(bucket)}"][data-emoji-id]`));
+  const others = cards.filter((card) => card.dataset.emojiId !== dragId);
+  if (!others.length) return 0;
+  for (let index = 0; index < others.length; index += 1) {
+    const rect = others[index].getBoundingClientRect();
+    if (clientY < rect.top + rect.height / 2) return index;
+  }
+  return others.length;
 }
 
 export default function Emojis() {
@@ -89,7 +101,9 @@ export default function Emojis() {
   const [ready, setReady] = useState(false);
   const [loadError, setLoadError] = useState("");
   const [dragId, setDragId] = useState("");
-  const dragRef = useRef<{ id: string; bucket: string; ids: string[]; dirty: boolean } | null>(null);
+  const dragRef = useRef<{ id: string; bucket: string; ids: string[]; dirty: boolean; insertAt: number } | null>(null);
+  const frames = useRef<Map<string, number>>(new Map());
+  const stopDrag = useRef<(() => void) | null>(null);
   const { ask, dialog } = useConfirm();
   const canReorder = canEdit && !q.trim();
 
@@ -141,15 +155,22 @@ export default function Emojis() {
     }
   }
 
-  function moveCard(bucket: string, fromId: string, toId: string) {
+  function captureFrames() {
+    document.querySelectorAll<HTMLElement>("[data-emoji-id]").forEach((node) => {
+      frames.current.set(node.dataset.emojiId || "", node.getBoundingClientRect().top);
+    });
+  }
+
+  function placeCard(bucket: string, fromId: string, insertAt: number) {
     let ids: string[] = [];
+    captureFrames();
     setItems((prev) => {
-      const next = reorderLocal(prev, bucket, fromId, toId);
+      const next = moveToIndex(prev, bucket, fromId, insertAt);
       ids = idsOf(next, bucket);
       if (dragRef.current) {
-        dragRef.current.dirty = true;
+        dragRef.current.dirty = dragRef.current.dirty || ids.join() !== dragRef.current.ids.join();
         dragRef.current.ids = ids;
-        dragRef.current.id = fromId;
+        dragRef.current.insertAt = insertAt;
       }
       return next;
     });
@@ -160,10 +181,20 @@ export default function Emojis() {
     const bucket = bucketOf(item);
     const ids = idsOf(items, bucket);
     const index = ids.indexOf(item.id);
-    const target = ids[index + direction];
-    if (!target) return;
-    const next = moveCard(bucket, item.id, target);
+    const target = index + direction;
+    if (index < 0 || target < 0 || target >= ids.length) return;
+    const next = placeCard(bucket, item.id, target);
     void saveOrder(bucket, next);
+  }
+
+  function finishDrag() {
+    stopDrag.current?.();
+    stopDrag.current = null;
+    const drag = dragRef.current;
+    dragRef.current = null;
+    setDragId("");
+    document.body.style.userSelect = "";
+    if (drag?.dirty) void saveOrder(drag.bucket, drag.ids);
   }
 
   function onHandleDown(event: React.PointerEvent<HTMLButtonElement>, item: any) {
@@ -171,27 +202,44 @@ export default function Emojis() {
     event.stopPropagation();
     event.preventDefault();
     const bucket = bucketOf(item);
-    dragRef.current = { id: item.id, bucket, ids: idsOf(items, bucket), dirty: false };
+    captureFrames();
+    dragRef.current = { id: item.id, bucket, ids: idsOf(items, bucket), dirty: false, insertAt: idsOf(items, bucket).indexOf(item.id) };
     setDragId(item.id);
-    event.currentTarget.setPointerCapture(event.pointerId);
+    document.body.style.userSelect = "none";
+    const move = (pointer: PointerEvent) => {
+      const drag = dragRef.current;
+      if (!drag) return;
+      pointer.preventDefault();
+      const insertAt = indexAt(drag.bucket, drag.id, pointer.clientY);
+      if (insertAt === drag.insertAt) return;
+      placeCard(drag.bucket, drag.id, insertAt);
+    };
+    const up = () => finishDrag();
+    window.addEventListener("pointermove", move, { passive: false });
+    window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", up);
+    stopDrag.current = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointercancel", up);
+    };
   }
 
-  function onHandleMove(event: React.PointerEvent<HTMLButtonElement>) {
-    const drag = dragRef.current;
-    if (!drag) return;
-    const node = document.elementFromPoint(event.clientX, event.clientY);
-    const card = node?.closest("[data-emoji-id]") as HTMLElement | null;
-    const target = card?.dataset.emojiId || "";
-    if (!target || card?.dataset.bucket !== drag.bucket || target === drag.id) return;
-    moveCard(drag.bucket, drag.id, target);
-  }
+  useLayoutEffect(() => {
+    document.querySelectorAll<HTMLElement>("[data-emoji-id]").forEach((node) => {
+      const id = node.dataset.emojiId || "";
+      const prev = frames.current.get(id);
+      const next = node.getBoundingClientRect().top;
+      frames.current.set(id, next);
+      if (prev == null || Math.abs(prev - next) < 2) return;
+      node.animate(
+        [{ transform: `translateY(${prev - next}px)` }, { transform: "translateY(0)" }],
+        { duration: 220, easing: "cubic-bezier(.2,.8,.2,1)" },
+      );
+    });
+  }, [items]);
 
-  function onHandleUp() {
-    const drag = dragRef.current;
-    dragRef.current = null;
-    setDragId("");
-    if (drag?.dirty) void saveOrder(drag.bucket, drag.ids);
-  }
+  useEffect(() => () => stopDrag.current?.(), []);
 
   async function classify(force = false) {
     setClassifyBusy(true);
@@ -260,7 +308,7 @@ export default function Emojis() {
       {dialog}
       {loadError && <LoadError title={loadError} onRetry={load} />}
       <Alert title="ترتیب، نه عدد">
-        در هر طیف کارت‌ها از اولویت اول تا آخر چیده شده‌اند. پست خودکار از اولویت اول شروع می‌کند؛ اگر همان ایموجی تازه استفاده شده باشد، نوبت به بعدی می‌رسد. ایموجی تازه یا تازه‌طبقه‌شده ته صف می‌ایستد تا خودت جایش را عوض کنی. خاموش‌ها در صف می‌مانند ولی در پست استفاده نمی‌شوند.
+        در هر طیف کارت‌ها از اولویت اول تا آخر چیده شده‌اند. دسته را بکش؛ خط چین جای نشستن را نشان می‌دهد و کارت همان‌جا می‌لغزد. پست خودکار از اولویت اول شروع می‌کند. ایموجی تازه ته صف می‌ایستد. خاموش‌ها در صف می‌مانند ولی در پست استفاده نمی‌شوند.
       </Alert>
       <Card>
         <CardHeader><CardTitle>ورود از لینک پک</CardTitle></CardHeader>
@@ -332,6 +380,13 @@ export default function Emojis() {
                 </div>
                 <div className="grid gap-3">
                   {queue.map((item) => (
+                    <div key={item.id} className="relative">
+                      {dragId === item.id && (
+                        <div className="pointer-events-none absolute inset-x-0 bottom-full z-30 mb-1 flex items-center gap-2 rounded-xl border border-dashed border-brand bg-brand/10 px-3 py-1.5 text-xs font-medium text-brand" aria-live="polite">
+                          <span className="inline-block size-2 rounded-full bg-brand" />
+                          اینجا می‌نشیند · {rankLabel(Number(item.rank || 1))}
+                        </div>
+                      )}
                     <EmojiCard
                       key={item.id}
                       item={item}
@@ -355,9 +410,8 @@ export default function Emojis() {
                       }}
                       onStep={(direction) => step(item, direction)}
                       onHandleDown={(event) => onHandleDown(event, item)}
-                      onHandleMove={onHandleMove}
-                      onHandleUp={onHandleUp}
                     />
+                    </div>
                   ))}
                 </div>
               </section>
@@ -401,7 +455,7 @@ export default function Emojis() {
   );
 }
 
-function EmojiCard({ item, rank, canEdit, canReorder, dragging, selected, onSelect, onZoom, onEdit, onToggle, onDelete, onAdopt, onSpectrum, onStep, onHandleDown, onHandleMove, onHandleUp }: {
+function EmojiCard({ item, rank, canEdit, canReorder, dragging, selected, onSelect, onZoom, onEdit, onToggle, onDelete, onAdopt, onSpectrum, onStep, onHandleDown }: {
   item: any;
   rank: number;
   canEdit: boolean;
@@ -417,8 +471,6 @@ function EmojiCard({ item, rank, canEdit, canReorder, dragging, selected, onSele
   onSpectrum: (value: string) => void;
   onStep: (direction: -1 | 1) => void;
   onHandleDown: (event: React.PointerEvent<HTMLButtonElement>) => void;
-  onHandleMove: (event: React.PointerEvent<HTMLButtonElement>) => void;
-  onHandleUp: () => void;
 }) {
   const meta = useEmojiMeta(item.custom_emoji_id);
   const seen = useRef<HTMLDivElement>(null);
@@ -445,7 +497,7 @@ function EmojiCard({ item, rank, canEdit, canReorder, dragging, selected, onSele
         event.preventDefault();
         onSelect(!selected);
       }}
-      className={selected ? "relative cursor-pointer ring-2 ring-brand" : dragging ? "relative cursor-pointer ring-2 ring-foreground" : "relative cursor-pointer"}
+      className={selected ? "relative cursor-pointer ring-2 ring-brand" : dragging ? "relative z-20 cursor-grabbing shadow-xl ring-2 ring-brand" : "relative cursor-pointer"}
     >
       <span className="absolute top-3 end-3 rounded-full border border-border bg-card px-2 py-0.5 text-[11px] font-medium text-brand">{rank ? rankLabel(rank) : "بدون نوبت"}</span>
       <CardContent className="space-y-3 p-4 pe-28">
@@ -456,9 +508,6 @@ function EmojiCard({ item, rank, canEdit, canReorder, dragging, selected, onSele
               className="cursor-grab touch-none rounded-lg border border-border p-1 text-muted-foreground"
               aria-label="جابه‌جایی در صف"
               onPointerDown={onHandleDown}
-              onPointerMove={onHandleMove}
-              onPointerUp={onHandleUp}
-              onPointerCancel={onHandleUp}
               onClick={(event) => event.stopPropagation()}
             >
               <GripVertical className="size-4" />

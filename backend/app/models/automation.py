@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 import uuid
 
-from sqlalchemy import BigInteger, Boolean, DateTime, Integer, String, Text
+from sqlalchemy import BigInteger, Boolean, DateTime, Integer, LargeBinary, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from backend.app.db.base import Base
@@ -23,8 +23,23 @@ class AutomationConfig(Base):
     daily_cap: Mapped[int] = mapped_column(Integer, default=6)
     balance_categories: Mapped[bool] = mapped_column(Boolean, default=True)
     lessons_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    footer_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     last_collect_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class DraftMedia(Base):
+    """Photo bytes for a draft. The container disk does not survive a deploy."""
+
+    __tablename__ = "draft_media"
+    __table_args__ = (UniqueConstraint("draft_id", "slot", "kind", name="uq_draft_media_slot"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    draft_id: Mapped[str] = mapped_column(String(36), index=True)
+    slot: Mapped[int] = mapped_column(Integer, default=0)
+    kind: Mapped[str] = mapped_column(String(16), default="photo")
+    data: Mapped[bytes] = mapped_column(LargeBinary)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
 class NewsSource(Base):
