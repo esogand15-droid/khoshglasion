@@ -70,6 +70,7 @@ export default function Settings() {
             <CardHeader><CardTitle>هوش مصنوعی</CardTitle></CardHeader>
             <CardContent className="space-y-3">
               <SettingSwitch checked={data.ai_enabled} label="بازنویسی هوشمند" onChange={(v) => save({ ai_enabled: v })} />
+              <p className="text-xs text-muted-foreground">پست‌های معمولی به مدل فرستاده می‌شوند. گزینه و پاسخ آزمون، و متن کوتاه‌تر از حداقل کاراکتر، دست نمی‌خورند. اگر مدل عدد یا نقل‌قول را بیندازد، همان متن ادمین می‌ماند و در پیام‌ها علتش نوشته می‌شود.</p>
               <Field label="Base URL"><Input dir="ltr" value={data.ai_base_url || ""} onChange={(e) => setData({ ...data, ai_base_url: e.target.value })} placeholder="https://integrate.api.nvidia.com/v1" /></Field>
               <p className="text-xs text-muted-foreground">برای NVIDIA همین را بگذار: https://integrate.api.nvidia.com/v1 — سیستم خودش /chat/completions را اضافه می‌کند. درخواست واقعی: {data.ai_endpoint || "بعد از ذخیره دیده می‌شود"} · provider: {data.ai_provider || "—"}</p>
               <Field label="Model"><Input dir="ltr" value={data.ai_model || ""} onChange={(e) => setData({ ...data, ai_model: e.target.value })} placeholder="openai/gpt-oss-20b" /></Field>
@@ -150,6 +151,13 @@ export default function Settings() {
               <CardContent className="space-y-3">
                 <Field label="نام کاربری"><Input autoComplete="off" value={adminForm.username} onChange={(e) => setAdminForm({ ...adminForm, username: e.target.value })} /></Field>
                 <Field label="رمز"><PasswordInput autoComplete="new-password" value={adminForm.password} onChange={(e) => setAdminForm({ ...adminForm, password: e.target.value })} /></Field>
+                <Field label="نقش">
+                  <Select value={adminForm.role} onChange={(e) => setAdminForm({ ...adminForm, role: e.target.value })} options={[
+                    { value: "ADMIN", label: "ادمین، می‌تواند منتشر کند" },
+                    { value: "EDITOR", label: "ویرایشگر، بدون انتشار" },
+                    { value: "VIEWER", label: "فقط بیننده" },
+                  ]} />
+                </Field>
                 <Button variant="outline" onClick={async () => { try { await api.post("/api/system/admins", adminForm); setMsg("ادمین ساخته شد"); } catch (e: any) { setMsg(e.response?.data?.detail || "ساخته نشد"); } }}>ساخت ادمین</Button>
                 <Separator label="پشتیبان" />
                 <Button variant="outline" onClick={async () => { const { data: backup } = await api.get("/api/system/backup"); const blob = new Blob([JSON.stringify(backup, null, 2)], { type: "application/json" }); const url = URL.createObjectURL(blob); const a = document.createElement("a"); a.href = url; a.download = "khoshgelasion-backup.json"; a.click(); }}>دانلود پشتیبان</Button>

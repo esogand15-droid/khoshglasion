@@ -18,6 +18,8 @@ export default function Emojis() {
   const [msg, setMsg] = useState("");
   const [q, setQ] = useState("");
   const [edit, setEdit] = useState<any>(null);
+  const [packUrl, setPackUrl] = useState("");
+  const [packBusy, setPackBusy] = useState(false);
 
   async function load() { setItems((await api.get("/api/emojis")).data); }
   useEffect(() => { load().catch(() => {}); }, []);
@@ -29,9 +31,25 @@ export default function Emojis() {
       title="ایموجی پرمیوم"
       actions={<Button variant="outline" onClick={async () => { const { data } = await api.get("/api/emojis/export"); const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" }); const url = URL.createObjectURL(blob); const a = document.createElement("a"); a.href = url; a.download = "khoshgelasion-emojis.json"; a.click(); }}>خروجی</Button>}
     >
-      <Alert title="چطور ID واقعی بگیری؟">
-        به ربات در خصوصی یک پیام با ایموجی پرمیوم فوروارد کن. همان لحظه custom_emoji_id وارد کتابخانه می‌شود. صاحب ربات باید تلگرام پرمیوم داشته باشد.
+      <Alert title="کتابخانه از خود تلگرام پر می‌شود">
+        لینک https://t.me/addemoji/نام‌پک را اینجا یا در خصوصی ربات بفرست. ربات خودِ پک را از تلگرام می‌خواند. حرف و فونت وارد نمی‌شود تا متن پست خراب نشود.
       </Alert>
+      <Card>
+        <CardHeader><CardTitle>ورود از لینک پک</CardTitle></CardHeader>
+        <CardContent className="space-y-3">
+          <Field label="لینک یا نام پک"><Input dir="ltr" value={packUrl} onChange={(e) => setPackUrl(e.target.value)} placeholder="https://t.me/addemoji/Name" /></Field>
+          <Button variant="brand" disabled={packBusy || !packUrl.trim()} onClick={async () => {
+            setPackBusy(true);
+            try {
+              const { data } = await api.post("/api/emojis/import-pack", { url: packUrl.trim() });
+              setMsg(data.message || `اضافه شد: ${data.imported ?? 0}`);
+              setPackUrl("");
+              load();
+            } catch (error: any) { setMsg(error.response?.data?.detail || "پک خوانده نشد"); }
+            finally { setPackBusy(false); }
+          }}>{packBusy ? "در حال خواندن" : "خواندن پک"}</Button>
+        </CardContent>
+      </Card>
       <Card>
         <CardHeader><CardTitle>نگاشت تازه</CardTitle></CardHeader>
         <CardContent className="space-y-3">

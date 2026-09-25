@@ -63,6 +63,13 @@ export default function Dashboard() {
       {alerts.map((item, index) => (
         <Alert key={index} variant={alertVariant(item.level)}>{item.text}</Alert>
       ))}
+      {data.queue?.last_error && <Alert variant="destructive" title={data.queue.last_error} />}
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <Stat label="پیش‌نویس منتظر" value={fa(data.queue?.preview || 0)} />
+        <Stat label="زمان‌بندی‌شده" value={fa(data.queue?.scheduled || 0)} />
+        <Stat label="شکست امروز" value={fa(data.queue?.failed_today || 0)} />
+        <Stat label="ساعت بعدی" value={data.queue?.next_slot ? new Date(data.queue.next_slot).toLocaleTimeString("fa-IR", { hour: "2-digit", minute: "2-digit" }) : "—"} />
+      </div>
 
       <div className="grid gap-4 lg:grid-cols-3">
         <div

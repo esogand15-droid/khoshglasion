@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import {
   Activity,
+  CalendarClock,
   FlaskConical,
   LayoutDashboard,
   LogOut,
@@ -24,6 +25,7 @@ import { cn } from "@/lib/utils";
 const NAV = [
   { to: "/", label: "خانه", icon: LayoutDashboard, end: true },
   { to: "/channels", label: "کانال‌ها", icon: Megaphone },
+  { to: "/automation", label: "پست خودکار", icon: CalendarClock },
   { to: "/messages", label: "پیام‌ها", icon: MessagesSquare },
   { to: "/styles", label: "استایل‌ها", icon: SwatchBook },
   { to: "/emojis", label: "ایموجی", icon: Smile },
@@ -50,7 +52,7 @@ function NavItems({ onPick }: { onPick?: () => void }) {
         }}
       />
       <SidebarGroup title="کار روزانه">
-        {NAV.slice(1, 6).map((item) => (
+        {NAV.slice(1, 7).map((item) => (
           <SidebarItem
             key={item.to}
             icon={item.icon}
@@ -66,7 +68,7 @@ function NavItems({ onPick }: { onPick?: () => void }) {
         ))}
       </SidebarGroup>
       <SidebarGroup title="عملیات">
-        {NAV.slice(6).map((item) => (
+        {NAV.slice(7).map((item) => (
           <SidebarItem
             key={item.to}
             icon={item.icon}
