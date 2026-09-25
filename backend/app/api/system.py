@@ -29,7 +29,9 @@ from backend.app.telegram.bot import close_bot, get_bot
 from backend.app.telegram.session_login import (
     SessionLoginError,
     cancel_login,
+    check_account,
     check_saved_session,
+    disconnect_account,
     disconnect_session,
     is_secret_setting,
     refresh_user_credentials,
@@ -75,6 +77,19 @@ class SessionStart(BaseModel):
     api_id: str = Field(min_length=1, max_length=12)
     api_hash: str = Field(min_length=16, max_length=64)
     phone: str = Field(min_length=8, max_length=32)
+    roles: str = "both"
+    label: str = ""
+
+
+class AccountPatch(BaseModel):
+    roles: str | None = None
+    enabled: bool | None = None
+    label: str | None = Field(default=None, max_length=64)
+    join_public: bool | None = None
+
+
+class JoinSource(BaseModel):
+    username: str = Field(min_length=2, max_length=128)
 
 
 class SessionCode(BaseModel):
@@ -183,7 +198,7 @@ async def _alerts(db: AsyncSession, runtime, settings) -> list[dict]:
             alerts.append(_alert(
                 "warn",
                 "premium_session",
-                "نشست پرمیوم داخل پنل وصل نیست. بدون آن ادیت پرمیوم کانال انجام نمی‌شود.",
+                "نشست ایموجی داخل پنل وصل نیست. بدون اکانت پرمیوم، ادیت متحرک کانال انجام نمی‌شود. اکانت معمولی را جدا با نقش خبر وصل کن.",
                 "/settings?tab=session",
                 "وصل کردن نشست",
             ))
@@ -191,7 +206,7 @@ async def _alerts(db: AsyncSession, runtime, settings) -> list[dict]:
             alerts.append(_alert(
                 "warn",
                 "premium_account",
-                "نشست وصل است ولی این اکانت تلگرام پرمیوم نیست. با یک اکانت پرمیوم دوباره وارد شو.",
+                "نشست ایموجی پرمیوم نیست. تلگرام خط طلایی را با اکانت معمولی داخل کانال نشان نمی‌دهد. این اکانت می‌تواند فقط خبر جمع کند.",
                 "/settings?tab=session",
                 "عوض کردن نشست",
             ))
@@ -440,7 +455,7 @@ async def telegram_session_start(
     admin=Depends(require_role("OWNER", "ADMIN")),
 ):
     try:
-        result = await start_login(db, payload.api_id, payload.api_hash, payload.phone)
+        result = await start_login(db, payload.api_id, payload.api_hash, payload.phone, payload.roles, payload.label)
     except SessionLoginError as exc:
         raise _session_http(exc) from None
     await write_audit(
@@ -530,6 +545,97 @@ async def telegram_session_disconnect(
         ip_address=request.client.host if request.client else None,
     )
     return result
+
+
+@router.get("/telegram-sessions")
+async def telegram_sessions(db: AsyncSession = Depends(get_db), admin=Depends(get_current_admin)):
+    return await session_public_status(db)
+
+
+@router.patch("/telegram-sessions/{account_id}")
+async def telegram_session_roles(
+    account_id: str,
+    payload: AccountPatch,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    admin=Depends(require_role("OWNER", "ADMIN")),
+):
+    from backend.app.telegram.accounts import AccountError, update_account
+
+    try:
+        updated = await update_account(
+            db,
+            account_id,
+            roles=payload.roles,
+            enabled=payload.enabled,
+            label=payload.label,
+            join_public=payload.join_public,
+        )
+    except AccountError as exc:
+        raise HTTPException(status_code=exc.status, detail=exc.message) from None
+    await refresh_user_credentials(db)
+    await write_audit(
+        db, admin=admin, action="roles", resource="telegram_session", resource_id=account_id,
+        new_value={"roles": updated.get("roles"), "enabled": updated.get("enabled")},
+        ip_address=request.client.host if request.client else None,
+    )
+    return updated
+
+
+@router.post("/telegram-sessions/{account_id}/check")
+async def telegram_session_account_check(
+    account_id: str,
+    db: AsyncSession = Depends(get_db),
+    admin=Depends(require_role("OWNER", "ADMIN")),
+):
+    from backend.app.telegram.accounts import AccountError
+
+    try:
+        return await check_account(db, account_id)
+    except AccountError as exc:
+        raise HTTPException(status_code=exc.status, detail=exc.message) from None
+
+
+@router.post("/telegram-sessions/{account_id}/disconnect")
+async def telegram_session_account_disconnect(
+    account_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    admin=Depends(require_role("OWNER", "ADMIN")),
+):
+    from backend.app.telegram.accounts import AccountError
+
+    try:
+        result = await disconnect_account(db, account_id)
+    except AccountError as exc:
+        raise HTTPException(status_code=exc.status, detail=exc.message) from None
+    await write_audit(
+        db, admin=admin, action="disconnect", resource="telegram_session", resource_id=account_id,
+        ip_address=request.client.host if request.client else None,
+    )
+    return result
+
+
+@router.post("/telegram-sessions/join")
+async def telegram_session_join(
+    payload: JoinSource,
+    db: AsyncSession = Depends(get_db),
+    admin=Depends(require_role("OWNER", "ADMIN")),
+):
+    from backend.app.telegram.collector import subscribe_public
+
+    message = await subscribe_public(db, payload.username)
+    return {"ok": "عضو شد" in message or "ثبت شد" in message, "message": message}
+
+
+@router.post("/telegram-sessions/join-sources")
+async def telegram_session_join_sources(
+    db: AsyncSession = Depends(get_db),
+    admin=Depends(require_role("OWNER", "ADMIN")),
+):
+    from backend.app.telegram.collector import join_enabled_sources
+
+    return await join_enabled_sources(db)
 
 
 @router.get("/premium")

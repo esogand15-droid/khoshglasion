@@ -32,6 +32,9 @@ HELP = """خوشگلاسیون آماده‌ست.
 برای پر کردن کتابخانه، ایموجی پرمیوم را همین‌جا بفرست یا لینک پک را بده:
 https://t.me/addemoji/نام‌پک
 /pack نام‌پک
+/sessions فهرست نشست‌های وصل‌شده
+/session 1 both نقش ایموجی و خبر
+/join @channel عضویت در کانال عمومی خبر
 اول در پنل، آیدی عددی‌ات را در «ادمین‌های تلگرام» بگذار تا دستورهای حساس قفل شود."""
 
 
@@ -135,7 +138,7 @@ async def handle_private_message(db: AsyncSession, message: dict, runtime: Runti
     if not command:
         return {"ok": True, "captured": captured}
 
-    if not _allowed(user_id, runtime, sensitive=command in {"/pause", "/resume", "/kill", "/dry"}):
+    if not _allowed(user_id, runtime, sensitive=command in {"/pause", "/resume", "/kill", "/dry", "/sessions", "/session", "/join"}):
         if not runtime.admin_ids and command in {"/pause", "/resume", "/kill", "/dry"}:
             await _reply(chat_id, "این دستور قفل است. اول با /id آیدی‌ات را بگیر و در پنل، فیلد ادمین‌های تلگرام بگذار.")
         else:
@@ -166,6 +169,23 @@ async def handle_private_message(db: AsyncSession, message: dict, runtime: Runti
         enabled = arg not in {"off", "0", "false"}
         await save_runtime_values(db, {"dry_run": str(enabled).lower()})
         await _reply(chat_id, "حالت آزمایشی روشن شد؛ پیام واقعی ادیت نمی‌شود." if enabled else "حالت آزمایشی خاموش شد.")
+    elif command == "/sessions":
+        from backend.app.telegram.accounts import sessions_text
+        from backend.app.telegram.session_login import refresh_user_credentials
+
+        await refresh_user_credentials(db)
+        await _reply(chat_id, await sessions_text(db))
+    elif command == "/session":
+        from backend.app.telegram.accounts import apply_command
+        from backend.app.telegram.session_login import refresh_user_credentials
+
+        await _reply(chat_id, await apply_command(db, text))
+        await refresh_user_credentials(db)
+    elif command == "/join":
+        from backend.app.telegram.collector import subscribe_public
+
+        arg = text.split(maxsplit=1)[1] if len(text.split()) > 1 else ""
+        await _reply(chat_id, await subscribe_public(db, arg))
     else:
         await _reply(chat_id, "دستور را نشناختم. /help")
     return {"ok": True, "command": command, "captured": captured}

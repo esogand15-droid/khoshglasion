@@ -256,6 +256,9 @@ async def update_config(payload: ConfigIn, request: Request, db: AsyncSession = 
 @router.post("/sources")
 async def add_source(payload: SourceIn, db: AsyncSession = Depends(get_db), admin=Depends(get_current_admin)):
     assert_editor(admin)
+    from backend.app.telegram.session_login import refresh_user_credentials
+
+    await refresh_user_credentials(db)
     username = normalize_source(payload.username)
     if not username:
         raise HTTPException(status_code=400, detail="فقط یوزرنیم عمومی یا آیدی عددی کانال. لینک دعوت خصوصی قبول نیست")
@@ -302,6 +305,9 @@ async def probe_source(source_id: str, catch_up: bool = False, db: AsyncSession 
     row = (await db.execute(select(NewsSource).where(NewsSource.id == source_id))).scalar_one_or_none()
     if not row:
         raise HTTPException(status_code=404, detail="منبع پیدا نشد")
+    from backend.app.telegram.session_login import refresh_user_credentials
+
+    await refresh_user_credentials(db)
     info, error = await probe_channel(row.username)
     row.title = info.get("title") or row.title
     row.last_error = error

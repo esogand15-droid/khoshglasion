@@ -6,6 +6,7 @@ from backend.app.models.rule import FormattingRule
 from backend.app.models.admin import Admin
 from backend.app.models.audit import AuditLog
 from backend.app.models.system import SystemSetting, WebhookEvent
+from backend.app.models.telegram_account import TelegramAccount
 from backend.app.models.automation import (
     AutomationConfig,
     AutomationJob,

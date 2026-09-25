@@ -20,6 +20,18 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.models.system import SystemSetting
+from backend.app.telegram.accounts import (
+    AccountError,
+    clear_registry,
+    delete_matching,
+    import_legacy_panel_account,
+    load_registry,
+    parse_roles,
+    pick_emoji,
+    public_accounts,
+    roles_of,
+    save_logged_in_account,
+)
 from backend.app.telegram.user_editor import (
     clear_credential_override,
     close_user_client,
@@ -43,6 +55,8 @@ LOGIN_API_HASH = "tg_login_api_hash"
 LOGIN_STEP = "tg_login_step"
 LOGIN_DELIVERY = "tg_login_delivery"
 LOGIN_CODE_LENGTH = "tg_login_code_length"
+LOGIN_ROLES = "tg_login_roles"
+LOGIN_LABEL = "tg_login_label"
 
 SECRET_SETTING_KEYS = frozenset({
     API_HASH_KEY,
@@ -75,6 +89,8 @@ PENDING_KEYS = (
     LOGIN_STEP,
     LOGIN_DELIVERY,
     LOGIN_CODE_LENGTH,
+    LOGIN_ROLES,
+    LOGIN_LABEL,
 )
 
 CODE_WAIT_SECONDS = 15
@@ -197,6 +213,7 @@ def reset_login_runtime() -> None:
     _opener = None
     _status_probe = None
     clear_credential_override()
+    clear_registry()
 
 
 async def _open_client(api_id: str, api_hash: str, session_string: str):
@@ -255,6 +272,12 @@ async def _clear_pending(db: AsyncSession) -> None:
 
 async def refresh_user_credentials(db: AsyncSession) -> None:
     values = await _values(db)
+    await import_legacy_panel_account(db, values)
+    await load_registry(db)
+    emoji = pick_emoji()
+    if emoji:
+        set_credential_override(emoji["api_id"], emoji["api_hash"], emoji["session"])
+        return
     if values.get(SOURCE_KEY) == "panel":
         set_credential_override(values.get(API_ID_KEY, ""), values.get(API_HASH_KEY, ""), values.get(SESSION_KEY, ""))
         return
@@ -289,6 +312,7 @@ async def session_public_status(db: AsyncSession) -> dict:
         "delivery": values.get(LOGIN_DELIVERY) or None if step else None,
         "code_length": int(length_raw) if step and length_raw.isdigit() else None,
         "api_id_set": bool(values.get(API_ID_KEY) or values.get(LOGIN_API_ID)),
+        "accounts": await public_accounts(db),
         **_profile(values),
     }
 
@@ -315,9 +339,14 @@ def _validate_api(api_id: str, api_hash: str) -> tuple[str, str]:
     return raw_id, raw_hash
 
 
-async def start_login(db: AsyncSession, api_id: str, api_hash: str, phone: str) -> dict:
+async def start_login(db: AsyncSession, api_id: str, api_hash: str, phone: str, roles: str = "both", label: str = "") -> dict:
     global _pending_client, _last_code_at
     api_id, api_hash = _validate_api(api_id, api_hash)
+    try:
+        chosen_roles = parse_roles(roles)
+    except AccountError as exc:
+        raise SessionLoginError(exc.message, exc.status) from None
+    chosen_label = (label or "").strip()[:64]
     normalized = normalize_phone(phone)
     now = time.monotonic()
     if _last_code_at and now - _last_code_at < CODE_WAIT_SECONDS:
@@ -359,6 +388,8 @@ async def start_login(db: AsyncSession, api_id: str, api_hash: str, phone: str) 
     await _put(db, LOGIN_STEP, "code")
     await _put(db, LOGIN_DELIVERY, hint)
     await _put(db, LOGIN_CODE_LENGTH, "" if length is None else str(length))
+    await _put(db, LOGIN_ROLES, chosen_roles)
+    await _put(db, LOGIN_LABEL, chosen_label)
     return _public_login("code", normalized, hint, length)
 
 
@@ -387,16 +418,36 @@ async def _finish(db: AsyncSession, client, values: dict[str, str], user) -> dic
     user_id = getattr(user, "id", None)
     username = getattr(user, "username", None)
     premium = bool(getattr(user, "premium", False))
-    await _put(db, SOURCE_KEY, "panel")
-    await _put(db, API_ID_KEY, values.get(LOGIN_API_ID, ""))
-    await _put(db, API_HASH_KEY, values.get(LOGIN_API_HASH, ""))
-    await _put(db, SESSION_KEY, saved)
-    await _put(db, USER_ID_KEY, "" if user_id is None else str(user_id))
-    await _put(db, USERNAME_KEY, username or "")
-    await _put(db, PREMIUM_KEY, "true" if premium else "false")
+    try:
+        chosen_roles = parse_roles(values.get(LOGIN_ROLES) or "both")
+    except AccountError:
+        chosen_roles = "emoji,news"
+    try:
+        await save_logged_in_account(
+            db,
+            user_id="" if user_id is None else str(user_id),
+            username=username or "",
+            premium=premium,
+            phone_masked=mask_phone(values.get(LOGIN_PHONE, "")),
+            api_id=values.get(LOGIN_API_ID, ""),
+            api_hash=values.get(LOGIN_API_HASH, ""),
+            session=saved,
+            roles=chosen_roles,
+            label=values.get(LOGIN_LABEL, ""),
+        )
+    except AccountError as exc:
+        raise SessionLoginError(exc.message, exc.status) from None
+    if "emoji" in roles_of(chosen_roles):
+        await _put(db, SOURCE_KEY, "panel")
+        await _put(db, API_ID_KEY, values.get(LOGIN_API_ID, ""))
+        await _put(db, API_HASH_KEY, values.get(LOGIN_API_HASH, ""))
+        await _put(db, SESSION_KEY, saved)
+        await _put(db, USER_ID_KEY, "" if user_id is None else str(user_id))
+        await _put(db, USERNAME_KEY, username or "")
+        await _put(db, PREMIUM_KEY, "true" if premium else "false")
     await _clear_pending(db)
     await close_user_client()
-    set_credential_override(values.get(LOGIN_API_ID, ""), values.get(LOGIN_API_HASH, ""), saved)
+    await refresh_user_credentials(db)
     return {
         "ok": True,
         "step": "ready",
@@ -509,6 +560,7 @@ async def check_saved_session(db: AsyncSession) -> dict:
         await _put(db, USERNAME_KEY, live.get("username") or "")
         if live.get("premium") is not None:
             await _put(db, PREMIUM_KEY, "true" if live.get("premium") else "false")
+        await _mirror_checked_account(db, live)
     public = await session_public_status(db)
     public["authorized"] = bool(live.get("authorized"))
     return public
@@ -550,8 +602,30 @@ async def cancel_login(db: AsyncSession) -> dict:
     return {"ok": True, "step": None}
 
 
+async def _mirror_checked_account(db: AsyncSession, live: dict) -> None:
+    from backend.app.telegram.accounts import list_rows
+
+    user_id = "" if live.get("user_id") is None else str(live.get("user_id"))
+    rows = await list_rows(db)
+    row = next((item for item in rows if user_id and item.user_id == user_id), None)
+    if row is None and rows:
+        row = rows[0]
+    if row is None:
+        return
+    if user_id:
+        row.user_id = user_id
+    if live.get("username"):
+        row.username = live.get("username")
+    if live.get("premium") is not None:
+        row.premium = bool(live.get("premium"))
+    row.last_error = None
+    await db.flush()
+
+
 async def disconnect_session(db: AsyncSession) -> dict:
-    await _logout_saved(await _values(db))
+    values = await _values(db)
+    await _logout_saved(values)
+    await delete_matching(db, values.get(USER_ID_KEY, ""), values.get(SESSION_KEY, ""))
     await cancel_login(db)
     await _put(db, SOURCE_KEY, "panel")
     await _put(db, API_ID_KEY, "")
@@ -561,5 +635,72 @@ async def disconnect_session(db: AsyncSession) -> dict:
     await _put(db, USERNAME_KEY, "")
     await _put(db, PREMIUM_KEY, "")
     await close_user_client()
-    set_credential_override("", "", "")
-    return {"ok": True, "configured": False, "step": None}
+    await refresh_user_credentials(db)
+    if pick_emoji() is None and not (await _values(db)).get(SESSION_KEY):
+        set_credential_override("", "", "")
+    from backend.app.telegram.user_editor import session_configured
+
+    return {"ok": True, "configured": session_configured(), "step": None, "accounts": await public_accounts(db)}
+
+
+async def disconnect_account(db: AsyncSession, account_id: str) -> dict:
+    from backend.app.telegram.accounts import get_account
+    from backend.app.telegram.user_editor import session_configured
+
+    row = await get_account(db, account_id)
+    session = row.session_string
+    api_id = row.api_id
+    api_hash = row.api_hash
+    user_id = row.user_id or ""
+    await _logout_saved({SESSION_KEY: session, API_ID_KEY: api_id, API_HASH_KEY: api_hash})
+    await db.delete(row)
+    await db.flush()
+    values = await _values(db)
+    if values.get(SESSION_KEY) == session or (user_id and values.get(USER_ID_KEY) == user_id):
+        await _put(db, SOURCE_KEY, "panel")
+        await _put(db, API_ID_KEY, "")
+        await _put(db, API_HASH_KEY, "")
+        await _put(db, SESSION_KEY, "")
+        await _put(db, USER_ID_KEY, "")
+        await _put(db, USERNAME_KEY, "")
+        await _put(db, PREMIUM_KEY, "")
+    await close_user_client()
+    await refresh_user_credentials(db)
+    return {"ok": True, "configured": session_configured(), "accounts": await public_accounts(db)}
+
+
+async def check_account(db: AsyncSession, account_id: str) -> dict:
+    from backend.app.telegram.accounts import get_account, public_account
+    from backend.app.telegram.user_editor import _connect
+
+    row = await get_account(db, account_id)
+    client = await _connect(row.id, row.api_id, row.api_hash, row.session_string)
+    if client is None:
+        row.last_error = "تلگرام این نشست را قبول نکرد"
+        await db.flush()
+        payload = public_account(row)
+        payload["authorized"] = False
+        return payload
+    try:
+        me = await client.get_me()
+    except Exception as exc:
+        logger.warning("Telegram account check failed: %s", type(exc).__name__)
+        row.last_error = "بررسی این نشست انجام نشد"
+        await db.flush()
+        payload = public_account(row)
+        payload["authorized"] = False
+        return payload
+    row.user_id = str(getattr(me, "id", "") or "") or row.user_id
+    row.username = getattr(me, "username", None) or row.username
+    row.premium = bool(getattr(me, "premium", False))
+    row.last_error = None
+    await db.flush()
+    if "emoji" in roles_of(row.roles or "") and row.enabled:
+        await _put(db, SOURCE_KEY, "panel")
+        await _put(db, USER_ID_KEY, row.user_id or "")
+        await _put(db, USERNAME_KEY, row.username or "")
+        await _put(db, PREMIUM_KEY, "true" if row.premium else "false")
+    await refresh_user_credentials(db)
+    payload = public_account(row)
+    payload["authorized"] = True
+    return payload

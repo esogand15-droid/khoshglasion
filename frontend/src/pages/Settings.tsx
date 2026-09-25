@@ -144,13 +144,13 @@ export default function Settings() {
               <Field label="فوتر پیش‌فرض سراسری"><Textarea disabled={!canEdit} value={data.default_footer || ""} onChange={(e) => setData({ ...data, default_footer: e.target.value })} onBlur={() => save({ default_footer: data.default_footer })} /></Field>
             </CardContent>
           </Card>
-          <p className="mt-3 text-xs text-muted-foreground">وضعیت نشست: {data.user_session_configured ? "وصل است" : "هنوز وصل نیست"}. ورود شماره و کد در تب نشست است، نه در متغیر Railway.</p>
+          <p className="mt-3 text-xs text-muted-foreground">وضعیت نشست ایموجی: {data.user_session_configured ? "وصل است" : "هنوز وصل نیست"}. چند نشست، نقش خبر و عضویت در کانال عمومی از تب نشست وصل می‌شود، نه با متغیر Railway.</p>
         </TabsContent>
         <TabsContent value="problems">
           <ProblemsTab canEdit={canEdit} canOwn={canOwn} canConnect={canConnect} onDone={(text) => { setMsg(text); load(); }} />
         </TabsContent>
         <TabsContent value="session">
-          {canConnect ? <SessionLogin premiumMode={data.premium_mode} onChange={load} /> : <Alert>فقط مالک یا ادمین می‌تواند نشست پرمیوم را وصل کند.</Alert>}
+          {canConnect ? <SessionLogin premiumMode={data.premium_mode} onChange={load} /> : <Alert>فقط مالک یا ادمین می‌تواند نشست‌ها را وصل کند.</Alert>}
         </TabsContent>
         <TabsContent value="access">
           <div className="grid gap-4 lg:grid-cols-2">

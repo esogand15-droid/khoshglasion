@@ -15,7 +15,8 @@ from backend.app.formatting.textutil import utf16_len
 
 logger = logging.getLogger(__name__)
 
-_client = None
+_clients: dict[str, object] = {}
+_client_sessions: dict[str, str] = {}
 _override: dict[str, str] | None = None
 
 
@@ -45,13 +46,19 @@ def session_configured() -> bool:
     return bool(api_id and api_hash and session)
 
 
-async def get_user_client():
-    global _client
-    api_id, api_hash, session = current_credentials()
+async def _connect(key: str, api_id: str, api_hash: str, session: str):
     if not (api_id and api_hash and session):
         return None
-    if _client is not None and _client.is_connected():
-        return _client
+    existing = _clients.get(key)
+    if existing is not None and _client_sessions.get(key) == session and getattr(existing, "is_connected", lambda: False)():
+        return existing
+    if existing is not None:
+        try:
+            await existing.disconnect()
+        except Exception:
+            pass
+        _clients.pop(key, None)
+        _client_sessions.pop(key, None)
     try:
         from telethon import TelegramClient
         from telethon.sessions import StringSession
@@ -65,21 +72,41 @@ async def get_user_client():
             logger.error("Stored user session is not authorized")
             await client.disconnect()
             return None
-        _client = client
+        _clients[key] = client
+        _client_sessions[key] = session
         return client
     except Exception as exc:
         logger.error("Could not start user session: %s", type(exc).__name__)
         return None
 
 
+async def get_user_client():
+    from backend.app.telegram.accounts import pick_emoji
+
+    picked = pick_emoji()
+    if picked:
+        return await _connect(picked["id"], picked["api_id"], picked["api_hash"], picked["session"])
+    api_id, api_hash, session = current_credentials()
+    return await _connect("legacy", api_id, api_hash, session)
+
+
+async def get_news_client():
+    from backend.app.telegram.accounts import pick_news
+
+    picked = pick_news()
+    if picked:
+        return await _connect(picked["id"], picked["api_id"], picked["api_hash"], picked["session"])
+    return await get_user_client()
+
+
 async def close_user_client() -> None:
-    global _client
-    if _client is not None:
+    for client in list(_clients.values()):
         try:
-            await _client.disconnect()
+            await client.disconnect()
         except Exception:
             pass
-        _client = None
+    _clients.clear()
+    _client_sessions.clear()
 
 
 def _entities(text: str, spans: list[tuple[int, int, str]] | None = None, formatted: list[dict] | None = None):

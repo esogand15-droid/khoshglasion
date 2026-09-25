@@ -61,7 +61,7 @@ export default function Health() {
         </CardContent>
       </Card>
       {!data.user_session_configured && data.premium_mode !== "off" && data.premium_mode !== "bot" && (
-        <Alert variant="warning">نشست پرمیوم وصل نیست. بدون نشست، ادیت پرمیوم کانال انجام نمی‌شود و نسخهٔ ایموجی معمولی فرستاده نمی‌شود. از <Link className="underline" to="/settings?tab=session">تنظیمات، تب نشست</Link> با شماره و کد تلگرام وصلش کن.</Alert>
+        <Alert variant="warning">نشست پرمیوم وصل نیست. بدون آن ادیت ایموجی متحرک انجام نمی‌شود. اکانت معمولی را می‌توانی جدا برای عضویت در کانال‌های عمومی خبری وصل کنی. از <Link className="underline" to="/settings?tab=session">تنظیمات، تب نشست</Link> وارد شو.</Alert>
       )}
       <Card>
         <CardHeader><CardTitle>چک‌لیست راه‌اندازی</CardTitle></CardHeader>

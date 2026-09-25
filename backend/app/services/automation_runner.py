@@ -183,6 +183,9 @@ async def collect_sources(db: AsyncSession, *, force: bool = False) -> dict:
     gap = timedelta(minutes=max(5, int(getattr(config, "collect_interval_minutes", None) or 20)))
     if not force and config.last_collect_at and config.last_collect_at > now - gap:
         return {"created": 0, "skipped": "recent"}
+    from backend.app.telegram.session_login import refresh_user_credentials
+
+    await refresh_user_credentials(db)
     runtime = await load_runtime(db)
     sources = (await db.execute(select(NewsSource).where(NewsSource.enabled == True))).scalars().all()  # noqa: E712
     sources = sorted(sources, key=_priority)
@@ -215,7 +218,7 @@ async def collect_sources(db: AsyncSession, *, force: bool = False) -> dict:
             errors.append(error)
             await write_log(db, "collect_error", f"{source.username}: {error}", "warning")
             if "نشست" in error:
-                await alert_admin(db, f"session:{source.username}", f"نشست پرمیوم نتوانست {source.username} را بخواند.", runtime)
+                await alert_admin(db, f"session:{source.username}", f"نشست خبر نتوانست {source.username} را بخواند. از تنظیمات نقش خبر را روشن کن.", runtime)
                 break
             continue
         source.last_error = None
